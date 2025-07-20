@@ -1,150 +1,273 @@
 # Store/backend/inventario/views.py
-from django.db.models import Sum, F, Window, Count # Asegúrate de que Count esté importado
-from django.db.models.functions import TruncMonth, TruncDay, TruncYear, Rank
-from django.contrib.auth import get_user_model # Necesario para obtener usuarios si no lo tienes
-from rest_framework.views import APIView
+
+from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from datetime import datetime, timedelta
+from django.contrib.auth import get_user_model
+from django.db.models import Sum, Count, F, ExpressionWrapper, DecimalField
+from django.db.models.functions import TruncDay, TruncMonth, TruncYear, TruncDate
 from django.utils import timezone
-from django.db import connection
+import datetime
+from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
 
-# Importa tus modelos de Venta y DetalleVenta
-from .models import Venta, DetalleVenta
+from .models import Producto, Categoria, Venta, DetalleVenta
+from .serializers import (
+    ProductoSerializer, CategoriaSerializer,
+    VentaSerializer, VentaCreateSerializer,
+    DetalleVentaSerializer, UserSerializer, UserCreateSerializer
+)
+
+User = get_user_model()
+
+# --- Vistas de Autenticación y Usuarios ---
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all().order_by('username')
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return UserCreateSerializer
+        return UserSerializer
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def me(self, request):
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
+# --- Vistas de Categoría ---
+class CategoriaViewSet(viewsets.ModelViewSet):
+    queryset = Categoria.objects.all().order_by('nombre')
+    serializer_class = CategoriaSerializer
+    permission_classes = [IsAuthenticated]
+
+# --- Vistas de Producto ---
+class ProductoViewSet(viewsets.ModelViewSet):
+    queryset = Producto.objects.all().order_by('nombre')
+    serializer_class = ProductoSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['categoria', 'talle']
+    search_fields = ['nombre', 'codigo_barras', 'descripcion']
+
+    @action(detail=False, methods=['get'])
+    def buscar_por_barcode(self, request):
+        barcode = request.query_params.get('barcode', None)
+        if barcode:
+            try:
+                producto = Producto.objects.get(codigo_barras=barcode)
+                serializer = self.get_serializer(producto)
+                return Response(serializer.data)
+            except Producto.DoesNotExist:
+                return Response({'detail': 'Producto no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'detail': 'Parámetro barcode es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+# --- Vistas de Venta ---
+class VentaViewSet(viewsets.ModelViewSet):
+    queryset = Venta.objects.all().order_by('-fecha_venta')
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta']
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return VentaCreateSerializer
+        return VentaSerializer
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    def anular(self, request, pk=None):
+        try:
+            venta = self.get_object()
+            if venta.anulada:
+                return Response({'detail': 'Esta venta ya ha sido anulada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            with transaction.atomic():
+                venta.anulada = True
+                venta.save()
+
+                for detalle in venta.detalles.all():
+                    producto = detalle.producto
+                    producto.stock += detalle.cantidad
+                    producto.save()
+
+            return Response({'detail': 'Venta anulada con éxito y stock revertido.'}, status=status.HTTP_200_OK)
+        except Venta.DoesNotExist:
+            return Response({'detail': 'Venta no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'detail': f'Error al anular la venta: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class MetricasVentaView(APIView):
-    permission_classes = [IsAuthenticated, IsAdminUser] # Solo admins pueden acceder
+# --- NUEVA VISTA PARA MÉTRICAS DE VENTAS (Separada de VentaViewSet) ---
+class MetricasVentasViewSet(viewsets.ViewSet):
+    permission_classes = [IsAdminUser]
 
-    def get(self, request, *args, **kwargs):
+    @action(detail=False, methods=['get'])
+    def metrics(self, request):
+        if not request.user.is_superuser:
+            return Response({"detail": "No tienes permisos para ver estas métricas."}, status=status.HTTP_403_FORBIDDEN)
+
         year = request.query_params.get('year')
         month = request.query_params.get('month')
         day = request.query_params.get('day')
-        seller_id = request.query_params.get('seller_id') # <-- NUEVO: FILTRO POR VENDEDOR
+        seller_id = request.query_params.get('seller_id')
+        payment_method = request.query_params.get('payment_method')
 
-        # Calcular rango de fechas
-        end_date = timezone.now().date()
-        start_date = end_date - timedelta(days=365 * 5) # Por defecto, últimos 5 años (ajusta si quieres más)
+        ventas_queryset = Venta.objects.all().filter(anulada=False)
 
-        if year:
+        try:
+            if year:
+                ventas_queryset = ventas_queryset.filter(fecha_venta__year=int(year))
+            if month:
+                ventas_queryset = ventas_queryset.filter(fecha_venta__month=int(month))
+            if day:
+                ventas_queryset = ventas_queryset.filter(fecha_venta__day=int(day))
+        except ValueError:
+            return Response({'detail': 'Filtro de fecha inválido (año, mes o día).'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if seller_id:
             try:
-                year = int(year)
-                start_date = datetime(year, 1, 1).date()
-                end_date = datetime(year, 12, 31).date()
-
-                if month:
-                    month = int(month)
-                    start_date = datetime(year, month, 1).date()
-                    # Calcular el último día del mes
-                    if month == 12:
-                        end_date = datetime(year, 12, 31).date()
-                    else:
-                        end_date = (datetime(year, month + 1, 1) - timedelta(days=1)).date()
-
-                    if day:
-                        day = int(day)
-                        start_date = datetime(year, month, day).date()
-                        end_date = datetime(year, month, day).date()
+                ventas_queryset = ventas_queryset.filter(usuario_id=int(seller_id))
             except ValueError:
-                return Response({"detail": "Formato de fecha inválido."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Filtro base que se aplica a las ventas
-        base_filter_ventas = {'fecha_venta__date__range': [start_date, end_date]}
+                return Response({'detail': 'ID de vendedor inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if seller_id: # <-- Aplicar filtro de vendedor si existe
-            try:
-                seller_id = int(seller_id)
-                base_filter_ventas['usuario_id'] = seller_id
-            except ValueError:
-                return Response({"detail": "ID de vendedor inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        if payment_method:
+            ventas_queryset = ventas_queryset.filter(metodo_pago__iexact=payment_method)
 
-        # 1. Total de ventas y productos vendidos en el período
-        # Se aplica el filtro base directamente a las Ventas
-        total_ventas_periodo = Venta.objects.filter(**base_filter_ventas).aggregate(
-            total_monto=Sum('total_venta'),
-            total_productos=Sum('detalles__cantidad')
+
+        total_ventas_periodo_agg = ventas_queryset.aggregate(
+            total_monto=Sum('total_venta')
         )
-        total_ventas = total_ventas_periodo.get('total_monto') or 0
-        total_productos = total_ventas_periodo.get('total_productos') or 0
+        total_ventas_periodo = total_ventas_periodo_agg['total_monto'] or 0
 
-        # 2. Ventas por usuario
-        ventas_por_usuario = Venta.objects.filter(**base_filter_ventas).values('usuario__username').annotate(
-            monto_total_vendido=Sum('total_venta'),
-            cantidad_ventas=Count('id')
-        ).order_by('-monto_total_vendido')
+        total_productos_vendidos_periodo_agg = DetalleVenta.objects.filter(venta__in=ventas_queryset)\
+                                            .aggregate(total_cantidad=Sum('cantidad'))
+        total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad'] or 0
 
-        # 3. Productos vendidos (ya no "más vendidos" o "top 10")
-        # Aquí, el filtro de vendedor se aplica a las ventas y luego a sus detalles
-        productos_vendidos_query = DetalleVenta.objects.filter(
-            venta__in=Venta.objects.filter(**base_filter_ventas) # Esto aplica fecha y vendedor a la base
-        ).values('producto__nombre').annotate(
-            cantidad_total=Sum('cantidad'),
-            monto_total=Sum(F('cantidad') * F('precio_unitario_venta'))
-        ).order_by('-monto_total') # Orden descendente por monto
+        # --- Ventas agrupadas por período para la tendencia ---
+        # Determinar el nivel de agrupación (día, mes, año)
+        group_by_label = "Año" # Valor por defecto
+        trunc_level = TruncYear # Valor por defecto
 
-        productos_vendidos = list(productos_vendidos_query) # Convertir a lista
-
-        # 4. Tendencia de ventas agrupadas por período
-        # La lógica de agrupamiento usa el mismo filtro base
-        group_by_label = "Año"
-        if day:
-            ventas_agrupadas = Venta.objects.filter(**base_filter_ventas).annotate(
-                period=TruncDay('fecha_venta')
-            ).values('period').annotate(
-                total_monto=Sum('total_venta'),
-                cantidad_ventas=Count('id')
-            ).order_by('period')
+        if year and month and day:
+            # Si se especifican año, mes y día, agrupar por día específico
+            trunc_level = TruncDate # O TruncDay si prefieres que solo sea la fecha sin hora
             group_by_label = "Día"
-        elif month:
-            ventas_agrupadas = Venta.objects.filter(**base_filter_ventas).annotate(
-                period=TruncDay('fecha_venta')
-            ).values('period').annotate(
-                total_monto=Sum('total_venta'),
-                cantidad_ventas=Count('id')
-            ).order_by('period')
+        elif year and month:
+            # Si se especifican año y mes, agrupar por día (dentro de ese mes)
+            trunc_level = TruncDay # Agrupar por día si el rango es mensual
             group_by_label = "Día"
         elif year:
-            ventas_agrupadas = Venta.objects.filter(**base_filter_ventas).annotate(
-                period=TruncMonth('fecha_venta')
-            ).values('period').annotate(
-                total_monto=Sum('total_venta'),
-                cantidad_ventas=Count('id')
-            ).order_by('period')
+            # Si solo se especifica el año, agrupar por mes (dentro de ese año)
+            trunc_level = TruncMonth # Agrupar por mes si el rango es anual
             group_by_label = "Mes"
-        else: # Si no hay filtros de fecha (o solo por vendedor), agrupar por año
-            ventas_agrupadas = Venta.objects.filter(**base_filter_ventas).annotate(
-                period=TruncYear('fecha_venta')
-            ).values('period').annotate(
-                total_monto=Sum('total_venta'),
-                cantidad_ventas=Count('id')
-            ).order_by('period')
-            group_by_label = "Año"
+        # else: Si no hay filtros de fecha, se mantiene la agrupación por defecto (TruncYear/Año)
+        # Esto es importante para una vista global si no se selecciona nada.
 
-        # Formatear las fechas para el frontend
-        formatted_ventas_agrupadas = []
+
+        ventas_agrupadas = ventas_queryset.annotate(fecha_agrupada=trunc_level('fecha_venta')) \
+                                     .values('fecha_agrupada') \
+                                     .annotate(total_monto=Sum('total_venta'), cantidad_ventas=Count('id')) \
+                                     .order_by('fecha_agrupada')
+
+        ventas_agrupadas_data = []
         for item in ventas_agrupadas:
-            if item['period']:
-                if group_by_label == "Día":
-                    date_str = item['period'].strftime('%Y-%m-%d')
-                elif group_by_label == "Mes":
-                    date_str = item['period'].strftime('%Y-%m')
-                else: # Año
-                    date_str = item['period'].strftime('%Y')
-                formatted_ventas_agrupadas.append({
-                    'fecha': date_str,
-                    'total_monto': item['total_monto'] or 0,
-                    'cantidad_ventas': item['cantidad_ventas']
-                })
+            fecha_label = ""
+            if trunc_level == TruncDate or trunc_level == TruncDay:
+                fecha_label = item['fecha_agrupada'].strftime('%Y-%m-%d')
+            elif trunc_level == TruncMonth:
+                fecha_label = item['fecha_agrupada'].strftime('%Y-%m')
+            else: # TruncYear
+                fecha_label = item['fecha_agrupada'].strftime('%Y')
 
-        response_data = {
-            "total_ventas_periodo": total_ventas,
-            "total_productos_vendidos_periodo": total_productos,
-            "ventas_por_usuario": list(ventas_por_usuario),
-            "productos_mas_vendidos": list(productos_vendidos), # La clave sigue siendo la misma por compatibilidad con el frontend
+            ventas_agrupadas_data.append({
+                'fecha': fecha_label,
+                'total_monto': float(item['total_monto'] or 0),
+                'cantidad_ventas': item['cantidad_ventas'],
+            })
+
+        productos_mas_vendidos = DetalleVenta.objects.filter(venta__in=ventas_queryset)\
+                                .values('producto__nombre')\
+                                .annotate(
+                                    cantidad_total=Sum('cantidad'),
+                                    monto_total=Sum(ExpressionWrapper(F('cantidad') * F('precio_unitario_venta'), output_field=DecimalField()))
+                                )\
+                                .order_by('-cantidad_total')[:10]
+
+        productos_mas_vendidos_data = [
+            {'producto__nombre': item['producto__nombre'],
+             'cantidad_total': item['cantidad_total'],
+             'monto_total': float(item['monto_total'] or 0)}
+            for item in productos_mas_vendidos
+        ]
+
+        ventas_por_usuario = ventas_queryset.values('usuario__username')\
+                                 .annotate(monto_total_vendido=Sum('total_venta'), cantidad_ventas=Count('id'))\
+                                 .order_by('-monto_total_vendido')
+
+        ventas_por_usuario_data = [
+            {'usuario__username': item['usuario__username'],
+             'monto_total_vendido': float(item['monto_total_vendido'] or 0),
+             'cantidad_ventas': item['cantidad_ventas']}
+            for item in ventas_por_usuario
+        ]
+
+        # --- Ventas por Método de Pago (con unicidad garantizada en Python) ---
+        ventas_por_metodo_pago = ventas_queryset.values('metodo_pago') \
+                                       .annotate(monto_total=Sum('total_venta'), cantidad_ventas=Count('id')) \
+                                       .order_by('-monto_total')
+
+        ventas_por_metodo_pago_data = [
+            {'metodo_pago': item['metodo_pago'],
+             'monto_total': float(item['monto_total'] or 0),
+             'cantidad_ventas': item['cantidad_ventas']}
+            for item in ventas_por_metodo_pago
+        ]
+
+        return Response({
+            "total_ventas_periodo": float(total_ventas_periodo),
+            "total_productos_vendidos_periodo": total_productos_vendidos_periodo,
             "ventas_agrupadas_por_periodo": {
                 "label": group_by_label,
-                "data": formatted_ventas_agrupadas
-            }
-        }
-        return Response(response_data, status=status.HTTP_200_OK)
+                "data": ventas_agrupadas_data
+            },
+            "productos_mas_vendidos": productos_mas_vendidos_data,
+            "ventas_por_usuario": ventas_por_usuario_data,
+            "ventas_por_metodo_pago": ventas_por_metodo_pago_data,
+        })
+
+# --- NUEVA VISTA PARA MÉTODOS DE PAGO (para cargar el select en el frontend) ---
+class PaymentMethodListView(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        # 1. Obtener todos los métodos de pago
+        all_methods = Venta.objects.values_list('metodo_pago', flat=True)
+
+        # 2. Procesar en Python para asegurar unicidad y limpieza
+        unique_and_cleaned_methods = set() # Usamos un set para asegurar unicidad
+        for method in all_methods:
+            if method: # Asegurarse de que no es None o vacío
+                # Limpiar espacios en blanco al inicio/fin y normalizar a un caso consistente
+                # Usamos .strip() para eliminar espacios, y .title() para normalizar capitalización
+                cleaned_method = method.strip().title() # Convertirá "efectivo " a "Efectivo"
+                unique_and_cleaned_methods.add(cleaned_method)
+
+        # 3. Convertir el set a una lista y ordenar para consistencia
+        methods_list = list(unique_and_cleaned_methods)
+        
+        # 4. Formatear para el frontend
+        formatted_methods = sorted([{"value": m, "label": m} for m in methods_list], key=lambda x: x['label'])
+
+        return Response(formatted_methods)
+
+
+# --- Vistas de DetalleVenta ---
+class DetalleVentaViewSet(viewsets.ModelViewSet):
+    queryset = DetalleVenta.objects.all()
+    serializer_class = DetalleVentaSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['venta', 'producto']
