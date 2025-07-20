@@ -26,10 +26,8 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     CSRF_COOKIE_HTTPONLY = False 
     
-    # --- CORRECCIÓN AQUÍ: Establecer a None para que Django lo infiera correctamente ---
     CSRF_COOKIE_DOMAIN = None
     SESSION_COOKIE_DOMAIN = None
-    # ----------------------------------------------------------------------------------
     
     SESSION_COOKIE_SAMESITE = 'Lax'
     CSRF_COOKIE_SAMESITE = 'Lax'
@@ -46,11 +44,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework', 
     'corsheaders',    
-    'inventario',     
+    'inventario',     # Esta es tu única app personalizada visible
     'rest_framework_simplejwt',
-    'users',      # <--- AÑADIDO: Si tienes una app 'users'
-    'productos',  # <--- AÑADIDO: Si tienes una app 'productos'
-    'ventas',     # <--- AÑADIDO: Si tienes una app 'ventas'
+    # --- ELIMINADAS: Las siguientes apps no existen en tu estructura de carpetas ---
+    # 'users',      
+    # 'productos',  
+    # 'ventas',     
 ]
 
 MIDDLEWARE = [
@@ -97,20 +96,16 @@ if 'DATABASE_URL' in os.environ:
         conn_max_age=600,
         ssl_require=True
     )
-    # --- LÍNEAS DE DEBUG AÑADIDAS ---
     print("\n--- DEBUG DATABASE CONFIG ---")
     print("DATABASE_URL found in environment variables!")
     print(f"DATABASE_URL value: {os.environ.get('DATABASE_URL')}")
     print(f"Django's DATABASES['default'] configured as: {DATABASES['default']}")
     print("--- END DEBUG ---\n")
-    # -----------------------------
 else:
-    # --- LÍNEAS DE DEBUG AÑADIDAS ---
     print("\n--- DEBUG DATABASE CONFIG ---")
     print("WARNING: DATABASE_URL NOT found in environment variables. Falling back to SQLite.")
     print(f"Django's DATABASES['default'] configured as: {DATABASES['default']}")
     print("--- END DEBUG ---\n")
-    # -----------------------------
 
 AUTH_PASSWORD_VALIDATORS = [
     {
