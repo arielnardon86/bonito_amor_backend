@@ -48,6 +48,9 @@ INSTALLED_APPS = [
     'corsheaders',    
     'inventario',     
     'rest_framework_simplejwt',
+    'users',      # <--- AÑADIDO: Si tienes una app 'users'
+    'productos',  # <--- AÑADIDO: Si tienes una app 'productos'
+    'ventas',     # <--- AÑADIDO: Si tienes una app 'ventas'
 ]
 
 MIDDLEWARE = [
