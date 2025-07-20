@@ -16,7 +16,7 @@ ALLOWED_HOSTS = []
 if not DEBUG:
     ALLOWED_HOSTS = [
         '.onrender.com',                  
-              
+        'https://bonito-amor-backend.onrender.com',     
         'bonitoamorstock.onrender.com', 
     ]
     
@@ -136,13 +136,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000", 
-    "https://bonitoamorstock.onrender.com", 
+    "https://bonitoamorstock.onrender.com",
+    "https://bonito-amor-backend.onrender.com",  
 ]
 CORS_ALLOW_CREDENTIALS = True 
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
-    "https://totalstock-frontend.onrender.com", 
+    'https://bonito-amor-backend.onrender.com', 
     "https://bonitoamorstock.onrender.com", 
 ]
 
