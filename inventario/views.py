@@ -1,4 +1,4 @@
-# Store/backend/inventario/views.py
+# BONITO_AMOR/backend/inventario/views.py
 
 from rest_framework import viewsets, status
 from rest_framework.response import Response
