@@ -10,25 +10,24 @@ from rest_framework_simplejwt.views import (
 )
 
 # --- Importaciones de tus Vistas (AJUSTADO: TODAS ASUMIENDO QUE ESTÁN EN 'inventario.views') ---
-# Eliminamos CurrentUserView de aquí porque es una acción dentro de UserViewSet.
-# Corregimos MetricasVentaView a MetricasVentasViewSet.
+# Eliminamos CurrentUserView y UserRegisterView de aquí porque son acciones o métodos
+# manejados por el UserViewSet y el router.
 from inventario.views import (
-    UserRegisterView,
     UserViewSet,
     ProductoViewSet,
     VentaViewSet,
     DetalleVentaViewSet,
-    MetricasVentasViewSet, # Nomenclatura corregida para coincidir con views.py
-    PaymentMethodListView, # Añadido: para registrar con el router
+    MetricasVentasViewSet, 
+    PaymentMethodListView, 
 )
 
 # --- Configuración del Router para ViewSets ---
 router = DefaultRouter()
 router.register(r'productos', ProductoViewSet, basename='producto')
 router.register(r'ventas', VentaViewSet, basename='venta')
-router.register(r'users', UserViewSet, basename='user')
-router.register(r'metricas', MetricasVentasViewSet, basename='metricas') # Registramos MetricasVentasViewSet
-router.register(r'metodos-pago', PaymentMethodListView, basename='metodo-pago') # Registramos PaymentMethodListView
+router.register(r'users', UserViewSet, basename='user') # Este ViewSet maneja la creación de usuarios (registro)
+router.register(r'metricas', MetricasVentasViewSet, basename='metricas') 
+router.register(r'metodos-pago', PaymentMethodListView, basename='metodo-pago') 
 
 # Si DetalleVentaViewSet es un ViewSet independiente y quieres rutas para él,
 # deberías registrarlo aquí. Si es parte de VentaViewSet (ej. como un serializer anidado),
@@ -41,6 +40,10 @@ urlpatterns = [
 
     # --- INCLUYE LAS RUTAS GENERADAS POR EL ROUTER ---
     # Esto es CRÍTICO para que funcionen las URLs de tus ViewSets (productos, ventas, users, metricas, metodos-pago)
+    # La creación de usuarios (registro) se maneja con un POST a /api/users/
+    # La obtención del usuario actual (me) se maneja con un GET a /api/users/me/
+    # Las métricas se manejan con un GET a /api/metricas/metrics/
+    # Los métodos de pago se manejan con un GET a /api/metodos-pago/
     path('api/', include(router.urls)),
 
     # --- Rutas JWT (autenticación) ---
@@ -50,11 +53,6 @@ urlpatterns = [
     # path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'), # Opcional
 
     # --- Rutas Específicas de Usuario ---
-    # La ruta de registro generalmente no requiere autenticación.
-    path('api/register/', UserRegisterView.as_view(), name='register'),
-    # Eliminada la ruta 'api/users/me/' explícita. Ahora es manejada por el router
-    # a través de la acción 'me' en UserViewSet (ej. /api/users/me/).
-
-    # Eliminada la ruta de métricas explícita. Ahora es manejada por el router
-    # a través de la acción 'metrics' en MetricasVentasViewSet (ej. /api/metricas/metrics/).
+    # Eliminada la ruta 'api/register/' explícita. Ahora es manejada por el router
+    # a través del método 'create' de UserViewSet (POST a /api/users/).
 ]
