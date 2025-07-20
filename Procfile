@@ -1,0 +1,1 @@
+web: gunicorn mi_tienda_backend.wsgi --log-file -
