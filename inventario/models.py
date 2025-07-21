@@ -3,11 +3,9 @@ from django.utils import timezone
 import random
 import string
 from barcode import EAN13 
-from django.contrib.auth import get_user_model # <-- Usar get_user_model() es la práctica recomendada
-                                                # en lugar de 'from django.contrib.auth.models import User'
-                                                # por si en el futuro cambias el modelo de usuario
+from django.contrib.auth import get_user_model 
 
-User = get_user_model() # Obtener el modelo de usuario activo
+User = get_user_model() 
 
 
 # --- FUNCIÓN CORREGIDA: generate_ean13 ---
@@ -50,7 +48,7 @@ class Producto(models.Model):
     stock = models.IntegerField(default=0)
     talle = models.CharField(max_length=20, default='UNICA') 
     
-    # --- RELACIÓN CON CATEGORIA (DESCOMENTADA Y RECOMENDADA) ---
+    # --- RELACIÓN CON CATEGORIA ---
     categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
 
 
@@ -76,12 +74,12 @@ class Producto(models.Model):
 # --- MODELO Venta ---
 class Venta(models.Model):
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_realizadas') 
-    fecha_venta = models.DateTimeField(default=timezone.now) # Usa default=timezone.now para que Django lo maneje automáticamente al crear
+    fecha_venta = models.DateTimeField(default=timezone.now) 
     total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0) 
-    anulada = models.BooleanField(default=False) # <--- ¡CAMBIO CLAVE AQUÍ! Nuevo campo para indicar si la venta ha sido anulada
+    anulada = models.BooleanField(default=False) 
+    metodo_pago = models.CharField(max_length=50, blank=True, null=True) # <--- ¡CAMBIO CLAVE AQUÍ! Nuevo campo para el método de pago
 
     class Meta:
-        # Añadir un orden por defecto para las ventas, por ejemplo, las más recientes primero
         ordering = ['-fecha_venta'] 
 
     def __str__(self):
@@ -92,20 +90,17 @@ class DetalleVenta(models.Model):
     venta = models.ForeignKey(Venta, related_name='detalles', on_delete=models.CASCADE)
     producto = models.ForeignKey(Producto, on_delete=models.PROTECT) 
     cantidad = models.IntegerField()
-    # Este campo almacenará el precio del producto EN EL MOMENTO DE LA VENTA
     precio_unitario_venta = models.DecimalField(max_digits=10, decimal_places=2) 
 
     def subtotal(self):
         return self.cantidad * self.precio_unitario_venta
 
     def save(self, *args, **kwargs):
-        # Si precio_unitario_venta no está establecido, usa el precio_venta del producto
         if self.precio_unitario_venta is None and self.producto:
             self.precio_unitario_venta = self.producto.precio_venta
         super().save(*args, **kwargs)
 
     class Meta:
-        # Ayuda a evitar duplicados y facilita consultas
         unique_together = ('venta', 'producto') 
 
     def __str__(self):
