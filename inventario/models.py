@@ -1,5 +1,3 @@
-# Store/backend/inventario/models.py
-
 from django.db import models
 from django.utils import timezone
 import random
@@ -80,7 +78,8 @@ class Venta(models.Model):
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_realizadas') 
     fecha_venta = models.DateTimeField(default=timezone.now) # Usa default=timezone.now para que Django lo maneje automáticamente al crear
     total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0) 
-    
+    anulada = models.BooleanField(default=False) # <--- ¡CAMBIO CLAVE AQUÍ! Nuevo campo para indicar si la venta ha sido anulada
+
     class Meta:
         # Añadir un orden por defecto para las ventas, por ejemplo, las más recientes primero
         ordering = ['-fecha_venta'] 
