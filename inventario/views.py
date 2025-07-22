@@ -72,12 +72,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta']
 
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return VentaCreateSerializer
-        return VentaSerializer
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    # La acción 'anular' ahora acepta solicitudes PATCH
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser]) # <--- ¡CAMBIO CLAVE AQUÍ!
     def anular(self, request, pk=None):
         try:
             venta = self.get_object()
@@ -147,24 +143,18 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad'] or 0
 
         # --- Ventas agrupadas por período para la tendencia ---
-        # Determinar el nivel de agrupación (día, mes, año)
-        group_by_label = "Año" # Valor por defecto
-        trunc_level = TruncYear # Valor por defecto
+        group_by_label = "Año" 
+        trunc_level = TruncYear 
 
         if year and month and day:
-            # Si se especifican año, mes y día, agrupar por día específico
-            trunc_level = TruncDate # O TruncDay si prefieres que solo sea la fecha sin hora
+            trunc_level = TruncDate 
             group_by_label = "Día"
         elif year and month:
-            # Si se especifican año y mes, agrupar por día (dentro de ese mes)
-            trunc_level = TruncDay # Agrupar por día si el rango es mensual
+            trunc_level = TruncDay 
             group_by_label = "Día"
         elif year:
-            # Si solo se especifica el año, agrupar por mes (dentro de ese año)
-            trunc_level = TruncMonth # Agrupar por mes si el rango es anual
+            trunc_level = TruncMonth 
             group_by_label = "Mes"
-        # else: Si no hay filtros de fecha, se mantiene la agrupación por defecto (TruncYear/Año)
-        # Esto es importante para una vista global si no se selecciona nada.
 
 
         ventas_agrupadas = ventas_queryset.annotate(fecha_agrupada=trunc_level('fecha_venta')) \
@@ -214,7 +204,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             for item in ventas_por_usuario
         ]
 
-        # --- Ventas por Método de Pago (con unicidad garantizada en Python) ---
+        # --- Ventas por Método de Pago ---
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago') \
                                        .annotate(monto_total=Sum('total_venta'), cantidad_ventas=Count('id')) \
                                        .order_by('-monto_total')
@@ -243,22 +233,16 @@ class PaymentMethodListView(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        # 1. Obtener todos los métodos de pago
         all_methods = Venta.objects.values_list('metodo_pago', flat=True)
 
-        # 2. Procesar en Python para asegurar unicidad y limpieza
-        unique_and_cleaned_methods = set() # Usamos un set para asegurar unicidad
+        unique_and_cleaned_methods = set() 
         for method in all_methods:
-            if method: # Asegurarse de que no es None o vacío
-                # Limpiar espacios en blanco al inicio/fin y normalizar a un caso consistente
-                # Usamos .strip() para eliminar espacios, y .title() para normalizar capitalización
-                cleaned_method = method.strip().title() # Convertirá "efectivo " a "Efectivo"
+            if method: 
+                cleaned_method = method.strip().title() 
                 unique_and_cleaned_methods.add(cleaned_method)
 
-        # 3. Convertir el set a una lista y ordenar para consistencia
         methods_list = list(unique_and_cleaned_methods)
         
-        # 4. Formatear para el frontend
         formatted_methods = sorted([{"value": m, "label": m} for m in methods_list], key=lambda x: x['label'])
 
         return Response(formatted_methods)
