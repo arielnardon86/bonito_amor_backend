@@ -71,9 +71,15 @@ class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta']
+    serializer_class = VentaSerializer # <--- Added default serializer_class here
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return VentaCreateSerializer
+        return super().get_serializer_class() # <--- Use super() to get the default serializer
 
     # La acción 'anular' ahora acepta solicitudes PATCH
-    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser]) # <--- ¡CAMBIO CLAVE AQUÍ!
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser])
     def anular(self, request, pk=None):
         try:
             venta = self.get_object()
