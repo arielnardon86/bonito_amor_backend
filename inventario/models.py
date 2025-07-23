@@ -4,7 +4,7 @@ import random
 import string
 from barcode import EAN13 
 from django.contrib.auth import get_user_model 
-from django.utils.text import slugify # Importar slugify
+from django.utils.text import slugify 
 
 User = get_user_model() 
 
@@ -12,9 +12,9 @@ User = get_user_model()
 class Tienda(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True, blank=True, help_text="Identificador único para la URL (ej. 'tienda-central')")
-    direccion = models.CharField(max_length=255, blank=True, null=True)
-    telefono = models.CharField(max_length=20, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
+    direccion = models.CharField(max_length=255, blank=True, null=True) # <--- ESTE CAMPO
+    telefono = models.CharField(max_length=20, blank=True, null=True)     # <--- ESTE CAMPO
+    email = models.EmailField(blank=True, null=True)                    # <--- ESTE CAMPO
     activa = models.BooleanField(default=True)
 
     def save(self, *args, **kwargs):
@@ -31,9 +31,7 @@ def generate_ean13():
     Genera un código de barras EAN-13 aleatorio.
     Asegura que el dígito de control (checksum) sea correcto.
     """
-    prefix = "200" # Prefijo común para uso interno (o cualquier otro que desees)
-    # Genera 9 dígitos aleatorios, sumando 3 del prefijo, da 12 dígitos.
-    # EAN13 calculará el 13er dígito (checksum).
+    prefix = "200" 
     random_digits = ''.join(random.choices(string.digits, k=9))
     base_number = prefix + random_digits
     
@@ -65,11 +63,9 @@ class Producto(models.Model):
     stock = models.IntegerField(default=0)
     talle = models.CharField(max_length=20, default='UNICA') 
     
-    # --- RELACIÓN CON CATEGORIA ---
     categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
     
-    # --- NUEVO CAMPO: Relación con Tienda ---
-    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos', null=True, blank=True) # Permite null temporalmente para migraciones
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos', null=True, blank=True)
 
 
     def save(self, *args, **kwargs):
@@ -99,8 +95,7 @@ class Venta(models.Model):
     anulada = models.BooleanField(default=False) 
     metodo_pago = models.CharField(max_length=50, blank=True, null=True) 
 
-    # --- NUEVO CAMPO: Relación con Tienda ---
-    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas', null=True, blank=True) # Permite null temporalmente para migraciones
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas', null=True, blank=True)
 
 
     class Meta:
