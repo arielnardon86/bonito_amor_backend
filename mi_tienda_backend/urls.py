@@ -16,7 +16,7 @@ from inventario.views import (
     DetalleVentaViewSet,
     MetricasVentasViewSet, 
     PaymentMethodListView, 
-    TiendaViewSet, # <--- ¡NUEVA IMPORTACIÓN AQUÍ!
+    TiendaViewSet, # <--- ¡ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ PRESENTE!
 )
 
 # --- Configuración del Router para ViewSets ---
@@ -26,7 +26,7 @@ router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'users', UserViewSet, basename='user') 
 router.register(r'metricas', MetricasVentasViewSet, basename='metricas') 
 router.register(r'metodos-pago', PaymentMethodListView, basename='metodo-pago') 
-router.register(r'tiendas', TiendaViewSet, basename='tienda') # <--- ¡NUEVO REGISTRO AQUÍ!
+router.register(r'tiendas', TiendaViewSet, basename='tienda') # <--- ¡ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ PRESENTE!
 
 
 urlpatterns = [
