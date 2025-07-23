@@ -1,21 +1,18 @@
 from django.contrib import admin
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter 
-from django.views.generic.base import RedirectView 
-
-# Importaciones necesarias para la raíz de la API personalizada
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.reverse import reverse
-from rest_framework.permissions import AllowAny # Importa AllowAny para la raíz de la API
+from rest_framework.routers import DefaultRouter
+from rest_framework.response import Response # Importar Response
+from rest_framework.decorators import api_view # Importar api_view
+from rest_framework.reverse import reverse # Importar reverse
 
 # --- Importaciones de Simple JWT ---
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
+    # TokenVerifyView, # Opcional si necesitas verificación de token
 )
 
-# --- Importaciones de tus Vistas ---
+# --- Importaciones de tus Vistas (AJUSTADO: TODAS ASUMIENDO QUE ESTÁN EN 'inventario.views') ---
 from inventario.views import (
     UserViewSet,
     ProductoViewSet,
@@ -23,47 +20,51 @@ from inventario.views import (
     DetalleVentaViewSet,
     MetricasVentasViewSet, 
     PaymentMethodListView, 
-    TiendaViewSet, # Asegúrate de que TiendaViewSet esté importado
 )
 
 # --- Configuración del Router para ViewSets ---
 router = DefaultRouter()
 router.register(r'productos', ProductoViewSet, basename='producto')
 router.register(r'ventas', VentaViewSet, basename='venta')
-router.register(r'users', UserViewSet, basename='user') 
+router.register(r'users', UserViewSet, basename='user')
 router.register(r'metricas', MetricasVentasViewSet, basename='metricas') 
 router.register(r'metodos-pago', PaymentMethodListView, basename='metodo-pago') 
-router.register(r'tiendas', TiendaViewSet, basename='tienda') # Asegúrate de que TiendaViewSet esté registrado
 
-# --- Vista de la Raíz de la API Personalizada ---
-# Esta vista permite que la URL /api/ sea accesible sin autenticación,
-# lo cual es útil para la exploración de la API o para clientes que la visiten.
+# Si DetalleVentaViewSet es un ViewSet independiente y quieres rutas para él,
+# deberías registrarlo aquí. Si es parte de VentaViewSet (ej. como un serializer anidado),
+# no necesita una entrada de router separada.
+# router.register(r'detalle-ventas', DetalleVentaViewSet, basename='detalle-venta')
+
+# --- Función para la raíz de la API ---
+# Esta función lista todos los endpoints disponibles en la API
 @api_view(['GET'])
-@permission_classes([AllowAny]) # Permite acceso sin autenticación a la raíz de la API
 def api_root(request, format=None):
     return Response({
         'users': reverse('user-list', request=request, format=format),
         'productos': reverse('producto-list', request=request, format=format),
         'ventas': reverse('venta-list', request=request, format=format),
-        'metricas': reverse('metricas-list', request=request, format=format),
+        # CORRECCIÓN CLAVE AQUÍ: Usar 'metricas-metrics' en lugar de 'metricas-list'
+        'metricas': reverse('metricas-metrics', request=request, format=format), 
         'metodos-pago': reverse('metodo-pago-list', request=request, format=format),
-        'tiendas': reverse('tienda-list', request=request, format=format), # Incluye la ruta de tiendas
         'token_obtain_pair': reverse('token_obtain_pair', request=request, format=format),
         'token_refresh': reverse('token_refresh', request=request, format=format),
+        # Asumiendo que el registro se hace con un POST a la lista de usuarios
+        'register': reverse('user-list', request=request, format=format), 
     })
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('', RedirectView.as_view(url='/api/', permanent=False)), # Redirige la raíz del dominio a /api/
-    path('api/', api_root, name='api-root'), # Asigna la vista de la raíz de la API personalizada
-    path('api/', include(router.urls)), # Incluye las URLs generadas por el router bajo /api/
-    
+
+    # Ruta para la raíz de la API
+    path('api/', api_root), # Asegúrate de que esta línea esté aquí para la raíz de la API
+
+    # --- INCLUYE LAS RUTAS GENERADAS POR EL ROUTER ---
+    # Esto es CRÍTICO para que funcionen las URLs de tus ViewSets (productos, ventas, users, metricas, metodos-pago)
+    path('api/', include(router.urls)),
+
     # --- Rutas JWT (autenticación) ---
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    # path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'), # Opcional
 ]
-
-# Opcional: Si usas sufijos de formato (ej. .json, .api) en tus URLs
-# from rest_framework.urlpatterns import format_suffix_patterns
-# urlpatterns = format_suffix_patterns(urlpatterns)
