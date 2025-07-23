@@ -3,7 +3,7 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importa AllowAny
 from django.contrib.auth import get_user_model
 from django.db.models import Sum, Count, F, ExpressionWrapper, DecimalField
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear, TruncDate
@@ -13,14 +13,21 @@ from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 
-from .models import Producto, Categoria, Venta, DetalleVenta
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda # Importa Tienda
 from .serializers import (
     ProductoSerializer, CategoriaSerializer,
     VentaSerializer, VentaCreateSerializer,
-    DetalleVentaSerializer, UserSerializer, UserCreateSerializer
+    DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
+    TiendaSerializer # Importa TiendaSerializer
 )
 
 User = get_user_model()
+
+# --- NUEVO VIEWSET: TiendaViewSet ---
+class TiendaViewSet(viewsets.ReadOnlyModelViewSet): # ReadOnlyModelViewSet para solo listar/recuperar
+    queryset = Tienda.objects.all().order_by('nombre')
+    serializer_class = TiendaSerializer
+    permission_classes = [AllowAny] # Permite acceso sin autenticación para la página principal
 
 # --- Vistas de Autenticación y Usuarios ---
 class UserViewSet(viewsets.ModelViewSet):
@@ -46,43 +53,167 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 
 # --- Vistas de Producto ---
 class ProductoViewSet(viewsets.ModelViewSet):
-    queryset = Producto.objects.all().order_by('nombre')
+    # queryset = Producto.objects.all().order_by('nombre') # <--- Esto se ajustará con el filtro de tienda
     serializer_class = ProductoSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['categoria', 'talle']
     search_fields = ['nombre', 'codigo_barras', 'descripcion']
 
+    # Método para filtrar productos por tienda
+    def get_queryset(self):
+        # Obtener el slug de la tienda de los parámetros de la URL (ej. /api/productos/?tienda_slug=bonito-amor)
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if tienda_slug:
+            return Producto.objects.filter(tienda__slug=tienda_slug).order_by('nombre')
+        # Si no se proporciona un slug de tienda, devolver un queryset vacío para evitar fuga de datos
+        # En una implementación real, podrías querer un error 400 o una redirección.
+        return Producto.objects.none() # Devuelve un queryset vacío si no hay tienda_slug
+
+
     @action(detail=False, methods=['get'])
     def buscar_por_barcode(self, request):
         barcode = request.query_params.get('barcode', None)
-        if barcode:
-            try:
-                producto = Producto.objects.get(codigo_barras=barcode)
-                serializer = self.get_serializer(producto)
-                return Response(serializer.data)
-            except Producto.DoesNotExist:
-                return Response({'detail': 'Producto no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-        return Response({'detail': 'Parámetro barcode es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
+        tienda_slug = request.query_params.get('tienda_slug') # También filtrar por tienda en búsqueda de barcode
+
+        if not barcode:
+            return Response({'detail': 'Parámetro barcode es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not tienda_slug:
+            return Response({'detail': 'Parámetro tienda_slug es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        productos_queryset = Producto.objects.filter(tienda__slug=tienda_slug)
+
+        try:
+            producto = productos_queryset.get(codigo_barras=barcode)
+            serializer = self.get_serializer(producto)
+            return Response(serializer.data)
+        except Producto.DoesNotExist:
+            return Response({'detail': 'Producto no encontrado en esta tienda.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'detail': f'Error en la búsqueda: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Sobreescribir perform_create para asignar la tienda al producto
+    def perform_create(self, serializer):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para crear un producto."})
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            serializer.save(tienda=tienda)
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
+    # Sobreescribir perform_update para asegurar que la tienda no se cambie y se filtre por ella
+    def perform_update(self, serializer):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para actualizar un producto."})
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            # Asegurarse de que el producto pertenezca a la tienda correcta antes de actualizar
+            if serializer.instance.tienda != tienda:
+                raise status.HTTP_403_FORBIDDEN({"detail": "No tienes permiso para modificar productos de otra tienda."})
+            serializer.save()
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
+    # Sobreescribir perform_destroy para asegurar que la tienda no se cambie y se filtre por ella
+    def perform_destroy(self, instance):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para eliminar un producto."}) 
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            # Asegurarse de que el producto pertenezca a la tienda correcta antes de eliminar
+            if instance.tienda != tienda:
+                raise status.HTTP_403_FORBIDDEN({"detail": "No tienes permiso para eliminar productos de otra tienda."})
+            instance.delete()
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
 
 # --- Vistas de Venta ---
 class VentaViewSet(viewsets.ModelViewSet):
-    queryset = Venta.objects.all().order_by('-fecha_venta')
+    # queryset = Venta.objects.all().order_by('-fecha_venta') # <--- Esto se ajustará con el filtro de tienda
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta']
-    serializer_class = VentaSerializer # <--- Added default serializer_class here
+    serializer_class = VentaSerializer 
+
+    # Método para filtrar ventas por tienda
+    def get_queryset(self):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if tienda_slug:
+            return Venta.objects.filter(tienda__slug=tienda_slug).order_by('-fecha_venta')
+        return Venta.objects.none() # Devuelve un queryset vacío si no hay tienda_slug
 
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer
-        return super().get_serializer_class() # <--- Use super() to get the default serializer
+        return super().get_serializer_class() 
 
-    # La acción 'anular' ahora acepta solicitudes PATCH
+    # Sobreescribir perform_create para asignar la tienda a la venta
+    def perform_create(self, serializer):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para crear una venta."})
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            serializer.save(tienda=tienda)
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
+    # Sobreescribir perform_update para asegurar que la tienda no se cambie y se filtre por ella
+    def perform_update(self, serializer):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para actualizar una venta."})
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            if serializer.instance.tienda != tienda:
+                raise status.HTTP_403_FORBIDDEN({"detail": "No tienes permiso para modificar ventas de otra tienda."})
+            serializer.save()
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
+    # Sobreescribir perform_destroy para asegurar que la tienda no se cambie y se filtre por ella
+    def perform_destroy(self, instance):
+        tienda_slug = self.request.query_params.get('tienda_slug')
+        if not tienda_slug:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "Se requiere el slug de la tienda para eliminar una venta."})
+        
+        try:
+            tienda = Tienda.objects.get(slug=tienda_slug)
+            if instance.tienda != tienda:
+                raise status.HTTP_403_FORBIDDEN({"detail": "No tienes permiso para eliminar ventas de otra tienda."})
+            instance.delete()
+        except Tienda.DoesNotExist:
+            raise status.HTTP_400_BAD_REQUEST({"detail": "La tienda especificada no existe."})
+
+
     @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser])
     def anular(self, request, pk=None):
         try:
             venta = self.get_object()
+            
+            # Asegurarse de que la venta pertenezca a la tienda correcta antes de anular
+            tienda_slug = request.query_params.get('tienda_slug')
+            if not tienda_slug:
+                return Response({"detail": "Se requiere el slug de la tienda para anular una venta."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                tienda = Tienda.objects.get(slug=tienda_slug)
+                if venta.tienda != tienda:
+                    return Response({"detail": "No tienes permiso para anular ventas de otra tienda."}, status=status.HTTP_403_FORBIDDEN)
+            except Tienda.DoesNotExist:
+                return Response({"detail": "La tienda especificada no existe."}, status=status.HTTP_400_BAD_REQUEST)
+
+
             if venta.anulada:
                 return Response({'detail': 'Esta venta ya ha sido anulada.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -116,8 +247,14 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         day = request.query_params.get('day')
         seller_id = request.query_params.get('seller_id')
         payment_method = request.query_params.get('payment_method')
+        tienda_slug = self.request.query_params.get('tienda_slug') # <--- CAMBIO AQUÍ
 
         ventas_queryset = Venta.objects.all().filter(anulada=False)
+        if tienda_slug: # <--- CAMBIO AQUÍ: Filtrar por tienda
+            ventas_queryset = ventas_queryset.filter(tienda__slug=tienda_slug)
+        else: # Si no hay tienda_slug, no se muestran métricas
+            return Response({"detail": "Se requiere el slug de la tienda para ver las métricas."}, status=status.HTTP_400_BAD_REQUEST)
+
 
         try:
             if year:
@@ -239,7 +376,14 @@ class PaymentMethodListView(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        all_methods = Venta.objects.values_list('metodo_pago', flat=True)
+        tienda_slug = request.query_params.get('tienda_slug') # <--- CAMBIO AQUÍ
+        
+        # Filtrar métodos de pago por tienda si se proporciona el slug
+        if tienda_slug:
+            all_methods = Venta.objects.filter(tienda__slug=tienda_slug).values_list('metodo_pago', flat=True)
+        else:
+            all_methods = Venta.objects.values_list('metodo_pago', flat=True)
+
 
         unique_and_cleaned_methods = set() 
         for method in all_methods:

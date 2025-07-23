@@ -1,19 +1,17 @@
-# inventario/serializers.py
+# BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
 from django.db import transaction
-from .models import Producto, Categoria, Venta, DetalleVenta
-from django.contrib.auth import get_user_model # Importar para obtener el modelo de usuario activo
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda # Importa Tienda
+from django.contrib.auth import get_user_model 
 
-User = get_user_model() # Obtiene el modelo de usuario configurado en settings.py
+User = get_user_model()
 
-# Serializer for the User model (to display logged-in user info and in lists)
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser') 
         read_only_fields = ('id',) 
 
-# Serializer for user creation
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     password2 = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
@@ -44,60 +42,53 @@ class UserCreateSerializer(serializers.ModelSerializer):
         )
         return user
 
-# Serializer for the Categoria model (if needed and the model exists)
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
         fields = '__all__'
 
-# Serializer for the Producto model
+# --- NUEVO SERIALIZADOR: TiendaSerializer ---
+class TiendaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tienda
+        fields = ['id', 'nombre', 'slug', 'descripcion']
+
 class ProductoSerializer(serializers.ModelSerializer):
-    # If 'categoria' is a ForeignKey, you can add this to display the name
-    # Make sure the 'categoria' field in your Producto model is a ForeignKey to Categoria
     categoria_nombre = serializers.CharField(source='categoria.nombre', read_only=True) 
+    # Añadir el nombre de la tienda para visualización
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True) # <--- CAMBIO CLAVE AQUÍ
     
     class Meta:
         model = Producto
-        # Make sure to include 'categoria_nombre' here if you use it
-        fields = '__all__' 
+        fields = '__all__' # Asegúrate de que 'tienda' también esté incluido aquí, '__all__' lo hará
+
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
-    # Field to return the product name in the response
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
-    
-    # Field to accept the product ID on input (POST/PUT)
-    # Here, 'producto' is the field in your DetalleVenta model
     producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all()) 
 
     class Meta:
         model = DetalleVenta
         fields = ['id', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario_venta']
-        # 'id' and 'producto_nombre' are read-only in the output
         read_only_fields = ['id', 'producto_nombre'] 
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    # Hidden field that automatically assigns the current user to the sale
-    # This works if the view has authentication configured (e.g., IsAuthenticated)
     usuario = serializers.HiddenField(default=serializers.CurrentUserDefault()) 
 
     class Meta:
         model = Venta
-        # Make sure to include 'usuario' in the fields
-        fields = ['id', 'fecha_venta', 'total_venta', 'usuario', 'detalles', 'metodo_pago'] # Added 'metodo_pago'
-        # 'fecha_venta' and 'total_venta' are calculated in the backend
+        fields = ['id', 'fecha_venta', 'total_venta', 'usuario', 'detalles', 'metodo_pago']
         read_only_fields = ['id', 'fecha_venta', 'total_venta']
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        # 'usuario' is already in validated_data thanks to HiddenField
         
         with transaction.atomic():
-            venta = Venta.objects.create(**validated_data) # The user is already here
+            venta = Venta.objects.create(**validated_data) 
 
             total_venta = 0
             for detalle_data in detalles_data:
-                # PrimaryKeyRelatedField already resolved 'producto' to the Producto object
                 producto = detalle_data['producto'] 
                 cantidad = detalle_data['cantidad']
                 precio_unitario_venta = detalle_data['precio_unitario_venta']
@@ -119,11 +110,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
-    # Use UserSerializer to get all user details
     usuario = UserSerializer(read_only=True) 
+    # Añadir el nombre de la tienda para visualización
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True) # <--- CAMBIO CLAVE AQUÍ
 
     class Meta:
         model = Venta
-        # Added 'metodo_pago' to the fields list
-        fields = ['id', 'fecha_venta', 'total_venta', 'detalles', 'usuario', 'anulada', 'metodo_pago'] # Added 'anulada' and 'metodo_pago'
-        read_only_fields = ['id', 'fecha_venta', 'total_venta', 'usuario', 'anulada', 'metodo_pago'] # 'usuario', 'anulada', 'metodo_pago' now read_only
+        fields = ['id', 'fecha_venta', 'total_venta', 'detalles', 'usuario', 'anulada', 'metodo_pago', 'tienda_nombre'] # <--- CAMBIO CLÍAVE AQUÍ
+        read_only_fields = ['id', 'fecha_venta', 'total_venta', 'usuario', 'anulada', 'metodo_pago', 'tienda_nombre'] 
