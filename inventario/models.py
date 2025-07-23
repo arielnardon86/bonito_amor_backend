@@ -1,107 +1,90 @@
+# BONITO_AMOR/backend/inventario/models.py
 from django.db import models
-from django.utils import timezone
-import random
-import string
-from barcode import EAN13 
-from django.contrib.auth import get_user_model 
+from django.contrib.auth import get_user_model
+import uuid # Para generar UUIDs para codigo_barras si no se proporciona
+from django.utils.text import slugify # Para generar slugs
 
-User = get_user_model() 
+User = get_user_model()
 
-
-# --- FUNCIÓN CORREGIDA: generate_ean13 ---
-def generate_ean13():
-    """
-    Genera un código de barras EAN-13 aleatorio.
-    Asegura que el dígito de control (checksum) sea correcto.
-    """
-    prefix = "200" # Prefijo común para uso interno (o cualquier otro que desees)
-    # Genera 9 dígitos aleatorios, sumando 3 del prefijo, da 12 dígitos.
-    # EAN13 calculará el 13er dígito (checksum).
-    random_digits = ''.join(random.choices(string.digits, k=9))
-    base_number = prefix + random_digits
-    
-    try:
-        ean = EAN13(base_number) 
-        return ean.ean 
-    except Exception as e:
-        print(f"Error al generar EAN13: {e}")
-        return None
-
-# --- MODELO Categoria ---
 class Categoria(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     descripcion = models.TextField(blank=True, null=True)
 
     class Meta:
-        verbose_name_plural = "Categorías" 
+        verbose_name_plural = "Categorías"
 
     def __str__(self):
         return self.nombre
 
-# --- MODELO Producto ---
-class Producto(models.Model):
-    nombre = models.CharField(max_length=200)
+# --- NUEVO MODELO: Tienda ---
+class Tienda(models.Model):
+    nombre = models.CharField(max_length=255, unique=True)
+    # El slug será usado en las URLs para identificar la tienda (ej. /la-pasion-del-hincha-yofre-login)
+    slug = models.SlugField(max_length=255, unique=True, help_text="Identificador único para la URL de la tienda (ej. 'bonito-amor', 'la-pasion-del-hincha-yofre')")
     descripcion = models.TextField(blank=True, null=True)
-    codigo_barras = models.CharField(max_length=13, unique=True, blank=True, null=True)
+    # Puedes añadir más campos aquí como logo, dirección, etc.
+
+    class Meta:
+        verbose_name_plural = "Tiendas"
+
+    def __str__(self):
+        return self.nombre
+
+class Producto(models.Model):
+    # Relacionar Producto con Tienda
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos', null=True, blank=True) # <--- CAMBIO CLAVE AQUÍ
+    nombre = models.CharField(max_length=255)
+    descripcion = models.TextField(blank=True, null=True)
+    # Código de barras se generará si no se proporciona
+    codigo_barras = models.CharField(max_length=100, unique=True, blank=True, null=True) 
     precio_compra = models.DecimalField(max_digits=10, decimal_places=2)
     precio_venta = models.DecimalField(max_digits=10, decimal_places=2)
     stock = models.IntegerField(default=0)
-    talle = models.CharField(max_length=20, default='UNICA') 
-    
-    # --- RELACIÓN CON CATEGORIA ---
+    # Talle puede ser un CharField para flexibilidad (XS, S, M, L, XL, NUM36, NUM38, etc.)
+    talle = models.CharField(max_length=50, blank=True, null=True) 
     categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        verbose_name_plural = "Productos"
 
     def save(self, *args, **kwargs):
-        if not self.codigo_barras: 
-            new_barcode = None
-            max_attempts = 100 
-            attempts = 0
-
-            while new_barcode is None or Producto.objects.filter(codigo_barras=new_barcode).exists():
-                new_barcode = generate_ean13()
-                attempts += 1
-                if attempts > max_attempts:
-                    raise Exception("No se pudo generar un código de barras EAN13 único después de varios intentos.")
-            
-            self.codigo_barras = new_barcode
-            
+        if not self.codigo_barras:
+            # Genera un UUID y lo convierte a un entero para EAN13 (limitado a 12 dígitos)
+            # Esto es una simplificación, un EAN13 real tiene un checksum
+            # Para producción, considera librerías como python-barcode
+            self.codigo_barras = str(uuid.uuid4().int)[:12] # Tomamos los primeros 12 dígitos
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.nombre
+        return f"{self.nombre} ({self.talle}) - Stock: {self.stock}"
 
-# --- MODELO Venta ---
 class Venta(models.Model):
-    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_realizadas') 
-    fecha_venta = models.DateTimeField(default=timezone.now) 
-    total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0) 
-    anulada = models.BooleanField(default=False) 
-    metodo_pago = models.CharField(max_length=50, blank=True, null=True) # <--- ¡CAMBIO CLAVE AQUÍ! Nuevo campo para el método de pago
+    # Relacionar Venta con Tienda
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas', null=True, blank=True) # <--- CAMBIO CLAVE AQUÍ
+    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='ventas')
+    fecha_venta = models.DateTimeField(auto_now_add=True)
+    total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    anulada = models.BooleanField(default=False)
+    metodo_pago = models.CharField(max_length=50, blank=True, null=True) # Ej: 'Efectivo', 'Tarjeta', 'Transferencia'
 
     class Meta:
-        ordering = ['-fecha_venta'] 
+        verbose_name_plural = "Ventas"
+        ordering = ['-fecha_venta'] # Ordenar por fecha de venta descendente
 
     def __str__(self):
-        return f"Venta {self.id} - {self.fecha_venta.strftime('%Y-%m-%d %H:%M')} por {self.usuario.username if self.usuario else 'Desconocido'}"
+        return f"Venta #{self.id} - Total: ${self.total_venta} - Anulada: {self.anulada}"
 
-# --- MODELO DetalleVenta ---
 class DetalleVenta(models.Model):
-    venta = models.ForeignKey(Venta, related_name='detalles', on_delete=models.CASCADE)
-    producto = models.ForeignKey(Producto, on_delete=models.PROTECT) 
+    venta = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='detalles')
+    producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='detalles_venta')
     cantidad = models.IntegerField()
-    precio_unitario_venta = models.DecimalField(max_digits=10, decimal_places=2) 
-
-    def subtotal(self):
-        return self.cantidad * self.precio_unitario_venta
-
-    def save(self, *args, **kwargs):
-        if self.precio_unitario_venta is None and self.producto:
-            self.precio_unitario_venta = self.producto.precio_venta
-        super().save(*args, **kwargs)
+    precio_unitario_venta = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
-        unique_together = ('venta', 'producto') 
+        verbose_name_plural = "Detalles de Venta"
 
     def __str__(self):
-        return f"{self.cantidad} x {self.producto.nombre} en Venta {self.venta.id}"
+        return f"{self.cantidad} de {self.producto.nombre} en Venta #{self.venta.id}"
+
