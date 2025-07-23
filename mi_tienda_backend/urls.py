@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter 
+from django.views.generic.base import RedirectView # Importa RedirectView para la redirección
 
 # --- Importaciones de Simple JWT ---
 from rest_framework_simplejwt.views import (
@@ -16,7 +17,7 @@ from inventario.views import (
     DetalleVentaViewSet,
     MetricasVentasViewSet, 
     PaymentMethodListView, 
-    TiendaViewSet, # <--- ¡ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ PRESENTE!
+    TiendaViewSet, 
 )
 
 # --- Configuración del Router para ViewSets ---
@@ -26,13 +27,12 @@ router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'users', UserViewSet, basename='user') 
 router.register(r'metricas', MetricasVentasViewSet, basename='metricas') 
 router.register(r'metodos-pago', PaymentMethodListView, basename='metodo-pago') 
-router.register(r'tiendas', TiendaViewSet, basename='tienda') # <--- ¡ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ PRESENTE!
+router.register(r'tiendas', TiendaViewSet, basename='tienda') 
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-
-    # --- INCLUYE LAS RUTAS GENERADAS POR EL ROUTER ---
+    path('', RedirectView.as_view(url='/api/', permanent=False)), # <--- NUEVA LÍNEA: Redirige el root a /api/
     path('api/', include(router.urls)),
 
     # --- Rutas JWT (autenticación) ---
