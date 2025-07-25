@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importa AllowAny
 from rest_framework.views import APIView
 from django.db.models import Sum, F
 from django.utils import timezone
@@ -14,7 +14,7 @@ from .serializers import (
     ProductoSerializer, CategoriaSerializer,
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
-    TiendaSerializer, CustomTokenObtainPairSerializer # Importa CustomTokenObtainPairSerializer
+    TiendaSerializer, CustomTokenObtainPairSerializer 
 )
 from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, UserProfile
 
@@ -65,7 +65,7 @@ class UserViewSet(viewsets.ModelViewSet):
 class CategoriaViewSet(viewsets.ModelViewSet):
     queryset = Categoria.objects.all().order_by('nombre')
     serializer_class = CategoriaSerializer
-    permission_classes = [IsAuthenticated] # Requiere autenticación para todas las acciones
+    permission_classes = [IsAuthenticated] 
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -77,11 +77,12 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    permission_classes = [IsAuthenticated]
-
+    # CAMBIO CLAVE AQUÍ: Permitir acceso público a la lista de tiendas
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            self.permission_classes = [IsAuthenticated] # Todos los autenticados pueden listar/ver
+        if self.action == 'list':
+            self.permission_classes = [AllowAny] # Cualquiera puede listar tiendas
+        elif self.action == 'retrieve':
+            self.permission_classes = [IsAuthenticated] # Autenticados pueden ver detalle de una tienda
         else:
             self.permission_classes = [IsSuperUser] # Solo superusuarios pueden crear/actualizar/eliminar
         return [permission() for permission in self.permission_classes]
@@ -96,21 +97,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Producto.objects.all().order_by('nombre')
         elif hasattr(user, 'profile') and user.profile.tienda:
             return Producto.objects.filter(tienda=user.profile.tienda).order_by('nombre')
-        return Producto.objects.none() # Si no es superuser y no tiene tienda asignada, no ve productos
+        return Producto.objects.none() 
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
-            self.permission_classes = [IsAuthenticated] # Todos los autenticados pueden listar/ver
+            self.permission_classes = [IsAuthenticated] 
         else:
-            self.permission_classes = [IsStaffOrAdmin] # Solo staff/admin pueden crear/actualizar/eliminar
+            self.permission_classes = [IsStaffOrAdmin] 
         return [permission() for permission in self.permission_classes]
 
     def perform_create(self, serializer):
-        # Asegura que el producto se cree en la tienda del usuario actual si no es superuser
         if not self.request.user.is_superuser and hasattr(self.request.user, 'profile') and self.request.user.profile.tienda:
             serializer.save(tienda=self.request.user.profile.tienda)
         else:
-            serializer.save() # Si es superuser o no tiene tienda asignada, permite especificar la tienda
+            serializer.save() 
 
 class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
@@ -126,11 +126,11 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
-            self.permission_classes = [IsAuthenticated] # Todos los autenticados pueden listar/ver
+            self.permission_classes = [IsAuthenticated] 
         elif self.action == 'create':
-            self.permission_classes = [IsStaffOrAdmin] # Staff/admin pueden crear ventas
-        else: # update, partial_update, destroy
-            self.permission_classes = [IsAdminUser] # Solo administradores pueden modificar/eliminar
+            self.permission_classes = [IsStaffOrAdmin] 
+        else: 
+            self.permission_classes = [IsAdminUser] 
         return [permission() for permission in self.permission_classes]
 
     def get_serializer_class(self):
@@ -139,11 +139,10 @@ class VentaViewSet(viewsets.ModelViewSet):
         return VentaSerializer
 
     def perform_create(self, serializer):
-        # Asegura que la venta se cree en la tienda del usuario actual si no es superuser
         if not self.request.user.is_superuser and hasattr(self.request.user, 'profile') and self.request.user.profile.tienda:
             serializer.save(tienda=self.request.user.profile.tienda)
         else:
-            serializer.save() # Si es superuser o no tiene tienda asignada, permite especificar la tienda
+            serializer.save() 
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all()
@@ -159,7 +158,7 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
         return DetalleVenta.objects.none()
 
     def get_permissions(self):
-        return [IsAuthenticated()] # Solo usuarios autenticados pueden ver detalles de venta
+        return [IsAuthenticated()] 
 
 class MetricasVentasViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
@@ -174,7 +173,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             else:
                 return Response({"detail": "No autorizado para ver métricas de ventas."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Filtro por período de tiempo (ej: últimos 7 días, 30 días, etc.)
         period = request.query_params.get('period', '7d')
         end_date = timezone.now()
         
@@ -186,7 +184,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             start_date = end_date - timedelta(days=90)
         elif period == '1y':
             start_date = end_date - timedelta(days=365)
-        else: # Por defecto, últimos 7 días
+        else: 
             start_date = end_date - timedelta(days=7)
 
         ventas_filtradas = Venta.objects.filter(
@@ -201,7 +199,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             venta__in=ventas_filtradas
         ).values('producto__nombre').annotate(
             total_vendido=Sum('cantidad')
-        ).order_by('-total_vendido')[:5] # Top 5 productos más vendidos
+        ).order_by('-total_vendido')[:5] 
 
         response_data = {
             'total_ventas': total_ventas,
@@ -224,7 +222,6 @@ class PaymentMethodListView(APIView):
         ]
         return Response(payment_methods)
 
-# NUEVA VISTA: CustomTokenObtainPairView
 class CustomTokenObtainPairView(SimpleJWTOBPView):
     serializer_class = CustomTokenObtainPairSerializer
 
