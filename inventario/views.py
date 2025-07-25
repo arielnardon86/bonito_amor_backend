@@ -3,7 +3,8 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+# Importar AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny 
 from django.contrib.auth import get_user_model
 from django.db.models import Sum, Count, F, ExpressionWrapper, DecimalField
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear, TruncDate
@@ -13,12 +14,12 @@ from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 
-from .models import Producto, Categoria, Venta, DetalleVenta, Tienda # Importar Tienda
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda 
 from .serializers import (
     ProductoSerializer, CategoriaSerializer,
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
-    TiendaSerializer # Importar TiendaSerializer
+    TiendaSerializer 
 )
 
 User = get_user_model()
@@ -45,11 +46,17 @@ class CategoriaViewSet(viewsets.ModelViewSet):
     serializer_class = CategoriaSerializer
     permission_classes = [IsAuthenticated]
 
-# --- NUEVA VISTA: TiendaViewSet ---
+# --- VISTA: TiendaViewSet ---
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    permission_classes = [IsAuthenticated] # Ajusta los permisos según sea necesario
+    # MODIFICADO: Definir permisos por acción
+    def get_permissions(self):
+        if self.action == 'list':
+            # Permitir que cualquier usuario (autenticado o no) liste las tiendas
+            return [AllowAny()] 
+        # Para todas las demás acciones (create, retrieve, update, destroy), se requiere autenticación
+        return [IsAuthenticated()] 
 
 # --- Vistas de Producto ---
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -57,19 +64,17 @@ class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    filterset_fields = ['categoria', 'talle', 'tienda'] # Añadir filtro por tienda
+    filterset_fields = ['categoria', 'talle', 'tienda'] 
     search_fields = ['nombre', 'codigo_barras', 'descripcion']
 
     def get_queryset(self):
-        # Filtrar productos por la tienda seleccionada si el usuario no es superusuario
         queryset = super().get_queryset()
         tienda_slug = self.request.query_params.get('tienda_slug')
         if tienda_slug:
             return queryset.filter(tienda__slug=tienda_slug)
-        # Si no se especifica tienda_slug, y el usuario no es superusuario, no mostrar nada
         if not self.request.user.is_superuser:
-            return queryset.none() # O puedes devolver un error 400 si prefieres forzar la selección de tienda
-        return queryset # Los superusuarios pueden ver todos los productos si no se filtra por tienda
+            return queryset.none() 
+        return queryset 
 
     def perform_create(self, serializer):
         tienda_slug = self.request.query_params.get('tienda_slug')
@@ -82,14 +87,12 @@ class ProductoViewSet(viewsets.ModelViewSet):
         serializer.save(tienda=tienda)
 
     def perform_update(self, serializer):
-        # Permite actualizar productos sin requerir el tienda_slug en el PATCH/PUT
-        # El producto ya tiene una tienda asociada
         serializer.save()
 
     @action(detail=False, methods=['get'])
     def buscar_por_barcode(self, request):
         barcode = request.query_params.get('barcode', None)
-        tienda_slug = request.query_params.get('tienda_slug', None) # Obtener tienda_slug para la búsqueda
+        tienda_slug = request.query_params.get('tienda_slug', None) 
         
         if not barcode:
             return Response({'detail': 'Parámetro barcode es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -97,7 +100,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Parámetro tienda_slug es requerido para buscar por código de barras.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Filtrar por código de barras Y tienda
             producto = Producto.objects.get(codigo_barras=barcode, tienda__slug=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
@@ -111,10 +113,9 @@ class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all().order_by('-fecha_venta')
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta', 'tienda'] # Añadir filtro por tienda
+    filterset_fields = ['usuario', 'anulada', 'metodo_pago', 'fecha_venta', 'tienda'] 
 
     def get_queryset(self):
-        # Filtrar ventas por la tienda seleccionada si el usuario no es superusuario
         queryset = super().get_queryset()
         tienda_slug = self.request.query_params.get('tienda_slug')
         if tienda_slug:
@@ -137,19 +138,17 @@ class VentaViewSet(viewsets.ModelViewSet):
         except Tienda.DoesNotExist:
             raise serializers.ValidationError({"tienda_slug": "La tienda especificada no existe."})
         
-        # Asigna el usuario autenticado a la venta si no se ha proporcionado
         if not self.request.data.get('usuario'):
             serializer.save(usuario=self.request.user, tienda=tienda)
         else:
             serializer.save(tienda=tienda)
 
 
-    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser]) # Cambiado a PATCH para anular
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser]) 
     def anular(self, request, pk=None):
         try:
             venta = self.get_object()
             
-            # Opcional: Verificar que la venta pertenece a la tienda seleccionada si se envía tienda_slug
             tienda_slug = request.query_params.get('tienda_slug')
             if tienda_slug and venta.tienda and venta.tienda.slug != tienda_slug:
                 return Response({'detail': 'Esta venta no pertenece a la tienda especificada.'}, status=status.HTTP_403_FORBIDDEN)
@@ -173,7 +172,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             return Response({'detail': f'Error al anular la venta: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# --- NUEVA VISTA PARA MÉTRICAS DE VENTAS (Separada de VentaViewSet) ---
+# --- VISTA PARA MÉTRICAS DE VENTAS ---
 class MetricasVentasViewSet(viewsets.ViewSet):
     permission_classes = [IsAdminUser]
 
@@ -187,11 +186,10 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         day = request.query_params.get('day')
         seller_id = request.query_params.get('seller_id')
         payment_method = request.query_params.get('payment_method')
-        tienda_slug = request.query_params.get('tienda_slug') # Obtener tienda_slug
+        tienda_slug = request.query_params.get('tienda_slug') 
 
         ventas_queryset = Venta.objects.all().filter(anulada=False)
 
-        # Filtrar por tienda si se proporciona el slug
         if tienda_slug:
             try:
                 tienda = Tienda.objects.get(slug=tienda_slug)
@@ -228,9 +226,8 @@ class MetricasVentasViewSet(viewsets.ViewSet):
                                             .aggregate(total_cantidad=Sum('cantidad'))
         total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad'] or 0
 
-        # --- Ventas agrupadas por período para la tendencia ---
-        group_by_label = "Año" # Valor por defecto
-        trunc_level = TruncYear # Valor por defecto
+        group_by_label = "Año" 
+        trunc_level = TruncYear 
 
         if year and month and day:
             trunc_level = TruncDate 
@@ -254,7 +251,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
                 fecha_label = item['fecha_agrupada'].strftime('%Y-%m-%d')
             elif trunc_level == TruncMonth:
                 fecha_label = item['fecha_agrupada'].strftime('%Y-%m')
-            else: # TruncYear
+            else: 
                 fecha_label = item['fecha_agrupada'].strftime('%Y')
 
             ventas_agrupadas_data.append({
@@ -289,7 +286,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             for item in ventas_por_usuario
         ]
 
-        # --- Ventas por Método de Pago (con unicidad garantizada en Python) ---
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago') \
                                        .annotate(monto_total=Sum('total_venta'), cantidad_ventas=Count('id')) \
                                        .order_by('-monto_total')
@@ -313,28 +309,21 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             "ventas_por_metodo_pago": ventas_por_metodo_pago_data,
         })
 
-# --- NUEVA VISTA PARA MÉTODOS DE PAGO (para cargar el select en el frontend) ---
+# --- VISTA PARA MÉTODOS DE PAGO ---
 class PaymentMethodListView(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        # 1. Obtener todos los métodos de pago
-        # Asume que el campo 'metodo_pago' ya existe en el modelo Venta.
         all_methods = Venta.objects.values_list('metodo_pago', flat=True)
 
-        # 2. Procesar en Python para asegurar unicidad y limpieza
-        unique_and_cleaned_methods = set() # Usamos un set para asegurar unicidad
+        unique_and_cleaned_methods = set() 
         for method in all_methods:
-            if method: # Asegurarse de que no es None o vacío
-                # Limpiar espacios en blanco al inicio/fin y normalizar a un caso consistente
-                # Usamos .strip() para eliminar espacios, y .title() para normalizar capitalización
-                cleaned_method = method.strip().title() # Convertirá "efectivo " a "Efectivo"
+            if method: 
+                cleaned_method = method.strip().title() 
                 unique_and_cleaned_methods.add(cleaned_method)
 
-        # 3. Convertir el set a una lista y ordenar para consistencia
         methods_list = list(unique_and_cleaned_methods)
         
-        # 4. Formatear para el frontend
         formatted_methods = sorted([{"value": m, "label": m} for m in methods_list], key=lambda x: x['label'])
 
         return Response(formatted_methods)
