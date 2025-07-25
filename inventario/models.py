@@ -1,65 +1,17 @@
 # BONITO_AMOR/backend/inventario/models.py
 from django.db import models
-from django.utils import timezone
-import random
-import string
-from barcode import EAN13
-# Importar AbstractUser y UserManager para crear un modelo de usuario personalizado
+# Importar AbstractUser y UserManager directamente para definir el modelo de usuario personalizado
 from django.contrib.auth.models import AbstractUser, UserManager
-
-
-# --- FUNCIÓN: generate_ean13 (sin cambios) ---
-def generate_ean13():
-    """
-    Genera un código de barras EAN-13 aleatorio.
-    Asegura que el dígito de control (checksum) sea correcto.
-    """
-    prefix = "200" # Prefijo común para uso interno (o cualquier otro que desees)
-    random_digits = ''.join(random.choices(string.digits, k=9))
-    base_number = prefix + random_digits
-    
-    try:
-        ean = EAN13(base_number) 
-        return ean.ean 
-    except Exception as e:
-        print(f"Error al generar EAN13: {e}")
-        return None
-
-# --- MODELO Categoria (sin cambios) ---
-class Categoria(models.Model):
-    nombre = models.CharField(max_length=100, unique=True)
-    descripcion = models.TextField(blank=True, null=True)
-
-    class Meta:
-        verbose_name_plural = "Categorías" 
-
-    def __str__(self):
-        return self.nombre
-
-# --- NUEVO MODELO: Tienda ---
-# Si ya tienes este modelo, asegúrate de que sea idéntico o actualízalo.
-class Tienda(models.Model):
-    nombre = models.CharField(max_length=255, unique=True)
-    slug = models.SlugField(max_length=255, unique=True, help_text="Identificador único para la URL (ej: bonito-amor)")
-    direccion = models.CharField(max_length=255, blank=True, null=True)
-    telefono = models.CharField(max_length=20, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
-    # Puedes añadir más campos específicos de la tienda aquí
-
-    class Meta:
-        verbose_name_plural = "Tiendas"
-        # Ordenar por nombre por defecto
-        ordering = ['nombre']
-
-    def __str__(self):
-        return self.nombre
+import uuid
+from django.utils.text import slugify
+from django.conf import settings # Importar settings para referenciar AUTH_USER_MODEL
 
 # --- MODELO DE USUARIO PERSONALIZADO ---
-# Extiende AbstractUser y añade el campo 'tienda'
+# Definir el modelo User personalizado primero
 class User(AbstractUser):
     # Relación ForeignKey con el modelo Tienda.
     # Un usuario puede estar asociado a una tienda (o a ninguna, si es superusuario global).
-    tienda = models.ForeignKey(Tienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
+    tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
 
     # Es importante especificar el UserManager por defecto si no añades lógica de gestión de usuarios personalizada
     objects = UserManager()
@@ -70,73 +22,96 @@ class User(AbstractUser):
             return f"{self.username} ({self.tienda.nombre})"
         return self.username
 
-# --- MODELO Producto (actualizado para incluir ForeignKey a Tienda) ---
-class Producto(models.Model):
-    nombre = models.CharField(max_length=200)
-    descripcion = models.TextField(blank=True, null=True)
-    codigo_barras = models.CharField(max_length=13, unique=True, blank=True, null=True)
-    precio_compra = models.DecimalField(max_digits=10, decimal_places=2)
-    precio_venta = models.DecimalField(max_digits=10, decimal_places=2)
-    stock = models.IntegerField(default=0)
-    talle = models.CharField(max_length=20, default='UNICA') 
-    categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
-    # Añadir ForeignKey a Tienda
-    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
+# --- Resto de tus modelos ---
 
+class Categoria(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=100, unique=True)
+    descripcion = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return self.nombre
+
+class Tienda(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(unique=True, max_length=255, blank=True)
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    telefono = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tienda"
+        verbose_name_plural = "Tiendas"
 
     def save(self, *args, **kwargs):
-        if not self.codigo_barras: 
-            new_barcode = None
-            max_attempts = 100 
-            attempts = 0
-
-            while new_barcode is None or Producto.objects.filter(codigo_barras=new_barcode).exists():
-                new_barcode = generate_ean13()
-                attempts += 1
-                if attempts > max_attempts:
-                    raise Exception("No se pudo generar un código de barras EAN13 único después de varios intentos.")
-            
-            self.codigo_barras = new_barcode
-            
+        if not self.slug:
+            self.slug = slugify(self.nombre)
         super().save(*args, **kwargs)
 
     def __str__(self):
         return self.nombre
 
-# --- MODELO Venta (actualizado para incluir ForeignKey a Tienda) ---
+class Producto(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=255)
+    descripcion = models.TextField(blank=True, null=True)
+    precio = models.DecimalField(max_digits=10, decimal_places=2)
+    stock = models.IntegerField(default=0)
+    categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Producto"
+        verbose_name_plural = "Productos"
+        unique_together = ('nombre', 'tienda') # Un producto con el mismo nombre es único por tienda
+
+    def __str__(self):
+        return f"{self.nombre} ({self.tienda.nombre})"
+
 class Venta(models.Model):
-    # Usar nuestro modelo de User personalizado
-    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_realizadas') 
-    fecha_venta = models.DateTimeField(default=timezone.now) 
-    total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0) 
-    anulada = models.BooleanField(default=False) 
-    metodo_pago = models.CharField(max_length=50, blank=True, null=True)
-    # Añadir ForeignKey a Tienda
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
-
+    fecha_venta = models.DateTimeField(auto_now_add=True)
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    metodo_pago = models.CharField(max_length=50, default='Efectivo')
+    cliente_nombre = models.CharField(max_length=255, blank=True, null=True)
+    cliente_email = models.EmailField(blank=True, null=True)
+    
     class Meta:
-        ordering = ['-fecha_venta'] 
+        verbose_name = "Venta"
+        verbose_name_plural = "Ventas"
+        ordering = ['-fecha_venta']
 
     def __str__(self):
-        return f"Venta {self.id} - {self.fecha_venta.strftime('%Y-%m-%d %H:%M')} por {self.usuario.username if self.usuario else 'Desconocido'} ({self.tienda.nombre if self.tienda else 'Sin Tienda'})"
+        return f"Venta {self.id} en {self.tienda.nombre} - Total: {self.total}"
 
-# --- MODELO DetalleVenta (sin cambios) ---
 class DetalleVenta(models.Model):
-    venta = models.ForeignKey(Venta, related_name='detalles', on_delete=models.CASCADE)
-    producto = models.ForeignKey(Producto, on_delete=models.PROTECT) 
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    venta = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='detalles')
+    producto = models.ForeignKey(Producto, on_delete=models.SET_NULL, null=True, related_name='detalles_venta')
     cantidad = models.IntegerField()
-    precio_unitario_venta = models.DecimalField(max_digits=10, decimal_places=2) 
-
-    def subtotal(self):
-        return self.cantidad * self.precio_unitario_venta
-
-    def save(self, *args, **kwargs):
-        if self.precio_unitario_venta is None and self.producto:
-            self.precio_unitario_venta = self.producto.precio_venta
-        super().save(*args, **kwargs)
+    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
-        unique_together = ('venta', 'producto') 
+        verbose_name = "Detalle de Venta"
+        verbose_name_plural = "Detalles de Venta"
 
     def __str__(self):
-        return f"{self.cantidad} x {self.producto.nombre} en Venta {self.venta.id}"
+        return f"Detalle de Venta {self.id} - Producto: {self.producto.nombre if self.producto else 'N/A'} - Cantidad: {self.cantidad}"
+
+# NUEVO MODELO: UserProfile para vincular usuarios a tiendas
+class UserProfile(models.Model):
+    # Usar settings.AUTH_USER_MODEL como string para referenciar el modelo de usuario personalizado
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
+    tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='user_profiles')
+    # Puedes añadir otros campos de perfil aquí si es necesario
+
+    def __str__(self):
+        return f"Perfil de {self.user.username} en {self.tienda.nombre if self.tienda else 'N/A'}"
+
