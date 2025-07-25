@@ -1,37 +1,20 @@
+# BONITO_AMOR/backend/inventario/models.py
 from django.db import models
 from django.utils import timezone
 import random
 import string
-from barcode import EAN13 
-from django.contrib.auth import get_user_model 
-from django.utils.text import slugify 
+from barcode import EAN13
+# Importar AbstractUser y UserManager para crear un modelo de usuario personalizado
+from django.contrib.auth.models import AbstractUser, UserManager
 
-User = get_user_model() 
 
-# --- MODELO Tienda ---
-class Tienda(models.Model):
-    nombre = models.CharField(max_length=100, unique=True)
-    slug = models.SlugField(max_length=100, unique=True, blank=True, help_text="Identificador único para la URL (ej. 'tienda-central')")
-    direccion = models.CharField(max_length=255, blank=True, null=True) # <--- ESTE CAMPO
-    telefono = models.CharField(max_length=20, blank=True, null=True)     # <--- ESTE CAMPO
-    email = models.EmailField(blank=True, null=True)                    # <--- ESTE CAMPO
-    activa = models.BooleanField(default=True)
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = slugify(self.nombre)
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.nombre
-
-# --- FUNCIÓN CORREGIDA: generate_ean13 ---
+# --- FUNCIÓN: generate_ean13 (sin cambios) ---
 def generate_ean13():
     """
     Genera un código de barras EAN-13 aleatorio.
     Asegura que el dígito de control (checksum) sea correcto.
     """
-    prefix = "200" 
+    prefix = "200" # Prefijo común para uso interno (o cualquier otro que desees)
     random_digits = ''.join(random.choices(string.digits, k=9))
     base_number = prefix + random_digits
     
@@ -42,7 +25,7 @@ def generate_ean13():
         print(f"Error al generar EAN13: {e}")
         return None
 
-# --- MODELO Categoria ---
+# --- MODELO Categoria (sin cambios) ---
 class Categoria(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     descripcion = models.TextField(blank=True, null=True)
@@ -53,7 +36,41 @@ class Categoria(models.Model):
     def __str__(self):
         return self.nombre
 
-# --- MODELO Producto ---
+# --- NUEVO MODELO: Tienda ---
+# Si ya tienes este modelo, asegúrate de que sea idéntico o actualízalo.
+class Tienda(models.Model):
+    nombre = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(max_length=255, unique=True, help_text="Identificador único para la URL (ej: bonito-amor)")
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    telefono = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    # Puedes añadir más campos específicos de la tienda aquí
+
+    class Meta:
+        verbose_name_plural = "Tiendas"
+        # Ordenar por nombre por defecto
+        ordering = ['nombre']
+
+    def __str__(self):
+        return self.nombre
+
+# --- MODELO DE USUARIO PERSONALIZADO ---
+# Extiende AbstractUser y añade el campo 'tienda'
+class User(AbstractUser):
+    # Relación ForeignKey con el modelo Tienda.
+    # Un usuario puede estar asociado a una tienda (o a ninguna, si es superusuario global).
+    tienda = models.ForeignKey(Tienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
+
+    # Es importante especificar el UserManager por defecto si no añades lógica de gestión de usuarios personalizada
+    objects = UserManager()
+
+    def __str__(self):
+        # Muestra el nombre de usuario y, si está asociado, el nombre de la tienda
+        if self.tienda:
+            return f"{self.username} ({self.tienda.nombre})"
+        return self.username
+
+# --- MODELO Producto (actualizado para incluir ForeignKey a Tienda) ---
 class Producto(models.Model):
     nombre = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True, null=True)
@@ -62,10 +79,9 @@ class Producto(models.Model):
     precio_venta = models.DecimalField(max_digits=10, decimal_places=2)
     stock = models.IntegerField(default=0)
     talle = models.CharField(max_length=20, default='UNICA') 
-    
     categoria = models.ForeignKey(Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
-    
-    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos', null=True, blank=True)
+    # Añadir ForeignKey a Tienda
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
 
 
     def save(self, *args, **kwargs):
@@ -85,26 +101,26 @@ class Producto(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.nombre} ({self.talle}) - {self.tienda.nombre if self.tienda else 'Sin Tienda'}"
+        return self.nombre
 
-# --- MODELO Venta ---
+# --- MODELO Venta (actualizado para incluir ForeignKey a Tienda) ---
 class Venta(models.Model):
+    # Usar nuestro modelo de User personalizado
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_realizadas') 
     fecha_venta = models.DateTimeField(default=timezone.now) 
     total_venta = models.DecimalField(max_digits=10, decimal_places=2, default=0) 
     anulada = models.BooleanField(default=False) 
-    metodo_pago = models.CharField(max_length=50, blank=True, null=True) 
-
-    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas', null=True, blank=True)
-
+    metodo_pago = models.CharField(max_length=50, blank=True, null=True)
+    # Añadir ForeignKey a Tienda
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
 
     class Meta:
         ordering = ['-fecha_venta'] 
 
     def __str__(self):
-        return f"Venta {self.id} - {self.fecha_venta.strftime('%Y-%m-%d %H:%M')} por {self.usuario.username if self.usuario else 'Desconocido'} en {self.tienda.nombre if self.tienda else 'Sin Tienda'}"
+        return f"Venta {self.id} - {self.fecha_venta.strftime('%Y-%m-%d %H:%M')} por {self.usuario.username if self.usuario else 'Desconocido'} ({self.tienda.nombre if self.tienda else 'Sin Tienda'})"
 
-# --- MODELO DetalleVenta ---
+# --- MODELO DetalleVenta (sin cambios) ---
 class DetalleVenta(models.Model):
     venta = models.ForeignKey(Venta, related_name='detalles', on_delete=models.CASCADE)
     producto = models.ForeignKey(Producto, on_delete=models.PROTECT) 

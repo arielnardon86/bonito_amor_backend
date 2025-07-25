@@ -54,7 +54,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', # Debe ir después de SecurityMiddleware
+    'whitenoise.middleware.WhiteNoiseMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',      
     'django.middleware.common.CommonMiddleware',
@@ -76,7 +76,7 @@ TEMPLATES = [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+                'django.contrib.messages.context_processors.messages', # Confirmado que está aquí
             ],
         },
     },
@@ -128,10 +128,6 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles' 
-
-# --- CONFIGURACIÓN DE WHITENOISE PARA SERVIR ARCHIVOS ESTÁTICOS EN PRODUCCIÓN ---
-# Esto le dice a Django y WhiteNoise cómo manejar los archivos estáticos recolectados.
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -229,3 +225,6 @@ LOGGING = {
         },
     },
 }
+
+# --- CAMBIO CLAVE AQUÍ: Especificar el modelo de usuario personalizado ---
+AUTH_USER_MODEL = 'inventario.User'
