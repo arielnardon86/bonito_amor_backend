@@ -1,10 +1,5 @@
     #!/bin/bash
 
-    # Navegar al directorio raíz de tu proyecto Django dentro del contenedor
-    # Render clona tu repositorio en /opt/render/project/src/
-    # y tu manage.py está en /opt/render/project/src/backend/
-    cd /opt/render/project/src/backend
-
     # Aplicar las migraciones de la base de datos
     echo "Aplicando migraciones de la base de datos..."
     python manage.py migrate

@@ -30,6 +30,6 @@ RUN python manage.py migrate contenttypes --noinput && \
     python manage.py migrate --noinput && \
     python manage.py collectstatic --noinput
 
-# Comando CMD para iniciar la aplicación (solo Gunicorn)
-# ¡CAMBIO CLAVE AQUÍ! Usar la forma de shell para que $PORT se expanda.
-CMD gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT
+# Comando CMD para iniciar la aplicación usando start.sh
+# Esto asegura que start.sh se use tanto en Render como localmente.
+CMD ["/app/start.sh"]
