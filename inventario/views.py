@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importar AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F, Count, Value
@@ -85,15 +85,16 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    # Permisos: IsAuthenticated debería ser suficiente para listar.
-    # Si solo admin puede crear/actualizar/eliminar, se usaría IsAdminUser para esos métodos.
-    # Por ahora, IsAuthenticated permite GET.
-    permission_classes = [IsAuthenticated] 
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['nombre', 'direccion']
     ordering_fields = ['nombre', 'fecha_creacion']
 
-# --- CAMBIO CLAVE AQUÍ: Renombrado a UserViewSet y añadido acción 'me' ---
+    # --- CAMBIO CLAVE AQUÍ: get_permissions para permitir GET no autenticado ---
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()] # Permitir cualquier usuario para solicitudes GET
+        return [IsAuthenticated()] # Requerir autenticación para otros métodos (POST, PUT, DELETE)
+
 class UserViewSet(viewsets.ModelViewSet): 
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
@@ -162,7 +163,7 @@ class PaymentMethodListView(APIView):
     """
     API para listar todos los métodos de pago activos.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated] # Mantener IsAuthenticated aquí si los métodos de pago no son públicos
 
     def get(self, request, *args, **kwargs):
         metodos_pago = MetodoPago.objects.filter(is_active=True).order_by('nombre')
@@ -174,7 +175,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
     API para obtener métricas de ventas por tienda, con filtros opcionales.
     Requiere 'tienda_slug' como parámetro de consulta.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated] # Mantener IsAuthenticated aquí
 
     def list(self, request):
         tienda_slug = request.query_params.get('tienda_slug')
@@ -201,23 +202,19 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         if day_filter:
             ventas_queryset = ventas_queryset.filter(fecha_venta__day=day_filter)
         
-        # Asumiendo que Venta tiene un ForeignKey a User llamado 'usuario' o 'vendedor'
-        # Si tu modelo Venta no tiene un campo que relacione la venta con el usuario que la realizó,
-        # esta línea causará un error. Deberías añadir un ForeignKey a User en tu modelo Venta.
         if seller_id_filter:
             ventas_queryset = ventas_queryset.filter(usuario_id=seller_id_filter) 
 
         if payment_method_filter:
             ventas_queryset = ventas_queryset.filter(metodo_pago=payment_method_filter)
 
-        # --- Métricas principales ---
+        # ... (resto de la lógica de métricas) ...
         total_ventas_periodo = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(0.0)))['total']
 
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
 
-        # --- Ventas agrupadas por período (para el Line Chart) ---
         if day_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
@@ -243,7 +240,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
                 total_monto=Coalesce(Sum('total'), Value(0.0))
             ).order_by('fecha_venta__year').values(fecha=F('fecha_venta__year'), total_monto=F('total_monto'))
 
-        # --- Productos más vendidos (top 5 por cantidad y monto) ---
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).values('producto__nombre', 'producto__talle').annotate(
@@ -251,8 +247,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             monto_total=Coalesce(Sum(F('cantidad') * F('precio_unitario')), Value(0.0))
         ).order_by('-cantidad_total')[:5]
 
-        # --- Ventas por usuario (vendedor) ---
-        # Asumiendo que Venta tiene un ForeignKey a User llamado 'usuario'
         ventas_por_usuario = ventas_queryset.values(
             'usuario__username', 'usuario__first_name', 'usuario__last_name' 
         ).annotate(
@@ -260,7 +254,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
-        # --- Ventas por método de pago ---
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate(
             monto_total=Coalesce(Sum('total'), Value(0.0)),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
@@ -279,7 +272,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         }
         return Response(metrics, status=status.HTTP_200_OK)
 
-# --- CustomTokenObtainPairView (para JWT) ---
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
     Vista personalizada para obtener tokens JWT.
