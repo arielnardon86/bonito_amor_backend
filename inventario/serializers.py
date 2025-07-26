@@ -2,7 +2,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import Producto, Categoria, Venta, DetalleVenta, Tienda
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, MetodoPago # Importa MetodoPago
 
 User = get_user_model()
 
@@ -63,10 +63,7 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        # CAMBIO CLAVE AQUÍ: Eliminado 'tienda' de los fields.
-        # La tienda será asignada automáticamente por el ViewSet en perform_create.
         fields = ['id', 'nombre', 'precio', 'stock', 'talle', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
-        # 'tienda' ya no necesita estar en read_only_fields si no está en fields
         read_only_fields = ['id', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion'] 
 
 # Serializador para el modelo de DetalleVenta
@@ -90,6 +87,7 @@ class VentaSerializer(serializers.ModelSerializer):
 
 # Serializador para la creación de Venta (Escritura)
 class VentaCreateSerializer(serializers.ModelSerializer):
+    # 'productos' es un campo de escritura que recibe la lista de productos para la venta
     productos = serializers.ListField(
         child=serializers.DictField(), write_only=True, required=True,
         help_text="Lista de productos para la venta. Cada elemento debe ser un diccionario con 'producto_id' y 'cantidad'."
@@ -97,13 +95,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        fields = ['id', 'metodo_pago', 'productos', 'tienda']
+        # Se incluyen 'metodo_pago', 'productos' y 'tienda' para la entrada de datos.
+        # 'total' se calcula en el método create.
+        fields = ['id', 'metodo_pago', 'productos', 'tienda'] 
         read_only_fields = ['id', 'total'] # 'total' se calcula en el create
 
     def create(self, validated_data):
         productos_data = validated_data.pop('productos')
-        tienda = validated_data.pop('tienda', None) 
+        tienda = validated_data.pop('tienda', None) # Obtener la tienda de los datos validados
 
+        # Si la tienda no se proporcionó explícitamente pero el usuario tiene una asociada
+        # (Esto es redundante si siempre se envía desde el frontend, pero es una buena salvaguarda)
         if not tienda and self.context['request'].user.tienda:
             tienda = self.context['request'].user.tienda
         elif not tienda:
@@ -114,7 +116,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         for item_data in productos_data:
             try:
-                producto = Producto.objects.get(id=item_data['producto_id'])
+                # Asegúrate de que 'producto_id' es el nombre correcto del campo
+                producto_id = item_data.get('producto_id') 
+                if not producto_id:
+                    raise serializers.ValidationError("Cada producto debe tener un 'producto_id'.")
+                producto = Producto.objects.get(id=producto_id)
             except Producto.DoesNotExist:
                 raise serializers.ValidationError(f"Producto con ID {item_data['producto_id']} no encontrado.")
 
@@ -140,3 +146,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         venta.total = total_venta
         venta.save()
         return venta
+
+# --- NUEVO SERIALIZADOR: MetodoPagoSerializer ---
+class MetodoPagoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MetodoPago
+        fields = '__all__'
