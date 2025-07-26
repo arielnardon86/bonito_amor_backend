@@ -21,6 +21,15 @@ COPY . .
 # Expone el puerto que tu aplicación Gunicorn escuchará
 EXPOSE 8000
 
-# Comando para ejecutar la aplicación.
-# ¡Solo inicia Gunicorn! Las migraciones se manejarán en el Pre-Deploy Command de Render.
+# Comando RUN para ejecutar las migraciones y collectstatic
+# Esto se ejecuta durante la fase de construcción de la imagen Docker.
+RUN python manage.py migrate contenttypes --noinput && \
+    python manage.py migrate auth --noinput && \
+    python manage.py migrate inventario 0001_initial --noinput && \
+    python manage.py migrate admin --noinput && \
+    python manage.py migrate --noinput && \
+    python manage.py collectstatic --noinput
+
+# Comando CMD para iniciar la aplicación (solo Gunicorn)
+# Esto se ejecuta cuando el contenedor se inicia.
 CMD ["gunicorn", "mi_tienda_backend.wsgi:application", "--bind", "0.0.0.0:$PORT"]
