@@ -2,13 +2,11 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 import uuid 
+from django.utils import timezone 
 
 # Modelo de Usuario Personalizado
 class User(AbstractUser):
-    # Añadir campos relacionados con la tienda
     tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='empleados')
-    
-    # Añadir campos de fecha de creación y actualización
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -32,13 +30,13 @@ class Tienda(models.Model):
 
     class Meta:
         verbose_name = "Tienda"
-        verbose_name_plural = "Tiendas"
+        verbose_name_plural = "Tiendas" 
         ordering = ['nombre']
 
     def __str__(self):
         return self.nombre
 
-# Modelo de Categoría (Si aún lo usas, si no, puedes ignorar o eliminar este modelo)
+# Modelo de Categoría (Si aún lo usas)
 class Categoria(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     nombre = models.CharField(max_length=100, unique=True)
@@ -58,12 +56,25 @@ class Categoria(models.Model):
 class Producto(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     nombre = models.CharField(max_length=200)
-    descripcion = models.TextField(blank=True, null=True)
     precio = models.DecimalField(max_digits=10, decimal_places=2)
     stock = models.IntegerField(default=0)
-    # Relación con Tienda (obligatoria)
+    TALLE_CHOICES = [
+        ('XS', 'Extra Pequeño'),
+        ('S', 'Pequeño'),
+        ('M', 'Mediano'),
+        ('L', 'Grande'),
+        ('XL', 'Extra Grande'),
+        ('UNICA', 'Talla Única'),
+        ('NUM36', '36'),
+        ('NUM38', '38'),
+        ('NUM40', '40'),
+        ('NUM42', '42'),
+        ('NUM44', '44'),
+    ]
+    talle = models.CharField(max_length=10, choices=TALLE_CHOICES, default='UNICA')
+
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
-    # Añadir campo para el código de barras
+    # CAMBIO CLAVE: NO null=True, blank=True aquí. Debe ser NOT NULL.
     codigo_barras = models.UUIDField(default=uuid.uuid4, unique=True, editable=False) 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
@@ -71,7 +82,6 @@ class Producto(models.Model):
     class Meta:
         verbose_name = "Producto"
         verbose_name_plural = "Productos"
-        # Asegurar que el nombre del producto sea único por tienda
         unique_together = ('nombre', 'tienda') 
         ordering = ['nombre']
 
@@ -100,7 +110,8 @@ class Venta(models.Model):
 class DetalleVenta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     venta = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='detalles')
-    producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='detalles_venta')
+    # CAMBIO CLAVE: NO null=True, blank=True aquí. Debe ser NOT NULL.
+    producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='detalles_venta') 
     cantidad = models.IntegerField(default=1)
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
@@ -110,7 +121,6 @@ class DetalleVenta(models.Model):
     class Meta:
         verbose_name = "Detalle de Venta"
         verbose_name_plural = "Detalles de Venta"
-        # Asegurar que no haya duplicados de producto en la misma venta
         unique_together = ('venta', 'producto') 
         ordering = ['venta']
 

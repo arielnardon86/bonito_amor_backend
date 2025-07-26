@@ -1,3 +1,4 @@
+# BONITO_AMOR/backend/bonito_amor/settings.py
 import os
 from pathlib import Path
 import dj_database_url
@@ -40,6 +41,7 @@ else:
     ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 INSTALLED_APPS = [
+    'inventario',         # CAMBIO CLAVE: Mover 'inventario' al principio
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -48,7 +50,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework', 
     'corsheaders',    
-    'inventario',     
     'rest_framework_simplejwt',
 ]
 
@@ -76,7 +77,7 @@ TEMPLATES = [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages', # Confirmado que está aquí
+                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -226,5 +227,4 @@ LOGGING = {
     },
 }
 
-# --- CAMBIO CLAVE AQUÍ: Especificar el modelo de usuario personalizado ---
 AUTH_USER_MODEL = 'inventario.User'
