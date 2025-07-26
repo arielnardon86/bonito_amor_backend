@@ -1,12 +1,13 @@
 # BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer # Importar TokenObtainPairSerializer
 from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, MetodoPago # Importa MetodoPago
 
 User = get_user_model()
 
 # Custom Token Serializer para incluir datos del usuario
+# Este serializador es usado por CustomTokenObtainPairView
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
@@ -87,7 +88,6 @@ class VentaSerializer(serializers.ModelSerializer):
 
 # Serializador para la creación de Venta (Escritura)
 class VentaCreateSerializer(serializers.ModelSerializer):
-    # 'productos' es un campo de escritura que recibe la lista de productos para la venta
     productos = serializers.ListField(
         child=serializers.DictField(), write_only=True, required=True,
         help_text="Lista de productos para la venta. Cada elemento debe ser un diccionario con 'producto_id' y 'cantidad'."
@@ -95,17 +95,13 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        # Se incluyen 'metodo_pago', 'productos' y 'tienda' para la entrada de datos.
-        # 'total' se calcula en el método create.
         fields = ['id', 'metodo_pago', 'productos', 'tienda'] 
-        read_only_fields = ['id', 'total'] # 'total' se calcula en el create
+        read_only_fields = ['id', 'total'] 
 
     def create(self, validated_data):
         productos_data = validated_data.pop('productos')
-        tienda = validated_data.pop('tienda', None) # Obtener la tienda de los datos validados
+        tienda = validated_data.pop('tienda', None) 
 
-        # Si la tienda no se proporcionó explícitamente pero el usuario tiene una asociada
-        # (Esto es redundante si siempre se envía desde el frontend, pero es una buena salvaguarda)
         if not tienda and self.context['request'].user.tienda:
             tienda = self.context['request'].user.tienda
         elif not tienda:
@@ -116,7 +112,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         for item_data in productos_data:
             try:
-                # Asegúrate de que 'producto_id' es el nombre correcto del campo
                 producto_id = item_data.get('producto_id') 
                 if not producto_id:
                     raise serializers.ValidationError("Cada producto debe tener un 'producto_id'.")
@@ -147,7 +142,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         venta.save()
         return venta
 
-# --- NUEVO SERIALIZADOR: MetodoPagoSerializer ---
+# Serializador para MetodoPago
 class MetodoPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = MetodoPago

@@ -6,20 +6,22 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F, Count, Value
-from django.db.models.functions import Coalesce # Para manejar valores nulos en agregaciones
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import timedelta
-from rest_framework.views import APIView # Importar APIView
+from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import (
-    Producto, Categoria, Tienda, User, Venta, DetalleVenta, # Cambiado Usuario a User
-    MetodoPago # Asegúrate de importar MetodoPago
+    Producto, Categoria, Tienda, User, Venta, DetalleVenta,
+    MetodoPago
 )
 from .serializers import (
-    ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer, # Cambiado UsuarioSerializer a UserSerializer
+    ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer,
-    MetodoPagoSerializer, # Asegúrate de importar MetodoPagoSerializer
-    VentaCreateSerializer # Para la creación de ventas
+    MetodoPagoSerializer,
+    VentaCreateSerializer,
+    CustomTokenObtainPairSerializer
 )
 
 # ... Otros ViewSets existentes ...
@@ -41,12 +43,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        # Asigna automáticamente la tienda del usuario autenticado si no se proporciona
         if not serializer.validated_data.get('tienda'):
             if self.request.user.is_authenticated and self.request.user.tienda:
                 serializer.save(tienda=self.request.user.tienda)
             else:
-                # Si el usuario no tiene tienda y no se proporcionó, lanzar error
                 raise serializers.ValidationError({"tienda": "La tienda es requerida o el usuario no tiene una tienda asignada."})
         else:
             serializer.save()
@@ -62,7 +62,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({"error": "Parámetro 'tienda_slug' es requerido."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Busca el producto por código de barras y filtra por tienda
             producto = Producto.objects.get(codigo_barras=barcode, tienda__nombre=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
@@ -73,8 +72,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def imprimir_etiquetas(self, request):
-        # Lógica para generar etiquetas, si es necesario.
-        # Esto podría devolver una URL a un PDF generado o los datos para el frontend.
         return Response({"message": "Endpoint para imprimir etiquetas."}, status=status.HTTP_200_OK)
 
 class CategoriaViewSet(viewsets.ModelViewSet):
@@ -93,9 +90,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
     search_fields = ['nombre', 'direccion']
     ordering_fields = ['nombre', 'fecha_creacion']
 
-class UsuarioViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all().order_by('username') # Cambiado de Usuario a User
-    serializer_class = UserSerializer # Cambiado de UsuarioSerializer a UserSerializer
+# --- CAMBIO CLAVE AQUÍ: Renombrado a UserViewSet ---
+class UserViewSet(viewsets.ModelViewSet): 
+    queryset = User.objects.all().order_by('username')
+    serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['username', 'email', 'first_name', 'last_name']
@@ -120,11 +118,9 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        # Filtra por la tienda del usuario si no es superusuario
         if not self.request.user.is_superuser and self.request.user.tienda:
             queryset = queryset.filter(tienda=self.request.user.tienda)
         
-        # Filtrar por tienda_slug si se proporciona en los parámetros de consulta
         tienda_slug = self.request.query_params.get('tienda_slug')
         if tienda_slug:
             queryset = queryset.filter(tienda__nombre=tienda_slug)
@@ -132,8 +128,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        # La tienda ya debería venir en validated_data desde el frontend
-        # Si por alguna razón no viene, se puede intentar asignar desde el usuario autenticado
         if not serializer.validated_data.get('tienda'):
             if self.request.user.is_authenticated and self.request.user.tienda:
                 serializer.save(tienda=self.request.user.tienda)
@@ -150,36 +144,25 @@ class DetalleVentaViewSet(viewsets.ModelViewSet):
     filterset_fields = ['venta', 'producto']
     ordering_fields = ['cantidad', 'precio_unitario']
 
-# --- NUEVO ViewSet: MetodoPagoViewSet ---
-class MetodoPagoViewSet(viewsets.ModelViewSet):
+class PaymentMethodListView(APIView):
     """
-    API endpoint que permite a los métodos de pago ser vistos o editados.
+    API para listar todos los métodos de pago activos.
     """
-    queryset = MetodoPago.objects.all().order_by('nombre')
-    serializer_class = MetodoPagoSerializer
-    permission_classes = [IsAuthenticated] # O permisos más restrictivos si es necesario
+    permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        # Puedes añadir un filtro por tienda si los métodos de pago son específicos de la tienda
-        tienda_slug = self.request.query_params.get('tienda_slug')
-        if tienda_slug:
-            # Aquí asumo que MetodoPago no tiene una relación directa con Tienda.
-            # Si lo tuviera, la lógica sería similar a ProductoViewSet.
-            # Si los métodos de pago son globales, este filtro no aplicaría.
-            # Por ahora, se mantiene sin filtrar por tienda si el modelo MetodoPago no tiene 'tienda'.
-            pass 
-        return queryset
+    def get(self, request, *args, **kwargs):
+        metodos_pago = MetodoPago.objects.filter(is_active=True).order_by('nombre')
+        serializer = MetodoPagoSerializer(metodos_pago, many=True)
+        return Response(serializer.data)
 
-# --- NUEVA APIView: VentasMetricasView ---
-class VentasMetricasView(APIView):
+class MetricasVentasViewSet(viewsets.ViewSet):
     """
     API para obtener métricas de ventas por tienda, con filtros opcionales.
     Requiere 'tienda_slug' como parámetro de consulta.
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, *args, **kwargs):
+    def list(self, request):
         tienda_slug = request.query_params.get('tienda_slug')
         year_filter = request.query_params.get('year')
         month_filter = request.query_params.get('month')
@@ -191,14 +174,12 @@ class VentasMetricasView(APIView):
             return Response({"error": "Parámetro 'tienda_slug' es requerido."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            tienda_obj = Tienda.objects.get(nombre=tienda_slug) # Usar 'nombre' para el slug
+            tienda_obj = Tienda.objects.get(nombre=tienda_slug)
         except Tienda.DoesNotExist:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Construir el queryset base para las ventas
         ventas_queryset = Venta.objects.filter(tienda=tienda_obj)
 
-        # Aplicar filtros de fecha
         if year_filter:
             ventas_queryset = ventas_queryset.filter(fecha_venta__year=year_filter)
         if month_filter:
@@ -206,14 +187,12 @@ class VentasMetricasView(APIView):
         if day_filter:
             ventas_queryset = ventas_queryset.filter(fecha_venta__day=day_filter)
         
-        # Aplicar filtro de vendedor (asumiendo que Venta tiene un campo 'vendedor' o similar)
-        # Si Venta no tiene un campo directo a User, necesitarás un campo en Venta o un StockMovimiento
-        # Por ahora, asumo que Venta tiene un campo 'usuario' o 'vendedor' que apunta a User.
-        # Si no es así, esta parte de la lógica necesitará ser ajustada.
+        # Asumiendo que Venta tiene un ForeignKey a User llamado 'usuario' o 'vendedor'
+        # Si tu modelo Venta no tiene un campo que relacione la venta con el usuario que la realizó,
+        # esta línea causará un error. Deberías añadir un ForeignKey a User en tu modelo Venta.
         if seller_id_filter:
-            ventas_queryset = ventas_queryset.filter(usuario_id=seller_id_filter) # Asumiendo campo 'usuario_id' en Venta
+            ventas_queryset = ventas_queryset.filter(usuario_id=seller_id_filter) 
 
-        # Aplicar filtro de método de pago
         if payment_method_filter:
             ventas_queryset = ventas_queryset.filter(metodo_pago=payment_method_filter)
 
@@ -221,34 +200,30 @@ class VentasMetricasView(APIView):
         total_ventas_periodo = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(0.0)))['total']
 
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
-            venta__in=ventas_queryset # Filtra detalles de venta para las ventas del queryset filtrado
+            venta__in=ventas_queryset
         ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
 
         # --- Ventas agrupadas por período (para el Line Chart) ---
-        # Determinar el nivel de agrupación (día, mes, año)
-        if day_filter: # Si hay filtro de día, agrupar por hora (no implementado en el frontend, pero sería lo más granular)
-            # Para simplificar, si hay día, se agrupa por día.
+        if day_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
                 total_monto=Coalesce(Sum('total'), Value(0.0))
             ).order_by('fecha_venta__date').values(fecha=F('fecha_venta__date'), total_monto=F('total_monto'))
-        elif month_filter: # Si hay filtro de mes, agrupar por día
+        elif month_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
                 total_monto=Coalesce(Sum('total'), Value(0.0))
             ).order_by('fecha_venta__date').values(fecha=F('fecha_venta__date'), total_monto=F('total_monto'))
-        elif year_filter: # Si hay filtro de año, agrupar por mes
+        elif year_filter: 
             period_label = "Mes"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__month', 'fecha_venta__year').annotate(
                 total_monto=Coalesce(Sum('total'), Value(0.0))
             ).order_by('fecha_venta__year', 'fecha_venta__month').values(
-                fecha=F('fecha_venta__month'), # Usar el número del mes
+                fecha=F('fecha_venta__month'), 
                 year=F('fecha_venta__year'),
                 total_monto=F('total_monto')
             )
-            # Formatear el mes para el frontend (ej. "Enero", "Febrero")
-            # Esto se puede hacer en el frontend o aquí. Lo haremos en el frontend para mantener la API limpia.
-        else: # Si no hay filtros de fecha, agrupar por año
+        else: 
             period_label = "Año"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__year').annotate(
                 total_monto=Coalesce(Sum('total'), Value(0.0))
@@ -263,9 +238,9 @@ class VentasMetricasView(APIView):
         ).order_by('-cantidad_total')[:5]
 
         # --- Ventas por usuario (vendedor) ---
-        # Asumiendo que Venta tiene un ForeignKey a User (vendedor)
+        # Asumiendo que Venta tiene un ForeignKey a User llamado 'usuario'
         ventas_por_usuario = ventas_queryset.values(
-            'usuario__username', 'usuario__first_name', 'usuario__last_name' # Asumiendo que Venta tiene un campo 'usuario'
+            'usuario__username', 'usuario__first_name', 'usuario__last_name' 
         ).annotate(
             monto_total_vendido=Coalesce(Sum('total'), Value(0.0)),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
@@ -289,3 +264,11 @@ class VentasMetricasView(APIView):
             "ventas_por_metodo_pago": list(ventas_por_metodo_pago)
         }
         return Response(metrics, status=status.HTTP_200_OK)
+
+# --- NUEVO: CustomTokenObtainPairView (para JWT) ---
+class CustomTokenObtainPairView(TokenObtainPairView):
+    """
+    Vista personalizada para obtener tokens JWT.
+    Utiliza CustomTokenObtainPairSerializer para incluir datos adicionales del usuario.
+    """
+    serializer_class = CustomTokenObtainPairSerializer
