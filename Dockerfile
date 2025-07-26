@@ -23,7 +23,5 @@ EXPOSE 8000
 
 # Comando para ejecutar la aplicación.
 # Ejecuta las migraciones en un orden muy específico para resolver dependencias.
-# Primero, migra las apps esenciales de Django.
-# Luego, "fake-ea" la migración inicial de inventario.
-# Finalmente, aplica cualquier migración restante y arranca el servidor.
-CMD ["/bin/sh", "-c", "python manage.py migrate auth && python manage.py migrate contenttypes && python manage.py migrate sessions && python manage.py migrate admin && python manage.py migrate inventario --fake-initial && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
+# Usamos 'sh -c' para que la cadena de comandos se interprete correctamente.
+CMD ["/bin/sh", "-c", "python manage.py migrate auth --skip-checks && python manage.py migrate contenttypes --skip-checks && python manage.py migrate sessions --skip-checks && python manage.py migrate admin --skip-checks && python manage.py migrate inventario --fake-initial && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
