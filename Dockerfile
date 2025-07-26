@@ -22,12 +22,12 @@ COPY . .
 EXPOSE 8000
 
 # Comando para ejecutar la aplicación.
-# Esta secuencia de comandos es crítica para asegurar que inventario_user exista.
-CMD ["/bin/sh", "-c", \
-    "python manage.py migrate contenttypes --noinput && " \
-    "python manage.py migrate auth --noinput && " \
-    "python manage.py migrate inventario 0001 --noinput && " \
-    "python manage.py migrate --noinput && " \
-    "python manage.py collectstatic --noinput && " \
-    "gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT" \
-]
+# Usamos la forma de shell para CMD para que la cadena de comandos se interprete correctamente.
+# Este es el CRÍTICO. Ejecuta las migraciones en un orden específico, recolecta estáticos y luego inicia Gunicorn.
+CMD python manage.py migrate contenttypes --noinput && \
+    python manage.py migrate auth --noinput && \
+    python manage.py migrate inventario 0001 --noinput && \
+    python manage.py migrate admin --noinput && \
+    python manage.py migrate --noinput && \
+    python manage.py collectstatic --noinput && \
+    gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT
