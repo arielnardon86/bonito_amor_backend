@@ -1,6 +1,7 @@
 # BONITO_AMOR/backend/inventario/admin.py
 from django.contrib import admin
-from .models import Categoria, Producto, Venta, DetalleVenta, Tienda, UserProfile # Importa UserProfile
+# Ya no necesitamos importar UserProfile aquí
+from .models import Categoria, Producto, Venta, DetalleVenta, Tienda 
 
 # Importaciones para extender UserAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
@@ -37,24 +38,36 @@ class VentaAdmin(admin.ModelAdmin):
     inlines = [DetalleVentaInline]
     readonly_fields = ('fecha_venta', 'total') # El total se calcula automáticamente
 
-# Inline para UserProfile en la vista de usuario
-class UserProfileInline(admin.StackedInline):
-    model = UserProfile
-    can_delete = False
-    verbose_name_plural = 'Perfil de Usuario'
-    # Puedes especificar los campos a mostrar si no quieres '__all__'
-    fields = ('tienda',) 
+# No necesitamos desregistrar User, el decorador @admin.register lo manejará.
+
+# Ya no necesitamos UserProfileInline
+# class UserProfileInline(admin.StackedInline):
+#     model = UserProfile
+#     can_delete = False
+#     verbose_name_plural = 'Perfil de Usuario'
+#     fields = ('tienda',) 
 
 # Registrar el modelo User con el UserAdmin personalizado
-@admin.register(User) # <--- Este decorador ya se encarga de registrarlo
+@admin.register(User) 
 class UserAdmin(BaseUserAdmin):
-    inlines = (UserProfileInline,)
-    # Añade 'get_tienda' a list_display para ver la tienda directamente en la lista de usuarios
-    list_display = BaseUserAdmin.list_display + ('get_tienda',) 
+    # Ya no necesitamos inlines para UserProfile
+    # inlines = (UserProfileInline,) 
 
-    def get_tienda(self, obj):
-        return obj.profile.tienda.nombre if hasattr(obj, 'profile') and obj.profile.tienda else 'N/A'
-    get_tienda.short_description = 'Tienda Asignada'
+    # Añade 'tienda' directamente a fieldsets para que sea editable en el admin
+    fieldsets = BaseUserAdmin.fieldsets + (
+        (None, {'fields': ('tienda',)}),
+    )
+    add_fieldsets = BaseUserAdmin.add_fieldsets + (
+        (None, {'fields': ('tienda',)}),
+    )
+
+    # Añade 'tienda' a list_display para ver la tienda directamente en la lista de usuarios
+    list_display = BaseUserAdmin.list_display + ('tienda',) # Accede directamente al campo 'tienda'
+
+    # Ya no necesitamos get_tienda porque 'tienda' es un campo directo
+    # def get_tienda(self, obj):
+    #     return obj.profile.tienda.nombre if hasattr(obj, 'profile') and obj.profile.tienda else 'N/A'
+    # get_tienda.short_description = 'Tienda Asignada'
 
 @admin.register(Categoria)
 class CategoriaAdmin(admin.ModelAdmin):

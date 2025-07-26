@@ -1,6 +1,5 @@
 # BONITO_AMOR/backend/inventario/models.py
 from django.db import models
-# Importar AbstractUser y UserManager directamente para definir el modelo de usuario personalizado
 from django.contrib.auth.models import AbstractUser, UserManager
 import uuid
 from django.utils.text import slugify
@@ -105,13 +104,9 @@ class DetalleVenta(models.Model):
     def __str__(self):
         return f"Detalle de Venta {self.id} - Producto: {self.producto.nombre if self.producto else 'N/A'} - Cantidad: {self.cantidad}"
 
-# NUEVO MODELO: UserProfile para vincular usuarios a tiendas
-class UserProfile(models.Model):
-    # Usar settings.AUTH_USER_MODEL como string para referenciar el modelo de usuario personalizado
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
-    tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='user_profiles')
-    # Puedes añadir otros campos de perfil aquí si es necesario
-
-    def __str__(self):
-        return f"Perfil de {self.user.username} en {self.tienda.nombre if self.tienda else 'N/A'}"
-
+# ELIMINADO: Ya no necesitamos UserProfile porque el campo 'tienda' está directamente en el modelo User.
+# class UserProfile(models.Model):
+#     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
+#     tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='user_profiles')
+#     def __str__(self):
+#         return f"Perfil de {self.user.username} en {self.tienda.nombre if self.tienda else 'N/A'}"

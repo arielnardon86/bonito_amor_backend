@@ -2,19 +2,22 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer as SimpleJWTOBPSerializer
-from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, UserProfile # Importa UserProfile
+# Ya no necesitamos importar UserProfile aquí
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda 
 
 User = get_user_model()
 
+# ACTUALIZACIÓN: UserSerializer para incluir la tienda directamente del modelo User
 class UserSerializer(serializers.ModelSerializer):
-    tienda_slug = serializers.CharField(source='profile.tienda.slug', read_only=True)
-    tienda_nombre = serializers.CharField(source='profile.tienda.nombre', read_only=True)
+    tienda_slug = serializers.CharField(source='tienda.slug', read_only=True) # Accede directamente a user.tienda.slug
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True) # Accede directamente a user.tienda.nombre
 
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda_slug', 'tienda_nombre')
         read_only_fields = ('id', 'tienda_slug', 'tienda_nombre')
 
+# ACTUALIZACIÓN: UserCreateSerializer para asignar tienda directamente al modelo User
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     password2 = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
@@ -45,15 +48,15 @@ class UserCreateSerializer(serializers.ModelSerializer):
             is_superuser=is_superuser, 
             **validated_data
         )
-        # Crea UserProfile y lo vincula a Tienda
+        # Asigna la tienda directamente al usuario
         if tienda_slug:
             try:
                 tienda = Tienda.objects.get(slug=tienda_slug)
-                UserProfile.objects.create(user=user, tienda=tienda)
+                user.tienda = tienda # Asigna la tienda directamente al usuario
+                user.save()
             except Tienda.DoesNotExist:
                 raise serializers.ValidationError({"tienda_slug": "La tienda especificada no existe."})
-        else:
-            UserProfile.objects.create(user=user, tienda=None) # Crea perfil incluso si no hay tienda asignada
+        # Si no se proporciona tienda_slug, el campo 'tienda' del usuario quedará en NULL (por null=True, blank=True)
 
         return user
 
@@ -150,8 +153,8 @@ class CustomTokenObtainPairSerializer(SimpleJWTOBPSerializer):
         store_slug = attrs.get('store_slug')
 
         if store_slug:
-            # Verifica si el perfil del usuario está asociado con el store_slug proporcionado
-            if not hasattr(user, 'profile') or user.profile.tienda is None or user.profile.tienda.slug != store_slug:
+            # Verifica si el campo 'tienda' del usuario está asociado con el store_slug proporcionado
+            if user.tienda is None or user.tienda.slug != store_slug: # Accede directamente a user.tienda
                 raise serializers.ValidationError({'detail': 'Credenciales inválidas para esta tienda.'})
         else:
             # Si no se proporciona store_slug, puedes decidir qué hacer:
@@ -165,9 +168,9 @@ class CustomTokenObtainPairSerializer(SimpleJWTOBPSerializer):
         data['username'] = user.username
         data['is_staff'] = user.is_staff
         data['is_superuser'] = user.is_superuser
-        if hasattr(user, 'profile') and user.profile.tienda:
-            data['selected_store_slug'] = user.profile.tienda.slug
-            data['selected_store_name'] = user.profile.tienda.nombre
+        if user.tienda: # Accede directamente a user.tienda
+            data['selected_store_slug'] = user.tienda.slug
+            data['selected_store_name'] = user.tienda.nombre
 
         return data
 

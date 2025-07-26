@@ -16,7 +16,8 @@ from .serializers import (
     DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
     TiendaSerializer, CustomTokenObtainPairSerializer 
 )
-from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, UserProfile
+# Ya no necesitamos importar UserProfile aquí
+from .models import Producto, Categoria, Venta, DetalleVenta, Tienda 
 
 User = get_user_model()
 
@@ -42,7 +43,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'create':
-            # CAMBIO CLAVE AQUÍ: Solo usuarios staff o superusuarios pueden crear nuevos usuarios
+            # Solo usuarios staff o superusuarios pueden crear nuevos usuarios
             self.permission_classes = [IsStaffOrAdmin] 
         elif self.action in ['list', 'retrieve']:
             self.permission_classes = [IsAuthenticated] # Solo usuarios autenticados pueden ver la lista/detalle
@@ -63,25 +64,23 @@ class UserViewSet(viewsets.ModelViewSet):
         # Guarda el nuevo usuario
         user = serializer.save()
         
-        # Obtiene o crea el UserProfile para el nuevo usuario
-        user_profile, created = UserProfile.objects.get_or_create(user=user)
-
-        # Lógica para asignar la tienda al nuevo usuario
         requesting_user = self.request.user
         
-        # Asegurarse de que el usuario que está creando esté autenticado
-        if requesting_user.is_authenticated:
-            # Solo si el usuario que está creando NO es un superusuario
-            # Y si el usuario que está creando tiene un perfil
-            # Y si ese perfil tiene una tienda asignada
-            if not requesting_user.is_superuser and \
-               hasattr(requesting_user, 'profile') and \
-               requesting_user.profile.tienda:
-                user_profile.tienda = requesting_user.profile.tienda
-                user_profile.save()
-                # print(f"DEBUG: Asignada tienda {requesting_user.profile.tienda.nombre} al nuevo usuario {user.username}") # Para depuración
-            # else:
-                # print(f"DEBUG: No se asignó tienda al nuevo usuario {user.username}. Superusuario: {requesting_user.is_superuser}, Tiene perfil: {hasattr(requesting_user, 'profile')}, Tienda del creador: {requesting_user.profile.tienda if hasattr(requesting_user, 'profile') else 'N/A'}") # Para depuración
+        # Lógica para asignar la tienda al nuevo usuario
+        # Se verifica que el usuario creador esté autenticado, no sea superusuario,
+        # y que tenga una tienda asignada directamente en su modelo User.
+        if requesting_user.is_authenticated and \
+           not requesting_user.is_superuser and \
+           requesting_user.tienda: # Accede directamente a requesting_user.tienda
+            
+            user.tienda = requesting_user.tienda # Asigna la tienda directamente al nuevo usuario
+            user.save()
+            # print(f"DEBUG: Tienda '{requesting_user.tienda.nombre}' asignada exitosamente al nuevo usuario '{user.username}'.") # Para depuración
+        # else:
+            # print(f"DEBUG: No se asignó tienda al nuevo usuario '{user.username}'. Una o más condiciones no se cumplieron:") # Para depuración
+            # print(f"  - Usuario creador autenticado: {requesting_user.is_authenticated}") # Para depuración
+            # print(f"  - Usuario creador NO es superusuario: {not requesting_user.is_superuser}") # Para depuración
+            # print(f"  - Tienda asignada al creador: {bool(requesting_user.tienda)}") # Para depuración
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
@@ -117,8 +116,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return Producto.objects.all().order_by('nombre')
-        elif hasattr(user, 'profile') and user.profile.tienda:
-            return Producto.objects.filter(tienda=user.profile.tienda).order_by('nombre')
+        elif user.tienda: # Accede directamente a user.tienda
+            return Producto.objects.filter(tienda=user.tienda).order_by('nombre')
         return Producto.objects.none() 
 
     def get_permissions(self):
@@ -129,8 +128,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return [permission() for permission in self.permission_classes]
 
     def perform_create(self, serializer):
-        if not self.request.user.is_superuser and hasattr(self.request.user, 'profile') and self.request.user.profile.tienda:
-            serializer.save(tienda=self.request.user.profile.tienda)
+        if not self.request.user.is_superuser and self.request.user.tienda: # Accede directamente a user.tienda
+            serializer.save(tienda=self.request.user.tienda)
         else:
             serializer.save() 
 
@@ -142,8 +141,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return Venta.objects.all().order_by('-fecha_venta')
-        elif hasattr(user, 'profile') and user.profile.tienda:
-            return Venta.objects.filter(tienda=user.profile.tienda).order_by('-fecha_venta')
+        elif user.tienda: # Accede directamente a user.tienda
+            return Venta.objects.filter(tienda=user.tienda).order_by('-fecha_venta')
         return Venta.objects.none()
 
     def get_permissions(self):
@@ -161,8 +160,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         return VentaSerializer
 
     def perform_create(self, serializer):
-        if not self.request.user.is_superuser and hasattr(self.request.user, 'profile') and self.request.user.profile.tienda:
-            serializer.save(tienda=self.request.user.profile.tienda)
+        if not self.request.user.is_superuser and self.request.user.tienda: # Accede directamente a user.tienda
+            serializer.save(tienda=self.request.user.tienda)
         else:
             serializer.save() 
 
@@ -175,8 +174,8 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return DetalleVenta.objects.all()
-        elif hasattr(user, 'profile') and user.profile.tienda:
-            return DetalleVenta.objects.filter(venta__tienda=user.profile.tienda)
+        elif user.tienda: # Accede directamente a user.tienda
+            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
         return DetalleVenta.objects.none()
 
     def get_permissions(self):
@@ -186,12 +185,12 @@ class MetricasVentasViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        user = request.user
+        user = self.request.user
         tienda_queryset = Tienda.objects.all()
 
         if not user.is_superuser:
-            if hasattr(user, 'profile') and user.profile.tienda:
-                tienda_queryset = Tienda.objects.filter(id=user.profile.tienda.id)
+            if user.tienda: # Accede directamente a user.tienda
+                tienda_queryset = Tienda.objects.filter(id=user.tienda.id)
             else:
                 return Response({"detail": "No autorizado para ver métricas de ventas."}, status=status.HTTP_403_FORBIDDEN)
 
