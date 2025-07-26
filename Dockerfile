@@ -24,4 +24,4 @@ EXPOSE 8000
 # Comando para ejecutar la aplicación.
 # Ejecuta las migraciones en un orden muy específico para resolver dependencias.
 # Usamos 'sh -c' para que la cadena de comandos se interprete correctamente.
-CMD ["/bin/sh", "-c", "python manage.py migrate auth --skip-checks && python manage.py migrate contenttypes --skip-checks && python manage.py migrate sessions --skip-checks && python manage.py migrate admin --skip-checks && python manage.py migrate inventario --fake-initial && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
+CMD ["/bin/sh", "-c", "python manage.py migrate contenttypes --noinput && python manage.py migrate auth --noinput && python manage.py migrate inventario 0001 --noinput && python manage.py migrate admin --noinput && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
