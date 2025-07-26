@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model
 
 from rest_framework_simplejwt.views import TokenObtainPairView as SimpleJWTOBPView
 from .serializers import (
-    ProductoSerializer, CategoriaSerializer,
+    ProductoSerializer, CategoriaSerializer, # CategoriaSerializer puede que ya no sea necesario si eliminaste categorías
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
     TiendaSerializer, CustomTokenObtainPairSerializer 
@@ -68,6 +68,7 @@ class UserViewSet(viewsets.ModelViewSet):
             user.save()
 
 
+# Si eliminaste el modelo Categoria, este ViewSet ya no es necesario o debe ser ajustado
 class CategoriaViewSet(viewsets.ModelViewSet):
     queryset = Categoria.objects.all().order_by('nombre')
     serializer_class = CategoriaSerializer
@@ -112,40 +113,28 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return [permission() for permission in self.permission_classes]
 
     def perform_create(self, serializer):
-        # Depuración para el precio
-        # print(f"DEBUG: Data recibida para producto: {serializer.validated_data}")
-        # if 'precio' in serializer.validated_data:
-        #     print(f"DEBUG: Tipo de precio: {type(serializer.validated_data['precio'])}, Valor: {serializer.validated_data['precio']}")
-
-        # Asignar la tienda al producto antes de guardar
         requesting_user = self.request.user
-        if requesting_user.is_authenticated:
-            if requesting_user.is_superuser:
-                # Si es superusuario, puede crear productos para cualquier tienda
-                # (asumiendo que el frontend podría enviar la tienda, o se asignará por defecto si no se envía)
-                # Si el frontend NO envía la tienda, el producto podría quedar sin tienda si el campo no es requerido.
-                # Para evitar esto, si el superusuario no envía la tienda, se podría asignar la suya por defecto
-                # o requerir que la envíe. Por ahora, permitimos que el serializer la maneje.
-                serializer.save() 
-            elif requesting_user.tienda: # Si no es superusuario y tiene tienda asignada
-                serializer.save(tienda=requesting_user.tienda) # Asigna la tienda del usuario logueado
-                # print(f"DEBUG: Producto creado en tienda: {requesting_user.tienda.nombre}") # Para depuración
-            else:
-                # Esto no debería ocurrir si los permisos están bien (IsStaffOrAdmin)
-                # pero es un caso de seguridad.
-                raise serializers.ValidationError({"detail": "No tienes una tienda asignada para crear productos."})
-        else:
+        
+        # CAMBIO CLAVE AQUÍ: Lógica unificada para asignar la tienda
+        if not requesting_user.is_authenticated:
             raise serializers.ValidationError({"detail": "Autenticación requerida para crear productos."})
+        
+        # Si el usuario no tiene una tienda asignada, no puede crear productos.
+        # Esto incluye superusuarios que no tienen una tienda asignada a su perfil.
+        if not requesting_user.tienda:
+            raise serializers.ValidationError({"detail": "No tienes una tienda asignada a tu usuario para crear productos. Por favor, asigna una tienda a tu perfil de usuario en el panel de administración."})
+        
+        # Si el usuario está autenticado y tiene una tienda, asigna esa tienda al producto
+        serializer.save(tienda=requesting_user.tienda)
 
     def perform_update(self, serializer):
-        # Lógica similar para actualizar: asegurar que solo se actualicen productos de la tienda del usuario
         requesting_user = self.request.user
-        instance_tienda = serializer.instance.tienda # Tienda del producto que se está actualizando
+        instance_tienda = serializer.instance.tienda 
 
         if requesting_user.is_superuser:
-            serializer.save() # Superusuario puede actualizar cualquier producto
+            serializer.save() 
         elif requesting_user.tienda == instance_tienda:
-            serializer.save() # Usuario de tienda puede actualizar productos de su tienda
+            serializer.save() 
         else:
             raise serializers.ValidationError({"detail": "No tienes permiso para actualizar productos de otra tienda."})
 
