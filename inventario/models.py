@@ -126,3 +126,17 @@ class DetalleVenta(models.Model):
 
     def __str__(self):
         return f"{self.cantidad} x {self.producto.nombre} en Venta {self.venta.id}"
+
+# --- NUEVO MODELO: MetodoPago ---
+class MetodoPago(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = "Método de Pago" # Nombre singular
+        verbose_name_plural = "Métodos de Pago" # Nombre plural
+        ordering = ['nombre']
+
+    def __str__(self):
+        return self.nombre
