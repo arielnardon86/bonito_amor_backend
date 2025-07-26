@@ -1,149 +1,120 @@
-# BONITO_AMOR/backend/inventario/serializers.py
+    # BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
-from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer # Importar TokenObtainPairSerializer
-from .models import Producto, Categoria, Venta, DetalleVenta, Tienda, MetodoPago # Importa MetodoPago
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago
 
-User = get_user_model()
+    # Serializer para el usuario, para anidar en VentaSerializer
+class SimpleUserSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = User
+            fields = ['id', 'username', 'first_name', 'last_name'] # Puedes añadir más campos si los necesitas
 
-# Custom Token Serializer para incluir datos del usuario
-# Este serializador es usado por CustomTokenObtainPairView
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    @classmethod
-    def get_token(cls, user):
-        token = super().get_token(user)
-        # Añadir información adicional al token
-        token['username'] = user.username
-        token['is_staff'] = user.is_staff
-        token['is_superuser'] = user.is_superuser
-        if user.tienda:
-            token['tienda_id'] = str(user.tienda.id)
-            token['tienda_nombre'] = user.tienda.nombre
-        else:
-            token['tienda_id'] = None
-            token['tienda_nombre'] = None
-        return token
-
-# Serializador para el modelo de usuario
-class UserSerializer(serializers.ModelSerializer):
-    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
-    tienda_id = serializers.UUIDField(source='tienda.id', read_only=True)
-
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'email', 'is_staff', 'is_superuser', 'tienda', 'tienda_nombre', 'tienda_id', 'fecha_creacion', 'fecha_actualizacion']
-        read_only_fields = ['id', 'is_staff', 'is_superuser', 'fecha_creacion', 'fecha_actualizacion']
-
-class UserCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'is_staff', 'tienda']
-        extra_kwargs = {'password': {'write_only': True}}
-
-    def create(self, validated_data):
-        user = User.objects.create_user(**validated_data)
-        return user
-
-# Serializador para el modelo de Tienda
-class TiendaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Tienda
-        fields = '__all__'
-        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
-
-# Serializador para el modelo de Categoría (Si aún lo usas)
-class CategoriaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Categoria
-        fields = '__all__'
-        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
-
-# Serializador para el modelo de Producto
 class ProductoSerializer(serializers.ModelSerializer):
-    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
-    
-    class Meta:
-        model = Producto
-        fields = ['id', 'nombre', 'precio', 'stock', 'talle', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
-        read_only_fields = ['id', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion'] 
+        class Meta:
+            model = Producto
+            fields = '__all__'
 
-# Serializador para el modelo de DetalleVenta
-class DetalleVentaSerializer(serializers.ModelSerializer):
-    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
-    
-    class Meta:
-        model = DetalleVenta
-        fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'subtotal', 'fecha_creacion', 'fecha_actualizacion']
-        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+class CategoriaSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = Categoria
+            fields = '__all__'
 
-# Serializador para el modelo de Venta (Lectura)
-class VentaSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True, read_only=True)
-    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+class TiendaSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = Tienda
+            fields = '__all__'
 
-    class Meta:
-        model = Venta
-        fields = ['id', 'fecha_venta', 'total', 'metodo_pago', 'tienda', 'tienda_nombre', 'detalles', 'fecha_creacion', 'fecha_actualizacion']
-        read_only_fields = ['id', 'fecha_venta', 'total', 'tienda_nombre', 'fecha_creacion', 'fecha_actualizacion']
+class UserSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = User
+            fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+            read_only_fields = ['is_staff', 'is_superuser']
 
-# Serializador para la creación de Venta (Escritura)
-class VentaCreateSerializer(serializers.ModelSerializer):
-    productos = serializers.ListField(
-        child=serializers.DictField(), write_only=True, required=True,
-        help_text="Lista de productos para la venta. Cada elemento debe ser un diccionario con 'producto_id' y 'cantidad'."
-    )
-
-    class Meta:
-        model = Venta
-        fields = ['id', 'metodo_pago', 'productos', 'tienda'] 
-        read_only_fields = ['id', 'total'] 
-
-    def create(self, validated_data):
-        productos_data = validated_data.pop('productos')
-        tienda = validated_data.pop('tienda', None) 
-
-        if not tienda and self.context['request'].user.tienda:
-            tienda = self.context['request'].user.tienda
-        elif not tienda:
-            raise serializers.ValidationError({"tienda": "La tienda es requerida para crear una venta."})
-
-        venta = Venta.objects.create(tienda=tienda, **validated_data)
-        total_venta = 0
-
-        for item_data in productos_data:
-            try:
-                producto_id = item_data.get('producto_id') 
-                if not producto_id:
-                    raise serializers.ValidationError("Cada producto debe tener un 'producto_id'.")
-                producto = Producto.objects.get(id=producto_id)
-            except Producto.DoesNotExist:
-                raise serializers.ValidationError(f"Producto con ID {item_data['producto_id']} no encontrado.")
-
-            cantidad = item_data.get('cantidad', 1)
-            if cantidad <= 0:
-                raise serializers.ValidationError(f"La cantidad para el producto {producto.nombre} debe ser mayor que cero.")
-
-            if producto.stock < cantidad:
-                raise serializers.ValidationError(f"No hay suficiente stock para el producto: {producto.nombre}. Stock disponible: {producto.stock}")
-
-            subtotal = producto.precio * cantidad
-            DetalleVenta.objects.create(
-                venta=venta,
-                producto=producto,
-                cantidad=cantidad,
-                precio_unitario=producto.precio,
-                subtotal=subtotal
-            )
-            producto.stock -= cantidad
-            producto.save()
-            total_venta += subtotal
-
-        venta.total = total_venta
-        venta.save()
-        return venta
-
-# Serializador para MetodoPago
 class MetodoPagoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MetodoPago
-        fields = '__all__'
+        class Meta:
+            model = MetodoPago
+            fields = '__all__'
+
+class DetalleVentaSerializer(serializers.ModelSerializer):
+        # Asegúrate de que 'producto_nombre' se resuelva correctamente
+        producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+        # Asegúrate de que 'precio_unitario_venta' se resuelva correctamente
+        precio_unitario_venta = serializers.DecimalField(source='precio_unitario', max_digits=10, decimal_places=2, read_only=True)
+
+
+        class Meta:
+            model = DetalleVenta
+            fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'precio_unitario_venta', 'subtotal']
+            read_only_fields = ['subtotal'] # subtotal se calcula en el modelo o en la vista
+
+class VentaSerializer(serializers.ModelSerializer):
+        detalles = DetalleVentaSerializer(many=True, read_only=True)
+        # CAMBIO CLAVE: Usa el SimpleUserSerializer para el campo 'usuario'
+        usuario = SimpleUserSerializer(read_only=True) 
+        
+        # CAMBIO CLAVE: Asegúrate de que 'total' sea el campo correcto del modelo Venta
+        # Si tu modelo Venta tiene un campo 'total', esto es suficiente:
+        total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+        # Si lo llamas 'total_venta' en el frontend pero es 'total' en el modelo, puedes usar:
+        # total_venta = serializers.DecimalField(source='total', max_digits=10, decimal_places=2, read_only=True)
+
+        # CAMBIO CLAVE: Asegúrate de que 'metodo_pago' se exponga correctamente
+        # Si 'metodo_pago' es un ForeignKey a MetodoPago, usa source='metodo_pago.nombre'
+        metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True)
+        # Si 'metodo_pago' es un CharField directo en el modelo Venta, usa:
+        # metodo_pago = serializers.CharField(read_only=True)
+
+
+        class Meta:
+            model = Venta
+            # Asegúrate de que 'total', 'usuario', 'metodo_pago' estén en los fields
+            fields = ['id', 'fecha_venta', 'total', 'usuario', 'metodo_pago', 'tienda', 'anulada', 'detalles']
+            read_only_fields = ['id', 'fecha_venta', 'total', 'anulada', 'detalles']
+
+class VentaCreateSerializer(serializers.ModelSerializer):
+        detalles = DetalleVentaSerializer(many=True) # Permite crear detalles anidados
+
+        class Meta:
+            model = Venta
+            fields = ['tienda', 'metodo_pago', 'detalles'] # 'usuario' se asignará en la vista
+            read_only_fields = ['total'] # El total se calcula en el backend
+
+        def create(self, validated_data):
+            detalles_data = validated_data.pop('detalles')
+            venta = Venta.objects.create(**validated_data)
+            total_venta = Decimal('0.00')
+            for detalle_data in detalles_data:
+                producto = detalle_data['producto']
+                cantidad = detalle_data['cantidad']
+                precio_unitario = detalle_data['precio_unitario'] # Usar el precio unitario proporcionado
+                subtotal = precio_unitario * cantidad
+                DetalleVenta.objects.create(venta=venta, subtotal=subtotal, **detalle_data)
+                total_venta += subtotal
+                # Actualizar stock del producto
+                producto.stock -= cantidad
+                producto.save()
+            venta.total = total_venta
+            venta.save()
+            return venta
+
+    # Serializer para el token JWT personalizado
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+        @classmethod
+        def get_token(cls, user):
+            token = super().get_token(user)
+            # Añadir información adicional al token
+            token['username'] = user.username
+            token['email'] = user.email
+            token['is_staff'] = user.is_staff
+            token['is_superuser'] = user.is_superuser
+            if user.tienda:
+                token['tienda_id'] = str(user.tienda.id)
+                token['tienda_nombre'] = user.tienda.nombre
+            return token
+
+        def validate(self, attrs):
+            data = super().validate(attrs)
+            # Aquí puedes añadir lógica para verificar la tienda_slug si se envía en el login
+            # Si el usuario no tiene tienda asignada y se requiere, puedes manejarlo aquí.
+            return data
