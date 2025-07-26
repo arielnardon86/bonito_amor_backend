@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importa AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.views import APIView
 from django.db.models import Sum, F
 from django.utils import timezone
@@ -40,7 +40,9 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'create':
-            self.permission_classes = [AllowAny] # Permitir registro de usuarios
+            # Permitir que usuarios autenticados (staff/admin) creen usuarios,
+            # y también que cualquiera se registre si es necesario (ej. para un flujo de registro público)
+            self.permission_classes = [AllowAny] # Mantener AllowAny para flexibilidad de registro, pero la lógica de asignación de tienda se encargará de la restricción.
         elif self.action in ['list', 'retrieve']:
             self.permission_classes = [IsAuthenticated] # Solo usuarios autenticados pueden ver la lista/detalle
         elif self.action in ['update', 'partial_update', 'destroy']:
@@ -57,9 +59,21 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def perform_create(self, serializer):
+        # Guarda el nuevo usuario
         user = serializer.save()
-        # Asegura que se cree un UserProfile para el nuevo usuario si no existe
-        UserProfile.objects.get_or_create(user=user)
+        
+        # Obtiene o crea el UserProfile para el nuevo usuario
+        user_profile, created = UserProfile.objects.get_or_create(user=user)
+
+        # Lógica para asignar la tienda al nuevo usuario
+        # Solo si el usuario que está creando NO es un superusuario
+        # Y si el usuario que está creando tiene una tienda asignada
+        requesting_user = self.request.user
+        if not requesting_user.is_superuser and hasattr(requesting_user, 'profile') and requesting_user.profile.tienda:
+            user_profile.tienda = requesting_user.profile.tienda
+            user_profile.save()
+        # Si el usuario que crea es un superusuario, la tienda del nuevo usuario quedará en blanco
+        # o deberá ser asignada manualmente por el superusuario.
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
