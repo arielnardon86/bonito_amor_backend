@@ -1,76 +1,100 @@
 # BONITO_AMOR/backend/inventario/admin.py
 from django.contrib import admin
-# Ya no necesitamos importar UserProfile aquí
-from .models import Categoria, Producto, Venta, DetalleVenta, Tienda 
+from django.contrib.auth.admin import UserAdmin
+from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta
 
-# Importaciones para extender UserAdmin
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from django.contrib.auth import get_user_model
+# Configuración para el modelo de Usuario personalizado
+@admin.register(User)
+class CustomUserAdmin(UserAdmin):
+    # Añadir 'tienda' a los campos que se muestran y se pueden editar
+    fieldsets = UserAdmin.fieldsets + (
+        (None, {'fields': ('tienda',)}),
+    )
+    add_fieldsets = UserAdmin.add_fieldsets + (
+        (None, {'fields': ('tienda',)}),
+    )
+    list_display = ('username', 'email', 'is_staff', 'is_superuser', 'tienda', 'fecha_creacion')
+    list_filter = ('is_staff', 'is_superuser', 'tienda')
+    search_fields = ('username', 'email', 'tienda__nombre') # Permite buscar por nombre de tienda
 
-User = get_user_model() # Obtener el modelo de usuario personalizado
-
-# Register your models here.
-
+# Configuración para el modelo de Tienda
 @admin.register(Tienda)
 class TiendaAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'slug', 'direccion', 'telefono', 'email', 'fecha_creacion')
-    prepopulated_fields = {'slug': ('nombre',)}
-    search_fields = ('nombre', 'direccion', 'email')
-    list_filter = ('fecha_creacion',)
+    # Eliminado 'slug' de list_display y prepopulated_fields
+    list_display = ('nombre', 'direccion', 'telefono', 'email', 'fecha_creacion')
+    search_fields = ('nombre', 'direccion', 'telefono', 'email')
+    # Eliminado: prepopulated_fields = {'slug': ('nombre',)} # Slug ya no es un campo del modelo Tienda
+    readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
 
+
+# Configuración para el modelo de Categoría (Si aún lo usas)
+# Si eliminaste el modelo Categoria, puedes eliminar este bloque completo
+@admin.register(Categoria)
+class CategoriaAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'descripcion', 'fecha_creacion')
+    search_fields = ('nombre',)
+    readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
+
+
+# Configuración para el modelo de Producto
+@admin.register(Producto)
+class ProductoAdmin(admin.ModelAdmin):
+    # Ajustado list_display: Eliminado 'categoria' y 'descripcion'
+    list_display = ('nombre', 'talle', 'precio', 'stock', 'tienda', 'codigo_barras', 'fecha_creacion')
+    # Ajustado list_filter: Eliminado 'categoria'
+    list_filter = ('tienda', 'talle') # Filtrar por tienda y talle
+    search_fields = ('nombre', 'codigo_barras', 'tienda__nombre') # Buscar por nombre, código de barras y nombre de tienda
+    # Eliminado 'categoria' de raw_id_fields
+    # raw_id_fields = ('categoria',) # Ya no hay categoría
+    readonly_fields = ('id', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion') # codigo_barras es de solo lectura en admin
+
+    # Asegurarse de que al añadir/editar un producto, la tienda se asigne correctamente
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        return qs.filter(tienda=request.user.tienda)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "tienda" and not request.user.is_superuser:
+            kwargs["queryset"] = Tienda.objects.filter(id=request.user.tienda.id)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        if not request.user.is_superuser:
+            obj.tienda = request.user.tienda
+        super().save_model(request, obj, form, change)
+
+
+# Configuración para el modelo de Venta
 class DetalleVentaInline(admin.TabularInline):
     model = DetalleVenta
     extra = 0
-    raw_id_fields = ('producto',) # Para facilitar la selección de productos si hay muchos
-
-@admin.register(Producto)
-class ProductoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'tienda', 'categoria', 'precio', 'stock', 'fecha_creacion')
-    list_filter = ('tienda', 'categoria', 'fecha_creacion')
-    search_fields = ('nombre', 'descripcion')
-    raw_id_fields = ('categoria', 'tienda') # Para facilitar la selección de categoría y tienda
+    readonly_fields = ('producto', 'cantidad', 'precio_unitario', 'subtotal', 'fecha_creacion', 'fecha_actualizacion')
+    can_delete = False # Generalmente no se eliminan detalles de venta directamente
 
 @admin.register(Venta)
 class VentaAdmin(admin.ModelAdmin):
-    list_display = ('id', 'tienda', 'fecha_venta', 'total', 'metodo_pago', 'cliente_nombre')
+    # Ajustado list_display: Eliminado 'cliente_nombre'
+    list_display = ('id', 'fecha_venta', 'total', 'metodo_pago', 'tienda', 'fecha_creacion')
     list_filter = ('tienda', 'metodo_pago', 'fecha_venta')
-    search_fields = ('id', 'cliente_nombre', 'cliente_email')
+    search_fields = ('id__exact', 'tienda__nombre', 'metodo_pago') # Buscar por ID de venta, nombre de tienda, método de pago
     inlines = [DetalleVentaInline]
-    readonly_fields = ('fecha_venta', 'total') # El total se calcula automáticamente
+    readonly_fields = ('id', 'fecha_venta', 'total', 'fecha_creacion', 'fecha_actualizacion')
 
-# No necesitamos desregistrar User, el decorador @admin.register lo manejará.
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        return qs.filter(tienda=request.user.tienda)
 
-# Ya no necesitamos UserProfileInline
-# class UserProfileInline(admin.StackedInline):
-#     model = UserProfile
-#     can_delete = False
-#     verbose_name_plural = 'Perfil de Usuario'
-#     fields = ('tienda',) 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "tienda" and not request.user.is_superuser:
+            kwargs["queryset"] = Tienda.objects.filter(id=request.user.tienda.id)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-# Registrar el modelo User con el UserAdmin personalizado
-@admin.register(User) 
-class UserAdmin(BaseUserAdmin):
-    # Ya no necesitamos inlines para UserProfile
-    # inlines = (UserProfileInline,) 
-
-    # Añade 'tienda' directamente a fieldsets para que sea editable en el admin
-    fieldsets = BaseUserAdmin.fieldsets + (
-        (None, {'fields': ('tienda',)}),
-    )
-    add_fieldsets = BaseUserAdmin.add_fieldsets + (
-        (None, {'fields': ('tienda',)}),
-    )
-
-    # Añade 'tienda' a list_display para ver la tienda directamente en la lista de usuarios
-    list_display = BaseUserAdmin.list_display + ('tienda',) # Accede directamente al campo 'tienda'
-
-    # Ya no necesitamos get_tienda porque 'tienda' es un campo directo
-    # def get_tienda(self, obj):
-    #     return obj.profile.tienda.nombre if hasattr(obj, 'profile') and obj.profile.tienda else 'N/A'
-    # get_tienda.short_description = 'Tienda Asignada'
-
-@admin.register(Categoria)
-class CategoriaAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'descripcion')
-    search_fields = ('nombre',)
+    def save_model(self, request, obj, form, change):
+        if not request.user.is_superuser:
+            obj.tienda = request.user.tienda
+        super().save_model(request, obj, form, change)
 

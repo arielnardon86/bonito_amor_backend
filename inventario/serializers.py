@@ -30,7 +30,9 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
+        # CAMBIO CLAVE AQUÍ: Asegúrate de que 'fecha_creacion' y 'fecha_actualizacion' estén en fields
         fields = ['id', 'username', 'email', 'is_staff', 'is_superuser', 'tienda', 'tienda_nombre', 'tienda_id', 'fecha_creacion', 'fecha_actualizacion']
+        # Y también en read_only_fields porque se generan automáticamente
         read_only_fields = ['id', 'is_staff', 'is_superuser', 'fecha_creacion', 'fecha_actualizacion']
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -64,9 +66,7 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        # CAMBIO CLAVE AQUÍ: Asegúrate de que 'codigo_barras' esté en la lista de fields
         fields = ['id', 'nombre', 'descripcion', 'precio', 'stock', 'tienda', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
-        # 'codigo_barras' debe ser read_only_fields porque se genera automáticamente
         read_only_fields = ['id', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion'] 
 
 # Serializador para el modelo de DetalleVenta
