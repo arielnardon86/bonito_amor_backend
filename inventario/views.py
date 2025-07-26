@@ -23,10 +23,12 @@ User = get_user_model()
 # Permisos personalizados
 class IsStaffOrAdmin(IsAuthenticated):
     def has_permission(self, request, view):
+        # Un usuario es staff o superusuario
         return request.user and (request.user.is_staff or request.user.is_superuser)
 
 class IsSuperUser(IsAuthenticated):
     def has_permission(self, request, view):
+        # Un usuario es superusuario
         return request.user and request.user.is_superuser
 
 # ViewSets
@@ -40,9 +42,8 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'create':
-            # Permitir que usuarios autenticados (staff/admin) creen usuarios,
-            # y también que cualquiera se registre si es necesario (ej. para un flujo de registro público)
-            self.permission_classes = [AllowAny] # Mantener AllowAny para flexibilidad de registro, pero la lógica de asignación de tienda se encargará de la restricción.
+            # CAMBIO CLAVE AQUÍ: Solo usuarios staff o superusuarios pueden crear nuevos usuarios
+            self.permission_classes = [IsStaffOrAdmin] 
         elif self.action in ['list', 'retrieve']:
             self.permission_classes = [IsAuthenticated] # Solo usuarios autenticados pueden ver la lista/detalle
         elif self.action in ['update', 'partial_update', 'destroy']:
@@ -66,14 +67,21 @@ class UserViewSet(viewsets.ModelViewSet):
         user_profile, created = UserProfile.objects.get_or_create(user=user)
 
         # Lógica para asignar la tienda al nuevo usuario
-        # Solo si el usuario que está creando NO es un superusuario
-        # Y si el usuario que está creando tiene una tienda asignada
         requesting_user = self.request.user
-        if not requesting_user.is_superuser and hasattr(requesting_user, 'profile') and requesting_user.profile.tienda:
-            user_profile.tienda = requesting_user.profile.tienda
-            user_profile.save()
-        # Si el usuario que crea es un superusuario, la tienda del nuevo usuario quedará en blanco
-        # o deberá ser asignada manualmente por el superusuario.
+        
+        # Asegurarse de que el usuario que está creando esté autenticado
+        if requesting_user.is_authenticated:
+            # Solo si el usuario que está creando NO es un superusuario
+            # Y si el usuario que está creando tiene un perfil
+            # Y si ese perfil tiene una tienda asignada
+            if not requesting_user.is_superuser and \
+               hasattr(requesting_user, 'profile') and \
+               requesting_user.profile.tienda:
+                user_profile.tienda = requesting_user.profile.tienda
+                user_profile.save()
+                # print(f"DEBUG: Asignada tienda {requesting_user.profile.tienda.nombre} al nuevo usuario {user.username}") # Para depuración
+            # else:
+                # print(f"DEBUG: No se asignó tienda al nuevo usuario {user.username}. Superusuario: {requesting_user.is_superuser}, Tiene perfil: {hasattr(requesting_user, 'profile')}, Tienda del creador: {requesting_user.profile.tienda if hasattr(requesting_user, 'profile') else 'N/A'}") # Para depuración
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
@@ -91,7 +99,7 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    # CAMBIO CLAVE AQUÍ: Permitir acceso público a la lista de tiendas
+    # Permitir acceso público a la lista de tiendas
     def get_permissions(self):
         if self.action == 'list':
             self.permission_classes = [AllowAny] # Cualquiera puede listar tiendas
