@@ -31,5 +31,5 @@ RUN python manage.py migrate contenttypes --noinput && \
     python manage.py collectstatic --noinput
 
 # Comando CMD para iniciar la aplicación (solo Gunicorn)
-# Esto se ejecuta cuando el contenedor se inicia.
-CMD ["gunicorn", "mi_tienda_backend.wsgi:application", "--bind", "0.0.0.0:$PORT"]
+# ¡CAMBIO CLAVE AQUÍ! Usar la forma de shell para que $PORT se expanda.
+CMD gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT
