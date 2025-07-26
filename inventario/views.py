@@ -11,7 +11,7 @@ from django.utils import timezone
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from decimal import Decimal # ¡Importar Decimal!
+from decimal import Decimal # Importar Decimal!
 
 from .models import (
     Producto, Categoria, Tienda, User, Venta, DetalleVenta,
@@ -140,6 +140,11 @@ class VentaViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
+        # --- CAMBIO CLAVE AQUÍ: Asignar el usuario autenticado a la venta ---
+        if self.request.user.is_authenticated:
+            serializer.validated_data['usuario'] = self.request.user
+        
+        # Lógica existente para la tienda
         if not serializer.validated_data.get('tienda'):
             if self.request.user.is_authenticated and self.request.user.tienda:
                 serializer.save(tienda=self.request.user.tienda)
@@ -200,24 +205,15 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             ventas_queryset = ventas_queryset.filter(fecha_venta__day=day_filter)
         
         if seller_id_filter:
-            # Asegúrate de que 'usuario' es el nombre correcto del ForeignKey en tu modelo Venta
-            # Si no tienes un ForeignKey de Venta a User, esta línea fallará.
             ventas_queryset = ventas_queryset.filter(usuario_id=seller_id_filter) 
 
-        if payment_method_filter:
-            ventas_queryset = ventas_queryset.filter(metodo_pago=payment_method_filter)
-
-        # --- Métricas principales ---
-        # CAMBIO CLAVE: Value(Decimal('0.0'))
+        # ... (resto de la lógica de métricas) ...
         total_ventas_periodo = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(Decimal('0.0'))))['total']
 
-        # CAMBIO CLAVE: Value(0) para cantidad (IntegerField)
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
 
-        # --- Ventas agrupadas por período (para el Line Chart) ---
-        # CAMBIO CLAVE: Value(Decimal('0.0'))
         if day_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
@@ -243,8 +239,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
                 total_monto=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('fecha_venta__year').values(fecha=F('fecha_venta__year'), total_monto=F('total_monto'))
 
-        # --- Productos más vendidos (top 5 por cantidad y monto) ---
-        # CAMBIO CLAVE: Value(0) para cantidad, Value(Decimal('0.0')) para monto
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).values('producto__nombre', 'producto__talle').annotate(
@@ -252,8 +246,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             monto_total=Coalesce(Sum(F('cantidad') * F('precio_unitario')), Value(Decimal('0.0')))
         ).order_by('-cantidad_total')[:5]
 
-        # --- Ventas por usuario (vendedor) ---
-        # CAMBIO CLAVE: Value(Decimal('0.0')) para monto, Value(0) para cantidad
         ventas_por_usuario = ventas_queryset.values(
             'usuario__username', 'usuario__first_name', 'usuario__last_name' 
         ).annotate(
@@ -261,8 +253,6 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
-        # --- Ventas por método de pago ---
-        # CAMBIO CLAVE: Value(Decimal('0.0')) para monto, Value(0) para cantidad
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate(
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))

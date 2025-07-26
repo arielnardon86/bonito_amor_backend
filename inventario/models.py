@@ -3,6 +3,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 import uuid 
 from django.utils import timezone 
+from django.conf import settings # Importar settings para AUTH_USER_MODEL
 
 # Modelo de Usuario Personalizado
 class User(AbstractUser):
@@ -74,7 +75,6 @@ class Producto(models.Model):
     talle = models.CharField(max_length=10, choices=TALLE_CHOICES, default='UNICA')
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
-    # CAMBIO CLAVE: NO null=True, blank=True aquí. Debe ser NOT NULL.
     codigo_barras = models.UUIDField(default=uuid.uuid4, unique=True, editable=False) 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
@@ -95,6 +95,13 @@ class Venta(models.Model):
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     metodo_pago = models.CharField(max_length=50, default='Efectivo')
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
+    # --- CAMBIO CLAVE AQUÍ: Añadir ForeignKey a User ---
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, # Usa la referencia al modelo de usuario personalizado
+        on_delete=models.SET_NULL, # Si el usuario se elimina, la venta no
+        null=True, blank=True,     # Permite ventas sin un usuario asignado (ej. ventas anónimas)
+        related_name='ventas_realizadas' # Nombre inverso para acceder a las ventas desde el usuario
+    )
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -110,7 +117,6 @@ class Venta(models.Model):
 class DetalleVenta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     venta = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='detalles')
-    # CAMBIO CLAVE: NO null=True, blank=True aquí. Debe ser NOT NULL.
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='detalles_venta') 
     cantidad = models.IntegerField(default=1)
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
@@ -127,15 +133,15 @@ class DetalleVenta(models.Model):
     def __str__(self):
         return f"{self.cantidad} x {self.producto.nombre} en Venta {self.venta.id}"
 
-# --- NUEVO MODELO: MetodoPago ---
+# Modelo de MetodoPago
 class MetodoPago(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     nombre = models.CharField(max_length=100, unique=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
-        verbose_name = "Método de Pago" # Nombre singular
-        verbose_name_plural = "Métodos de Pago" # Nombre plural
+        verbose_name = "Método de Pago"
+        verbose_name_plural = "Métodos de Pago"
         ordering = ['nombre']
 
     def __str__(self):
