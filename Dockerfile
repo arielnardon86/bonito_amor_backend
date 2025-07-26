@@ -30,11 +30,9 @@ COPY . .
 EXPOSE 8000
 
 # Comando para ejecutar la aplicación.
-# Este es el CRÍTICO. Ejecuta las migraciones, recolecta estáticos y luego inicia Gunicorn.
+# Este es el CRÍTICO. Ejecuta las migraciones en un orden específico, recolecta estáticos y luego inicia Gunicorn.
 # Usamos 'sh -c' para que la cadena de comandos se interprete correctamente.
-CMD ["/bin/sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
+CMD ["/bin/sh", "-c", "python manage.py migrate auth && python manage.py migrate contenttypes && python manage.py migrate sessions && python manage.py migrate admin && python manage.py migrate inventario --fake-initial && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT"]
 
 # NOTA: $PORT es una variable de entorno que Render inyecta automáticamente.
 # Asegúrate de que tu Gunicorn se vincule a 0.0.0.0 y use $PORT.
-# Si tu Gunicorn ya está configurado para escuchar en 0.0.0.0:8000, puedes usar:
-# CMD ["/bin/sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn mi_tienda_backend.wsgi:application"]
