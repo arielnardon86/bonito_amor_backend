@@ -22,17 +22,5 @@ COPY . .
 EXPOSE 8000
 
 # Comando para ejecutar la aplicación.
-# Esta es la sintaxis de la FORMA "SHELL" de CMD.
-# Docker ejecutará esto a través de /bin/sh -c.
-# El orden de las migraciones es crucial:
-# 1. contenttypes y auth (para asegurar que los tipos de contenido y el modelo de usuario base existan).
-# 2. inventario 0001 (aplica específicamente la migración inicial de inventario para crear inventario_user).
-# 3. admin (para que pueda usar inventario_user).
-# 4. migrate general (para el resto de migraciones pendientes).
-CMD python manage.py migrate contenttypes --noinput && \
-    python manage.py migrate auth --noinput && \
-    python manage.py migrate inventario 0001_initial --noinput && \
-    python manage.py migrate admin --noinput && \
-    python manage.py migrate --noinput && \
-    python manage.py collectstatic --noinput && \
-    gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:$PORT
+# ¡Solo inicia Gunicorn! Las migraciones se manejarán en el Pre-Deploy Command de Render.
+CMD ["gunicorn", "mi_tienda_backend.wsgi:application", "--bind", "0.0.0.0:$PORT"]
