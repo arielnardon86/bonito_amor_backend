@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importar AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F, Count, Value
@@ -11,6 +11,7 @@ from django.utils import timezone
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+from decimal import Decimal # ¡Importar Decimal!
 
 from .models import (
     Producto, Categoria, Tienda, User, Venta, DetalleVenta,
@@ -89,11 +90,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
     search_fields = ['nombre', 'direccion']
     ordering_fields = ['nombre', 'fecha_creacion']
 
-    # --- CAMBIO CLAVE AQUÍ: get_permissions para permitir GET no autenticado ---
     def get_permissions(self):
         if self.request.method == 'GET':
-            return [AllowAny()] # Permitir cualquier usuario para solicitudes GET
-        return [IsAuthenticated()] # Requerir autenticación para otros métodos (POST, PUT, DELETE)
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
 class UserViewSet(viewsets.ModelViewSet): 
     queryset = User.objects.all().order_by('username')
@@ -105,9 +105,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def me(self, request):
-        """
-        Devuelve los detalles del usuario actualmente autenticado.
-        """
         if request.user.is_authenticated:
             serializer = self.get_serializer(request.user)
             return Response(serializer.data)
@@ -163,7 +160,7 @@ class PaymentMethodListView(APIView):
     """
     API para listar todos los métodos de pago activos.
     """
-    permission_classes = [IsAuthenticated] # Mantener IsAuthenticated aquí si los métodos de pago no son públicos
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         metodos_pago = MetodoPago.objects.filter(is_active=True).order_by('nombre')
@@ -175,7 +172,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
     API para obtener métricas de ventas por tienda, con filtros opcionales.
     Requiere 'tienda_slug' como parámetro de consulta.
     """
-    permission_classes = [IsAuthenticated] # Mantener IsAuthenticated aquí
+    permission_classes = [IsAuthenticated]
 
     def list(self, request):
         tienda_slug = request.query_params.get('tienda_slug')
@@ -203,32 +200,38 @@ class MetricasVentasViewSet(viewsets.ViewSet):
             ventas_queryset = ventas_queryset.filter(fecha_venta__day=day_filter)
         
         if seller_id_filter:
+            # Asegúrate de que 'usuario' es el nombre correcto del ForeignKey en tu modelo Venta
+            # Si no tienes un ForeignKey de Venta a User, esta línea fallará.
             ventas_queryset = ventas_queryset.filter(usuario_id=seller_id_filter) 
 
         if payment_method_filter:
             ventas_queryset = ventas_queryset.filter(metodo_pago=payment_method_filter)
 
-        # ... (resto de la lógica de métricas) ...
-        total_ventas_periodo = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(0.0)))['total']
+        # --- Métricas principales ---
+        # CAMBIO CLAVE: Value(Decimal('0.0'))
+        total_ventas_periodo = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(Decimal('0.0'))))['total']
 
+        # CAMBIO CLAVE: Value(0) para cantidad (IntegerField)
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
 
+        # --- Ventas agrupadas por período (para el Line Chart) ---
+        # CAMBIO CLAVE: Value(Decimal('0.0'))
         if day_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
-                total_monto=Coalesce(Sum('total'), Value(0.0))
+                total_monto=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('fecha_venta__date').values(fecha=F('fecha_venta__date'), total_monto=F('total_monto'))
         elif month_filter: 
             period_label = "Día"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__date').annotate(
-                total_monto=Coalesce(Sum('total'), Value(0.0))
+                total_monto=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('fecha_venta__date').values(fecha=F('fecha_venta__date'), total_monto=F('total_monto'))
         elif year_filter: 
             period_label = "Mes"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__month', 'fecha_venta__year').annotate(
-                total_monto=Coalesce(Sum('total'), Value(0.0))
+                total_monto=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('fecha_venta__year', 'fecha_venta__month').values(
                 fecha=F('fecha_venta__month'), 
                 year=F('fecha_venta__year'),
@@ -237,25 +240,31 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         else: 
             period_label = "Año"
             ventas_agrupadas_por_periodo = ventas_queryset.values('fecha_venta__year').annotate(
-                total_monto=Coalesce(Sum('total'), Value(0.0))
+                total_monto=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('fecha_venta__year').values(fecha=F('fecha_venta__year'), total_monto=F('total_monto'))
 
+        # --- Productos más vendidos (top 5 por cantidad y monto) ---
+        # CAMBIO CLAVE: Value(0) para cantidad, Value(Decimal('0.0')) para monto
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).values('producto__nombre', 'producto__talle').annotate(
             cantidad_total=Coalesce(Sum('cantidad'), Value(0)),
-            monto_total=Coalesce(Sum(F('cantidad') * F('precio_unitario')), Value(0.0))
+            monto_total=Coalesce(Sum(F('cantidad') * F('precio_unitario')), Value(Decimal('0.0')))
         ).order_by('-cantidad_total')[:5]
 
+        # --- Ventas por usuario (vendedor) ---
+        # CAMBIO CLAVE: Value(Decimal('0.0')) para monto, Value(0) para cantidad
         ventas_por_usuario = ventas_queryset.values(
             'usuario__username', 'usuario__first_name', 'usuario__last_name' 
         ).annotate(
-            monto_total_vendido=Coalesce(Sum('total'), Value(0.0)),
+            monto_total_vendido=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
+        # --- Ventas por método de pago ---
+        # CAMBIO CLAVE: Value(Decimal('0.0')) para monto, Value(0) para cantidad
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate(
-            monto_total=Coalesce(Sum('total'), Value(0.0)),
+            monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total')
 
