@@ -63,9 +63,10 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        # CAMBIO CLAVE AQUÍ: Eliminado 'descripcion' de los fields
-        fields = ['id', 'nombre', 'precio', 'stock', 'talle', 'tienda', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
-        # Eliminado 'descripcion' de read_only_fields si estaba
+        # CAMBIO CLAVE AQUÍ: Eliminado 'tienda' de los fields.
+        # La tienda será asignada automáticamente por el ViewSet en perform_create.
+        fields = ['id', 'nombre', 'precio', 'stock', 'talle', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
+        # 'tienda' ya no necesita estar en read_only_fields si no está en fields
         read_only_fields = ['id', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion'] 
 
 # Serializador para el modelo de DetalleVenta
