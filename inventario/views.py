@@ -85,12 +85,15 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    permission_classes = [IsAuthenticated]
+    # Permisos: IsAuthenticated debería ser suficiente para listar.
+    # Si solo admin puede crear/actualizar/eliminar, se usaría IsAdminUser para esos métodos.
+    # Por ahora, IsAuthenticated permite GET.
+    permission_classes = [IsAuthenticated] 
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['nombre', 'direccion']
     ordering_fields = ['nombre', 'fecha_creacion']
 
-# --- CAMBIO CLAVE AQUÍ: Renombrado a UserViewSet ---
+# --- CAMBIO CLAVE AQUÍ: Renombrado a UserViewSet y añadido acción 'me' ---
 class UserViewSet(viewsets.ModelViewSet): 
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
@@ -98,6 +101,17 @@ class UserViewSet(viewsets.ModelViewSet):
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['username', 'email', 'first_name', 'last_name']
     ordering_fields = ['username', 'email', 'date_joined']
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def me(self, request):
+        """
+        Devuelve los detalles del usuario actualmente autenticado.
+        """
+        if request.user.is_authenticated:
+            serializer = self.get_serializer(request.user)
+            return Response(serializer.data)
+        return Response({"detail": "No autenticado."}, status=status.HTTP_401_UNAUTHORIZED)
+
 
 class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all().order_by('-fecha_venta')
@@ -265,7 +279,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         }
         return Response(metrics, status=status.HTTP_200_OK)
 
-# --- NUEVO: CustomTokenObtainPairView (para JWT) ---
+# --- CustomTokenObtainPairView (para JWT) ---
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
     Vista personalizada para obtener tokens JWT.

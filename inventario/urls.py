@@ -9,12 +9,12 @@ from .views import (
 )
 
 router = DefaultRouter()
-router.register(r'productos', ProductoViewSet, basename='producto') # Añadido basename
+router.register(r'productos', ProductoViewSet, basename='producto') 
 router.register(r'categorias', CategoriaViewSet)
 router.register(r'tiendas', TiendaViewSet)
 router.register(r'users', UserViewSet) # Usar 'users' para que coincida con el router principal
-router.register(r'ventas', VentaViewSet, basename='venta') # Añadido basename
-router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa') # Añadido basename
+router.register(r'ventas', VentaViewSet, basename='venta')
+router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
 # router.register(r'metodos-pago', MetodoPagoViewSet) # Ya no se registra aquí
 # router.register(r'metricas-ventas', MetricasVentasViewSet) # Ya no se registra aquí
 
