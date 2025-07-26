@@ -30,9 +30,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        # CAMBIO CLAVE AQUÍ: Asegúrate de que 'fecha_creacion' y 'fecha_actualizacion' estén en fields
         fields = ['id', 'username', 'email', 'is_staff', 'is_superuser', 'tienda', 'tienda_nombre', 'tienda_id', 'fecha_creacion', 'fecha_actualizacion']
-        # Y también en read_only_fields porque se generan automáticamente
         read_only_fields = ['id', 'is_staff', 'is_superuser', 'fecha_creacion', 'fecha_actualizacion']
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -53,7 +51,6 @@ class TiendaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
 
 # Serializador para el modelo de Categoría (Si aún lo usas)
-# Si eliminaste el modelo Categoria, puedes eliminar este serializador también
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
@@ -66,7 +63,9 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'descripcion', 'precio', 'stock', 'tienda', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
+        # CAMBIO CLAVE AQUÍ: Eliminado 'descripcion' de los fields
+        fields = ['id', 'nombre', 'precio', 'stock', 'talle', 'tienda', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion']
+        # Eliminado 'descripcion' de read_only_fields si estaba
         read_only_fields = ['id', 'tienda_nombre', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion'] 
 
 # Serializador para el modelo de DetalleVenta
@@ -102,9 +101,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         productos_data = validated_data.pop('productos')
-        tienda = validated_data.pop('tienda', None) # Obtener la tienda si se proporciona
+        tienda = validated_data.pop('tienda', None) 
 
-        # Si la tienda no se proporcionó en los datos, intentar obtenerla del usuario
         if not tienda and self.context['request'].user.tienda:
             tienda = self.context['request'].user.tienda
         elif not tienda:
