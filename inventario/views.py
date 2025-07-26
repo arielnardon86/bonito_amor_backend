@@ -16,7 +16,6 @@ from .serializers import (
     DetalleVentaSerializer, UserSerializer, UserCreateSerializer,
     TiendaSerializer, CustomTokenObtainPairSerializer 
 )
-# Ya no necesitamos importar UserProfile aquí
 from .models import Producto, Categoria, Venta, DetalleVenta, Tienda 
 
 User = get_user_model()
@@ -24,12 +23,10 @@ User = get_user_model()
 # Permisos personalizados
 class IsStaffOrAdmin(IsAuthenticated):
     def has_permission(self, request, view):
-        # Un usuario es staff o superusuario
         return request.user and (request.user.is_staff or request.user.is_superuser)
 
 class IsSuperUser(IsAuthenticated):
     def has_permission(self, request, view):
-        # Un usuario es superusuario
         return request.user and request.user.is_superuser
 
 # ViewSets
@@ -43,16 +40,15 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'create':
-            # Solo usuarios staff o superusuarios pueden crear nuevos usuarios
             self.permission_classes = [IsStaffOrAdmin] 
         elif self.action in ['list', 'retrieve']:
-            self.permission_classes = [IsAuthenticated] # Solo usuarios autenticados pueden ver la lista/detalle
+            self.permission_classes = [IsAuthenticated] 
         elif self.action in ['update', 'partial_update', 'destroy']:
-            self.permission_classes = [IsAdminUser] # Solo administradores pueden modificar/eliminar
+            self.permission_classes = [IsAdminUser] 
         elif self.action == 'me':
-            self.permission_classes = [IsAuthenticated] # Solo el propio usuario autenticado
+            self.permission_classes = [IsAuthenticated] 
         else:
-            self.permission_classes = [IsAdminUser] # Por defecto, requiere admin
+            self.permission_classes = [IsAdminUser] 
         return [permission() for permission in self.permission_classes]
 
     @action(detail=False, methods=['get'])
@@ -61,26 +57,15 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def perform_create(self, serializer):
-        # Guarda el nuevo usuario
         user = serializer.save()
-        
         requesting_user = self.request.user
         
-        # Lógica para asignar la tienda al nuevo usuario
-        # Se verifica que el usuario creador esté autenticado, no sea superusuario,
-        # y que tenga una tienda asignada directamente en su modelo User.
         if requesting_user.is_authenticated and \
            not requesting_user.is_superuser and \
-           requesting_user.tienda: # Accede directamente a requesting_user.tienda
+           requesting_user.tienda: 
             
-            user.tienda = requesting_user.tienda # Asigna la tienda directamente al nuevo usuario
+            user.tienda = requesting_user.tienda 
             user.save()
-            # print(f"DEBUG: Tienda '{requesting_user.tienda.nombre}' asignada exitosamente al nuevo usuario '{user.username}'.") # Para depuración
-        # else:
-            # print(f"DEBUG: No se asignó tienda al nuevo usuario '{user.username}'. Una o más condiciones no se cumplieron:") # Para depuración
-            # print(f"  - Usuario creador autenticado: {requesting_user.is_authenticated}") # Para depuración
-            # print(f"  - Usuario creador NO es superusuario: {not requesting_user.is_superuser}") # Para depuración
-            # print(f"  - Tienda asignada al creador: {bool(requesting_user.tienda)}") # Para depuración
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
@@ -90,22 +75,21 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
-            self.permission_classes = [IsAuthenticated] # Todos los autenticados pueden listar/ver
+            self.permission_classes = [IsAuthenticated] 
         else:
-            self.permission_classes = [IsStaffOrAdmin] # Solo staff/admin pueden crear/actualizar/eliminar
+            self.permission_classes = [IsStaffOrAdmin] 
         return [permission() for permission in self.permission_classes]
 
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    # Permitir acceso público a la lista de tiendas
     def get_permissions(self):
         if self.action == 'list':
-            self.permission_classes = [AllowAny] # Cualquiera puede listar tiendas
+            self.permission_classes = [AllowAny] 
         elif self.action == 'retrieve':
-            self.permission_classes = [IsAuthenticated] # Autenticados pueden ver detalle de una tienda
+            self.permission_classes = [IsAuthenticated] 
         else:
-            self.permission_classes = [IsSuperUser] # Solo superusuarios pueden crear/actualizar/eliminar
+            self.permission_classes = [IsSuperUser] 
         return [permission() for permission in self.permission_classes]
 
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -116,7 +100,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return Producto.objects.all().order_by('nombre')
-        elif user.tienda: # Accede directamente a user.tienda
+        elif user.tienda: 
             return Producto.objects.filter(tienda=user.tienda).order_by('nombre')
         return Producto.objects.none() 
 
@@ -128,10 +112,43 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return [permission() for permission in self.permission_classes]
 
     def perform_create(self, serializer):
-        if not self.request.user.is_superuser and self.request.user.tienda: # Accede directamente a user.tienda
-            serializer.save(tienda=self.request.user.tienda)
+        # Depuración para el precio
+        # print(f"DEBUG: Data recibida para producto: {serializer.validated_data}")
+        # if 'precio' in serializer.validated_data:
+        #     print(f"DEBUG: Tipo de precio: {type(serializer.validated_data['precio'])}, Valor: {serializer.validated_data['precio']}")
+
+        # Asignar la tienda al producto antes de guardar
+        requesting_user = self.request.user
+        if requesting_user.is_authenticated:
+            if requesting_user.is_superuser:
+                # Si es superusuario, puede crear productos para cualquier tienda
+                # (asumiendo que el frontend podría enviar la tienda, o se asignará por defecto si no se envía)
+                # Si el frontend NO envía la tienda, el producto podría quedar sin tienda si el campo no es requerido.
+                # Para evitar esto, si el superusuario no envía la tienda, se podría asignar la suya por defecto
+                # o requerir que la envíe. Por ahora, permitimos que el serializer la maneje.
+                serializer.save() 
+            elif requesting_user.tienda: # Si no es superusuario y tiene tienda asignada
+                serializer.save(tienda=requesting_user.tienda) # Asigna la tienda del usuario logueado
+                # print(f"DEBUG: Producto creado en tienda: {requesting_user.tienda.nombre}") # Para depuración
+            else:
+                # Esto no debería ocurrir si los permisos están bien (IsStaffOrAdmin)
+                # pero es un caso de seguridad.
+                raise serializers.ValidationError({"detail": "No tienes una tienda asignada para crear productos."})
         else:
-            serializer.save() 
+            raise serializers.ValidationError({"detail": "Autenticación requerida para crear productos."})
+
+    def perform_update(self, serializer):
+        # Lógica similar para actualizar: asegurar que solo se actualicen productos de la tienda del usuario
+        requesting_user = self.request.user
+        instance_tienda = serializer.instance.tienda # Tienda del producto que se está actualizando
+
+        if requesting_user.is_superuser:
+            serializer.save() # Superusuario puede actualizar cualquier producto
+        elif requesting_user.tienda == instance_tienda:
+            serializer.save() # Usuario de tienda puede actualizar productos de su tienda
+        else:
+            raise serializers.ValidationError({"detail": "No tienes permiso para actualizar productos de otra tienda."})
+
 
 class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
@@ -141,7 +158,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return Venta.objects.all().order_by('-fecha_venta')
-        elif user.tienda: # Accede directamente a user.tienda
+        elif user.tienda: 
             return Venta.objects.filter(tienda=user.tienda).order_by('-fecha_venta')
         return Venta.objects.none()
 
@@ -160,7 +177,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         return VentaSerializer
 
     def perform_create(self, serializer):
-        if not self.request.user.is_superuser and self.request.user.tienda: # Accede directamente a user.tienda
+        if not self.request.user.is_superuser and self.request.user.tienda: 
             serializer.save(tienda=self.request.user.tienda)
         else:
             serializer.save() 
@@ -174,7 +191,7 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return DetalleVenta.objects.all()
-        elif user.tienda: # Accede directamente a user.tienda
+        elif user.tienda: 
             return DetalleVenta.objects.filter(venta__tienda=user.tienda)
         return DetalleVenta.objects.none()
 
@@ -189,7 +206,7 @@ class MetricasVentasViewSet(viewsets.ViewSet):
         tienda_queryset = Tienda.objects.all()
 
         if not user.is_superuser:
-            if user.tienda: # Accede directamente a user.tienda
+            if user.tienda: 
                 tienda_queryset = Tienda.objects.filter(id=user.tienda.id)
             else:
                 return Response({"detail": "No autorizado para ver métricas de ventas."}, status=status.HTTP_403_FORBIDDEN)

@@ -2,29 +2,26 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer as SimpleJWTOBPSerializer
-# Ya no necesitamos importar UserProfile aquí
 from .models import Producto, Categoria, Venta, DetalleVenta, Tienda 
 
 User = get_user_model()
 
-# ACTUALIZACIÓN: UserSerializer para incluir la tienda directamente del modelo User
 class UserSerializer(serializers.ModelSerializer):
-    tienda_slug = serializers.CharField(source='tienda.slug', read_only=True) # Accede directamente a user.tienda.slug
-    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True) # Accede directamente a user.tienda.nombre
+    tienda_slug = serializers.CharField(source='tienda.slug', read_only=True) 
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True) 
 
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda_slug', 'tienda_nombre')
         read_only_fields = ('id', 'tienda_slug', 'tienda_nombre')
 
-# ACTUALIZACIÓN: UserCreateSerializer para asignar tienda directamente al modelo User
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     password2 = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     
     is_staff = serializers.BooleanField(required=False, default=False)
     is_superuser = serializers.BooleanField(required=False, default=False)
-    tienda_slug = serializers.SlugField(write_only=True, required=False, allow_null=True) # Permite asignar tienda al crear usuario
+    tienda_slug = serializers.SlugField(write_only=True, required=False, allow_null=True) 
 
     class Meta:
         model = User
@@ -38,7 +35,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('password2') 
-        tienda_slug = validated_data.pop('tienda_slug', None) # Extrae tienda_slug
+        tienda_slug = validated_data.pop('tienda_slug', None) 
 
         is_staff = validated_data.pop('is_staff', False)
         is_superuser = validated_data.pop('is_superuser', False)
@@ -48,15 +45,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
             is_superuser=is_superuser, 
             **validated_data
         )
-        # Asigna la tienda directamente al usuario
         if tienda_slug:
             try:
                 tienda = Tienda.objects.get(slug=tienda_slug)
-                user.tienda = tienda # Asigna la tienda directamente al usuario
+                user.tienda = tienda 
                 user.save()
             except Tienda.DoesNotExist:
                 raise serializers.ValidationError({"tienda_slug": "La tienda especificada no existe."})
-        # Si no se proporciona tienda_slug, el campo 'tienda' del usuario quedará en NULL (por null=True, blank=True)
 
         return user
 
@@ -69,7 +64,7 @@ class TiendaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tienda
         fields = '__all__'
-        read_only_fields = ('slug',) # El slug se genera automáticamente
+        read_only_fields = ('slug',) 
 
 class ProductoSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.CharField(source='categoria.nombre', read_only=True)
@@ -78,7 +73,17 @@ class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
         fields = '__all__'
-        read_only_fields = ('fecha_creacion', 'fecha_actualizacion')
+        # CAMBIO CLAVE AQUÍ: 'tienda' es de solo lectura para la entrada (escritura)
+        # Esto significa que el frontend no debe enviar el ID de la tienda.
+        read_only_fields = ('fecha_creacion', 'fecha_actualizacion', 'tienda') 
+
+    # Opcional: Validar que el precio sea un número válido si el frontend envía un string
+    def validate_precio(self, value):
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("El precio debe ser un número válido.")
+
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
@@ -90,7 +95,7 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'producto_nombre', 'producto_id', 'precio_unitario', 'subtotal']
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True, write_only=True) # Para recibir los detalles al crear la venta
+    detalles = DetalleVentaSerializer(many=True, write_only=True) 
 
     class Meta:
         model = Venta
@@ -133,7 +138,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         return venta
 
 class VentaSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True, read_only=True) # Para mostrar los detalles al consultar la venta
+    detalles = DetalleVentaSerializer(many=True, read_only=True) 
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
 
     class Meta:
@@ -141,34 +146,26 @@ class VentaSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('fecha_venta', 'total')
 
-# NUEVO SERIALIZADOR: CustomTokenObtainPairSerializer
 class CustomTokenObtainPairSerializer(SimpleJWTOBPSerializer):
-    store_slug = serializers.SlugField(write_only=True, required=False) # Añade el campo store_slug
+    store_slug = serializers.SlugField(write_only=True, required=False) 
 
     def validate(self, attrs):
-        # Primero, realiza la validación estándar de usuario/contraseña
         data = super().validate(attrs) 
 
-        user = self.user # Obtiene el usuario autenticado
+        user = self.user 
         store_slug = attrs.get('store_slug')
 
         if store_slug:
-            # Verifica si el campo 'tienda' del usuario está asociado con el store_slug proporcionado
-            if user.tienda is None or user.tienda.slug != store_slug: # Accede directamente a user.tienda
+            if user.tienda is None or user.tienda.slug != store_slug: 
                 raise serializers.ValidationError({'detail': 'Credenciales inválidas para esta tienda.'})
         else:
-            # Si no se proporciona store_slug, puedes decidir qué hacer:
-            # - Permitir el login si el usuario no tiene tienda asignada (comportamiento actual).
-            # - Opcional: Rechazar el login si el store_slug es obligatorio para todos los usuarios.
-            #   raise serializers.ValidationError({'detail': 'Se requiere el slug de la tienda para iniciar sesión.'})
             pass
 
-        # Añade datos personalizados al payload del token si es necesario
         data['user_id'] = user.id
         data['username'] = user.username
         data['is_staff'] = user.is_staff
         data['is_superuser'] = user.is_superuser
-        if user.tienda: # Accede directamente a user.tienda
+        if user.tienda: 
             data['selected_store_slug'] = user.tienda.slug
             data['selected_store_name'] = user.tienda.nombre
 
