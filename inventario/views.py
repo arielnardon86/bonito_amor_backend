@@ -139,19 +139,14 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         return queryset
 
+    def get_serializer_context(self):
+        # CAMBIO CLAVE: Pasar el request al contexto del serializer
+        return {'request': self.request}
+
     def perform_create(self, serializer):
-        # --- CAMBIO CLAVE AQUÍ: Asignar el usuario autenticado a la venta ---
-        if self.request.user.is_authenticated:
-            serializer.validated_data['usuario'] = self.request.user
-        
-        # Lógica existente para la tienda
-        if not serializer.validated_data.get('tienda'):
-            if self.request.user.is_authenticated and self.request.user.tienda:
-                serializer.save(tienda=self.request.user.tienda)
-            else:
-                raise serializers.ValidationError({"tienda": "La tienda es requerida para crear una venta."})
-        else:
-            serializer.save()
+        # El usuario ahora se asigna dentro del serializer.create()
+        # La tienda también se resuelve dentro del serializer.create()
+        serializer.save()
 
 class DetalleVentaViewSet(viewsets.ModelViewSet):
     queryset = DetalleVenta.objects.all()
