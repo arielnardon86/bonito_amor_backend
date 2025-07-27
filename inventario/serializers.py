@@ -42,14 +42,14 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetalleVenta
         fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'precio_unitario_venta', 'subtotal']
-        read_only_fields = ['subtotal', 'venta'] # 'venta' también es read_only en este contexto de creación anidada
+        read_only_fields = ['subtotal', 'venta']
 
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
     usuario = SimpleUserSerializer(read_only=True) 
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
-    # CAMBIO CLAVE: Si metodo_pago es un CharField en el modelo Venta
+    # Si metodo_pago es un CharField en el modelo Venta, esto es correcto para lectura:
     # metodo_pago = serializers.CharField(read_only=True)
     # Si metodo_pago es un ForeignKey a MetodoPago, y quieres el nombre:
     metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True)
@@ -62,16 +62,13 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    # CAMBIO CLAVE: Aceptar el slug de la tienda
     tienda_slug = serializers.CharField(write_only=True, required=True)
-    # CAMBIO CLAVE: Aceptar el nombre del método de pago
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
 
     class Meta:
         model = Venta
-        # Excluye 'tienda' y 'metodo_pago' del fields, los manejaremos manualmente
         fields = ['tienda_slug', 'metodo_pago_nombre', 'detalles']
-        read_only_fields = ['total', 'usuario'] # 'usuario' se asignará en la vista
+        read_only_fields = ['total', 'usuario']
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
@@ -92,14 +89,14 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         # Asignar la tienda y el método de pago resueltos al validated_data
         validated_data['tienda'] = tienda
-        validated_data['metodo_pago'] = metodo_pago_obj # Asignar el objeto MetodoPago
+        # --- CAMBIO CLAVE AQUÍ: Asignar el NOMBRE del método de pago, no el objeto ---
+        validated_data['metodo_pago'] = metodo_pago_obj.nombre 
 
         # Obtener el usuario de la request (pasado desde la vista)
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             validated_data['usuario'] = request.user
         else:
-            # Esto debería ser manejado por las permisos, pero como fallback
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
 
 
@@ -107,24 +104,22 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         total_venta = Decimal('0.00')
 
         for detalle_data in detalles_data:
-            producto = detalle_data['producto'] # Esto ya es un objeto Producto si el DetalleVentaSerializer lo maneja
+            producto = detalle_data['producto']
             cantidad = detalle_data['cantidad']
             precio_unitario = detalle_data['precio_unitario']
 
-            # Asegurarse de que el producto sea un objeto Producto, no solo un ID
-            if isinstance(producto, str): # Si viene como ID (UUID string)
+            if isinstance(producto, str):
                 try:
                     producto_obj = Producto.objects.get(id=producto)
                 except Producto.DoesNotExist:
                     raise serializers.ValidationError({"detalles": f"Producto con ID {producto} no encontrado."})
-            else: # Si ya es un objeto Producto
+            else:
                 producto_obj = producto
 
             subtotal = precio_unitario * cantidad
             DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
             total_venta += subtotal
             
-            # Actualizar stock del producto
             producto_obj.stock -= cantidad
             producto_obj.save()
         
@@ -139,7 +134,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        # Añadir información adicional al token
         token['username'] = user.username
         token['email'] = user.email
         token['is_staff'] = user.is_staff
