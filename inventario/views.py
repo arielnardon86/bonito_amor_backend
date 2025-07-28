@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, F, Count, Value
+from django.db.models import Sum, F, Count, Value, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import timedelta
@@ -120,6 +120,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         'tienda': ['exact'],
         'metodo_pago': ['exact'],
         'total': ['gte', 'lte'],
+        'usuario': ['exact'], # Filtrar por ID de usuario
+        'anulada': ['exact'],
     }
     ordering_fields = ['fecha_venta', 'total']
 
@@ -140,13 +142,113 @@ class VentaViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_serializer_context(self):
-        # CAMBIO CLAVE: Pasar el request al contexto del serializer
         return {'request': self.request}
 
     def perform_create(self, serializer):
-        # El usuario ahora se asigna dentro del serializer.create()
-        # La tienda también se resuelve dentro del serializer.create()
         serializer.save()
+
+    @action(detail=True, methods=['patch'])
+    def anular(self, request, pk=None):
+        """
+        Anula una venta completa y revierte el stock de los productos.
+        Solo permitido para superusuarios.
+        """
+        if not request.user.is_superuser:
+            return Response({"detail": "No tienes permisos para anular ventas."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            venta = self.get_object() # Obtiene la venta por PK
+            tienda_slug = request.query_params.get('tienda_slug')
+
+            if not tienda_slug:
+                return Response({"error": "El parámetro 'tienda_slug' es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if str(venta.tienda.nombre) != tienda_slug:
+                 return Response({"detail": "La venta no pertenece a la tienda especificada."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if venta.anulada:
+                return Response({"detail": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Revertir stock de todos los productos en la venta
+            for detalle in venta.detalles.all():
+                producto = detalle.producto
+                producto.stock += detalle.cantidad
+                producto.save()
+
+            venta.anulada = True
+            venta.save()
+            return Response(VentaSerializer(venta).data, status=status.HTTP_200_OK)
+        except Venta.DoesNotExist:
+            return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"detail": f"Error al anular la venta: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['patch'])
+    def anular_detalle(self, request, pk=None):
+        """
+        Anula una cantidad específica de un producto en un detalle de venta
+        y revierte el stock.
+        Solo permitido para superusuarios.
+        """
+        if not request.user.is_superuser:
+            return Response({"detail": "No tienes permisos para anular detalles de venta."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            venta = self.get_object() # Obtiene la venta por PK
+            detalle_id = request.data.get('detalle_id')
+            cantidad_a_anular = request.data.get('cantidad_a_anular')
+            tienda_slug = request.query_params.get('tienda_slug')
+
+            if not tienda_slug:
+                return Response({"error": "El parámetro 'tienda_slug' es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+            if str(venta.tienda.nombre) != tienda_slug:
+                 return Response({"detail": "La venta no pertenece a la tienda especificada."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not detalle_id or not cantidad_a_anular:
+                return Response({"error": "Los parámetros 'detalle_id' y 'cantidad_a_anular' son requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                cantidad_a_anular = int(cantidad_a_anular)
+                if cantidad_a_anular <= 0:
+                    return Response({"error": "La cantidad a anular debe ser mayor que cero."}, status=status.HTTP_400_BAD_REQUEST)
+            except ValueError:
+                return Response({"error": "La cantidad a anular debe ser un número entero válido."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                detalle = venta.detalles.get(id=detalle_id)
+            except DetalleVenta.DoesNotExist:
+                return Response({"detail": "Detalle de venta no encontrado en esta venta."}, status=status.HTTP_404_NOT_FOUND)
+
+            if detalle.cantidad < cantidad_a_anular:
+                return Response({"error": f"No se puede anular {cantidad_a_anular} unidades. Solo quedan {detalle.cantidad} en este detalle."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Revertir stock del producto
+            producto = detalle.producto
+            producto.stock += cantidad_a_anular
+            producto.save()
+
+            # Ajustar la cantidad en el detalle de venta
+            detalle.cantidad -= cantidad_a_anular
+            detalle.subtotal = detalle.precio_unitario * detalle.cantidad
+            detalle.save()
+
+            # Si la cantidad del detalle llega a cero, se puede considerar eliminar el detalle
+            if detalle.cantidad == 0:
+                detalle.delete()
+            
+            # Recalcular el total de la venta
+            venta.total = sum(d.subtotal for d in venta.detalles.all())
+            # Si no quedan detalles, la venta se considera anulada o se puede eliminar
+            if venta.detalles.count() == 0:
+                venta.anulada = True
+            venta.save()
+
+            return Response(VentaSerializer(venta).data, status=status.HTTP_200_OK)
+        except Venta.DoesNotExist:
+            return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"detail": f"Error al anular el detalle de venta: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class DetalleVentaViewSet(viewsets.ModelViewSet):
     queryset = DetalleVenta.objects.all()

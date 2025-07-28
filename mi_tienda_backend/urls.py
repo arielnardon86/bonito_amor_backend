@@ -13,14 +13,13 @@ from rest_framework_simplejwt.views import (
 )
 
 # Importa TODAS las vistas de tu aplicación inventario que se usarán en urls.py
-# ¡Estos nombres deben coincidir con las clases en inventario/views.py!
 from inventario.views import (
-    UserViewSet, # Ya renombrado a UserViewSet
+    UserViewSet,
     ProductoViewSet,
     VentaViewSet,
     DetalleVentaViewSet,
-    MetricasVentasViewSet, # Es un ViewSet
-    PaymentMethodListView, # Es una APIView
+    MetricasVentasViewSet,
+    PaymentMethodListView,
     TiendaViewSet,
     CategoriaViewSet, 
     CustomTokenObtainPairView
@@ -28,15 +27,12 @@ from inventario.views import (
 
 # Configuración del Router para ViewSets
 router = DefaultRouter()
-router.register(r'users', UserViewSet) # Coincide con /api/users/
+router.register(r'users', UserViewSet)
 router.register(r'categorias', CategoriaViewSet)
 router.register(r'productos', ProductoViewSet, basename='producto') 
 router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
-# router.register(r'metricas-ventas', MetricasVentasViewSet, basename='metricas-ventas') 
-# ^^^ Comentado porque MetricasVentasViewSet se usará directamente con .as_view() para la ruta específica
-
-router.register(r'tiendas', TiendaViewSet) # Coincide con /api/tiendas/
+router.register(r'tiendas', TiendaViewSet)
 
 # Vista raíz de la API
 @api_view(['GET'])
@@ -47,8 +43,8 @@ def api_root(request, format=None):
         'productos': reverse('producto-list', request=request, format=format),
         'ventas': reverse('venta-list', request=request, format=format),
         'detalles-venta': reverse('detalleventa-list', request=request, format=format),
-        'metricas-ventas': reverse('metricas-metrics', request=request, format=format), # Nombre de la ruta ajustado
-        'metodos-pago': reverse('metodos_pago', request=request, format=format), # Nombre de la ruta ajustado
+        'metricas-ventas': reverse('metricas-metrics', request=request, format=format),
+        'metodos-pago': reverse('metodos_pago', request=request, format=format),
         'tiendas': reverse('tienda-list', request=request, format=format),
         'token': reverse('token_obtain_pair', request=request, format=format),
         'token-refresh': reverse('token_refresh', request=request, format=format),
@@ -61,14 +57,21 @@ urlpatterns = [
     path('api/', include(router.urls)), # Incluye todas las rutas del router
     
     # --- Rutas específicas para APIViews o acciones personalizadas ---
-    # Ruta para métricas de ventas (coincide con frontend: /api/metricas/metrics/)
+    # Ruta para anular una venta completa (CORRECCIÓN DEL 404)
+    # Asegúrate de que esta línea esté presente y correcta
+    path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
+    
+    # NUEVA RUTA: Para anular productos individuales dentro de una venta
+    path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
+    
+    # Ruta para métricas de ventas
     path('api/metricas/metrics/', MetricasVentasViewSet.as_view({'get': 'list'}), name='metricas-metrics'),
     
-    # Ruta para métodos de pago (coincide con frontend: /api/metodos-pago/)
+    # Ruta para métodos de pago
     path('api/metodos-pago/', PaymentMethodListView.as_view(), name='metodos_pago'),
     
-    # Ruta para el perfil del usuario autenticado (coincide con frontend: /api/users/me/)
-    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), # Nueva ruta para /me/
+    # Ruta para el perfil del usuario autenticado
+    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
     
     # --- Rutas JWT (autenticación) ---
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'), 
