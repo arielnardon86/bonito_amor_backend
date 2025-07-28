@@ -24,6 +24,7 @@ from .serializers import (
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
 )
+from .filters import VentaFilter # Importar el nuevo filtro
 
 # ... Otros ViewSets existentes ...
 
@@ -115,14 +116,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all().order_by('-fecha_venta')
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_fields = {
-        'fecha_venta': ['gte', 'lte', 'exact', 'date__gte', 'date__lte', 'date'],
-        'tienda': ['exact'],
-        'metodo_pago': ['exact'],
-        'total': ['gte', 'lte'],
-        'usuario': ['exact'], # Filtrar por ID de usuario
-        'anulada': ['exact'],
-    }
+    # CAMBIO CLAVE: Usar filterset_class en lugar de filterset_fields
+    filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
 
     def get_serializer_class(self):
