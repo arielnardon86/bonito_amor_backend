@@ -49,16 +49,15 @@ class VentaSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True) 
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
-    # Si metodo_pago es un CharField en el modelo Venta, esto es correcto para lectura:
-    # metodo_pago = serializers.CharField(read_only=True)
-    # Si metodo_pago es un ForeignKey a MetodoPago, y quieres el nombre:
-    metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True)
-
+    # --- CAMBIO AQUÍ: No necesitas definir metodo_pago explícitamente con source si ya es CharField en el modelo ---
+    # Solo asegúrate de que esté en 'fields'
+    # metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True) # <-- Esta línea debe eliminarse o comentarse
 
     class Meta:
         model = Venta
-        fields = ['id', 'fecha_venta', 'total', 'usuario', 'metodo_pago', 'tienda', 'detalles']
-        read_only_fields = ['id', 'fecha_venta', 'total', 'detalles'] # 'anulada' no está en el modelo Venta que adjuntaste
+        # Asegúrate de que 'metodo_pago' y 'anulada' estén en la lista de campos
+        fields = ['id', 'fecha_venta', 'total', 'usuario', 'metodo_pago', 'tienda', 'detalles', 'anulada']
+        read_only_fields = ['id', 'fecha_venta', 'total', 'detalles', 'anulada'] 
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
@@ -89,7 +88,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         # Asignar la tienda y el método de pago resueltos al validated_data
         validated_data['tienda'] = tienda
-        # --- CAMBIO CLAVE AQUÍ: Asignar el NOMBRE del método de pago, no el objeto ---
+        # Asignar el NOMBRE del método de pago, no el objeto, porque es un CharField
         validated_data['metodo_pago'] = metodo_pago_obj.nombre 
 
         # Obtener el usuario de la request (pasado desde la vista)
