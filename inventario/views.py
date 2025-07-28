@@ -116,7 +116,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all().order_by('-fecha_venta')
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    # CAMBIO CLAVE: Usar filterset_class en lugar de filterset_fields
     filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
 
@@ -145,7 +144,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
         """
-        Anula una venta completa y revierte el stock de los productos.
+        Anula una venta completa y revierte el stock de todos los productos.
+        Esto se logra anulando cada detalle de la venta.
         Solo permitido para superusuarios.
         """
         if not request.user.is_superuser:
@@ -164,19 +164,25 @@ class VentaViewSet(viewsets.ModelViewSet):
             if venta.anulada:
                 return Response({"detail": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Revertir stock de todos los productos en la venta
-            for detalle in venta.detalles.all():
+            # Iterar sobre una copia de los detalles para evitar problemas al eliminarlos
+            detalles_a_anular = list(venta.detalles.all())
+            for detalle in detalles_a_anular:
                 producto = detalle.producto
-                producto.stock += detalle.cantidad
+                producto.stock += detalle.cantidad # Revertir la cantidad completa
                 producto.save()
+                detalle.delete() # Eliminar el detalle de venta
 
-            venta.anulada = True
+            venta.total = Decimal('0.00') # El total de la venta es 0
+            venta.anulada = True # Marcar la venta como anulada
             venta.save()
+            
             return Response(VentaSerializer(venta).data, status=status.HTTP_200_OK)
         except Venta.DoesNotExist:
             return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            return Response({"detail": f"Error al anular la venta: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Capturar cualquier otra excepción y devolver un mensaje de error genérico
+            return Response({"detail": f"Error interno al anular la venta: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     @action(detail=True, methods=['patch'])
     def anular_detalle(self, request, pk=None):
@@ -227,13 +233,13 @@ class VentaViewSet(viewsets.ModelViewSet):
             detalle.subtotal = detalle.precio_unitario * detalle.cantidad
             detalle.save()
 
-            # Si la cantidad del detalle llega a cero, se puede considerar eliminar el detalle
+            # Si la cantidad del detalle llega a cero, eliminar el detalle
             if detalle.cantidad == 0:
                 detalle.delete()
             
             # Recalcular el total de la venta
             venta.total = sum(d.subtotal for d in venta.detalles.all())
-            # Si no quedan detalles, la venta se considera anulada o se puede eliminar
+            # Si no quedan detalles, la venta se considera anulada
             if venta.detalles.count() == 0:
                 venta.anulada = True
             venta.save()
