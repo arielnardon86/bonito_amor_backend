@@ -95,13 +95,14 @@ class Venta(models.Model):
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     metodo_pago = models.CharField(max_length=50, default='Efectivo')
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
-    # --- CAMBIO CLAVE AQUÍ: Añadir ForeignKey a User ---
     usuario = models.ForeignKey(
-        settings.AUTH_USER_MODEL, # Usa la referencia al modelo de usuario personalizado
-        on_delete=models.SET_NULL, # Si el usuario se elimina, la venta no
-        null=True, blank=True,     # Permite ventas sin un usuario asignado (ej. ventas anónimas)
-        related_name='ventas_realizadas' # Nombre inverso para acceder a las ventas desde el usuario
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='ventas_realizadas'
     )
+    # --- CAMBIO CLAVE AQUÍ: Añadir el campo 'anulada' ---
+    anulada = models.BooleanField(default=False) 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
