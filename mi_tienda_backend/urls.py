@@ -55,23 +55,18 @@ def api_root(request, format=None):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', RedirectView.as_view(url='/api/', permanent=False)),
-    path('api/', api_root, name='api-root'),
-    path('api/', include(router.urls)), # Incluye todas las rutas del router
-
-    # --- Rutas específicas para APIViews o acciones personalizadas ---
-    # Ruta para anular una venta completa
-    path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
-
-    # NUEVA RUTA: Para anular productos individuales dentro de una venta
-    path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
-
-    # Ruta para métricas de ventas
-    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'),
-
-    # Ruta para el perfil del usuario autenticado - ELIMINADA DE AQUÍ, AHORA MANEJADA POR EL ROUTER
-    # path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), # <-- ELIMINADA
-
-    # --- Rutas JWT (autenticación) ---
-    path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'), # Rutas JWT primero
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+
+    # --- RUTA EXPLÍCITA PARA USERS/ME/ ANTES DEL INCLUDE DEL ROUTER ---
+    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), # <-- RE-AÑADIDA AQUÍ
+
+    path('api/', api_root, name='api-root'), # api_root después de las rutas específicas
+    path('api/', include(router.urls)), # Incluye todas las rutas del router (después de las explícitas)
+
+    # --- Rutas específicas para APIViews o acciones personalizadas (si no están en el router) ---
+    path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
+    path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
+    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'),
+    # 'metodos-pago' ya está en el router, no necesita una ruta explícita aquí
 ]
