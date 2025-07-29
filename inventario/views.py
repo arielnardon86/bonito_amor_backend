@@ -121,6 +121,14 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.filter(tienda=user.tienda).select_related('tienda')
         return User.objects.none() # No autenticado, no staff, o sin tienda asignada
 
+    @action(detail=False, methods=['get']) # <--- AÑADIDO: Decorador para la acción 'me'
+    def me(self, request):
+        """
+        Devuelve los detalles del usuario autenticado.
+        """
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
         user = self.request.user
         if user.is_superuser:
@@ -379,7 +387,7 @@ class DashboardMetricsView(APIView):
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
-        ventas_por_metodo_pago = ventas_queryset.values('metodo_pago__nombre').annotate( # Usar metodo_pago__nombre
+        ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate( # Usar metodo_pago directamente si es CharField
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total')
