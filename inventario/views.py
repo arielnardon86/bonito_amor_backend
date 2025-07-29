@@ -182,7 +182,7 @@ class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
-        # CAMBIO CLAVE AQUÍ: Usar '__date__exact' para filtrar por fecha
+        # CORRECCIÓN: Usar '__date' directamente para filtrar por la fecha de un DateTimeField
         'fecha_venta__date': ['exact'], 
         'usuario': ['exact'],
         'metodo_pago': ['exact'],
@@ -347,7 +347,8 @@ class DashboardMetricsView(APIView):
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
-        ventas_por_metodo_pago = ventas_queryset.values('metodo_pago__nombre').annotate(
+        # CORRECCIÓN: 'metodo_pago' es un CharField, no una FK. Acceder directamente.
+        ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate( 
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total')
