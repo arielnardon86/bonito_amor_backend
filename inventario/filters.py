@@ -12,16 +12,14 @@ class VentaFilter(django_filters.FilterSet):
     fecha_venta__month = django_filters.NumberFilter(field_name='fecha_venta', lookup_expr='month')
     fecha_venta__day = django_filters.NumberFilter(field_name='fecha_venta', lookup_expr='day')
 
+    # CORRECCIÓN CLAVE: Añadir este filtro explícito para 'fecha_venta__date'
+    fecha_venta__date = django_filters.DateFilter(field_name='fecha_venta', lookup_expr='date')
+
     # Filtro para tienda por ID (asumiendo que el frontend envía el ID de la tienda)
     tienda = django_filters.UUIDFilter(field_name='tienda__id') # Si el frontend envía el UUID de la tienda
-    # Si el frontend envía el slug de la tienda, usarías:
-    # tienda_slug = django_filters.CharFilter(field_name='tienda__nombre', lookup_expr='exact')
 
-    # Filtro por método de pago (asumiendo que el frontend envía el ID del método de pago)
-    # Si metodo_pago es un CharField en el modelo Venta, y el frontend envía el nombre:
+    # Filtro por método de pago (asumiendo que el frontend envía el nombre del método de pago como cadena)
     metodo_pago = django_filters.CharFilter(field_name='metodo_pago', lookup_expr='exact')
-    # Si metodo_pago es un ForeignKey a MetodoPago, y el frontend envía el ID:
-    # metodo_pago = django_filters.UUIDFilter(field_name='metodo_pago__id')
 
     # Filtro por usuario (vendedor) por ID
     usuario = django_filters.UUIDFilter(field_name='usuario__id')
@@ -34,7 +32,8 @@ class VentaFilter(django_filters.FilterSet):
         fields = [
             'fecha_venta_gte', 'fecha_venta_lte',
             'fecha_venta__year', 'fecha_venta__month', 'fecha_venta__day',
-            'tienda', # O 'tienda_slug' si usas el slug
+            'fecha_venta__date', # Incluirlo aquí también para que django-filter lo reconozca
+            'tienda', 
             'metodo_pago',
             'usuario',
             'anulada',

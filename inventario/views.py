@@ -24,8 +24,9 @@ from .serializers import (
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
 )
+# IMPORTACIÓN CLAVE: Importar el filtro personalizado
+from .filters import VentaFilter 
 
-# ... Otros ViewSets existentes ...
 
 class ProductoViewSet(viewsets.ModelViewSet):
     queryset = Producto.objects.all()
@@ -181,14 +182,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_fields = {
-        # CORRECCIÓN: Usar '__date' directamente para filtrar por la fecha de un DateTimeField
-        'fecha_venta__date': ['exact'], 
-        'usuario': ['exact'],
-        'metodo_pago': ['exact'],
-        'anulada': ['exact'],
-        'tienda': ['exact'],
-    }
+    # CAMBIO CLAVE: Usar el filtro personalizado en lugar de filterset_fields directo
+    filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
 
     def get_serializer_class(self):
