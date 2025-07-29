@@ -182,7 +182,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
-        'fecha_venta': ['gte', 'lte', 'exact__date'],
+        # CAMBIO CLAVE AQUÍ: Usar '__date__exact' para filtrar por fecha
+        'fecha_venta__date': ['exact'], 
         'usuario': ['exact'],
         'metodo_pago': ['exact'],
         'anulada': ['exact'],
