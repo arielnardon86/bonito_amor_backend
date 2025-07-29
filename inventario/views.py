@@ -288,13 +288,16 @@ class DashboardMetricsView(APIView):
 
         ventas_queryset = ventas_queryset.filter(fecha_venta__range=[start_date, end_date], anulada=False)
 
-        total_ventas_periodo = Coalesce(ventas_queryset.aggregate(total=Sum('total'))['total'], Value(Decimal('0.0')))
-        
-        # CORRECCIÓN CLAVE: Asegurar que Coalesce para cantidad use un Value de tipo entero
-        total_productos_vendidos_periodo = Coalesce(
-            DetalleVenta.objects.filter(venta__in=ventas_queryset).aggregate(total_cantidad=Sum('cantidad'))['total_cantidad'],
-            Value(0) # CAMBIO: Usar Value(0) en lugar de Value(Decimal('0.0'))
-        )
+        # CORRECCIÓN CLAVE: Ejecutar .aggregate() y luego acceder al valor
+        total_ventas_periodo_agg = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(Decimal('0.0'))))
+        total_ventas_periodo = total_ventas_periodo_agg['total']
+
+        # CORRECCIÓN CLAVE: Ejecutar .aggregate() y luego acceder al valor
+        total_productos_vendidos_periodo_agg = DetalleVenta.objects.filter(
+            venta__in=ventas_queryset
+        ).aggregate(total_cantidad=Coalesce(Sum('cantidad'), Value(0))) # Value(0) para IntegerField
+        total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad']
+
 
         # Agregación de ventas por período (día, semana, mes)
         if period == 'day':
@@ -332,7 +335,7 @@ class DashboardMetricsView(APIView):
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).values('producto__nombre').annotate(
-            cantidad_total=Coalesce(Sum('cantidad'), Value(0)) # CAMBIO: Usar Value(0) aquí también
+            cantidad_total=Coalesce(Sum('cantidad'), Value(0)) 
         ).order_by('-cantidad_total')[:5]
 
         ventas_por_usuario = ventas_queryset.values(
@@ -348,8 +351,8 @@ class DashboardMetricsView(APIView):
         ).order_by('-monto_total')
 
         metrics = {
-            "total_ventas_periodo": total_ventas_periodo,
-            "total_productos_vendidos_periodo": total_productos_vendidos_periodo,
+            "total_ventas_periodo": total_ventas_periodo, # Ahora es un valor numérico
+            "total_productos_vendidos_periodo": total_productos_vendidos_periodo, # Ahora es un valor numérico
             "ventas_agrupadas_por_periodo": {
                 "label": period_label,
                 "data": list(ventas_agrupadas_por_periodo)
