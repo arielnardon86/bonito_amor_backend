@@ -25,6 +25,14 @@ class TiendaSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class UserSerializer(serializers.ModelSerializer):
+    # CAMBIO CLAVE AQUÍ: Serializar la tienda por su nombre
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', # Indica que queremos el campo 'nombre' de la Tienda
+        queryset=Tienda.objects.all(), # Necesario para la escritura (si se permite)
+        required=False, # El campo puede ser nulo
+        allow_null=True # Permite que el campo sea nulo
+    )
+
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
@@ -46,18 +54,13 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
-    usuario = SimpleUserSerializer(read_only=True) 
+    usuario = SimpleUserSerializer(read_only=True)
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    
-    # --- CAMBIO AQUÍ: No necesitas definir metodo_pago explícitamente con source si ya es CharField en el modelo ---
-    # Solo asegúrate de que esté en 'fields'
-    # metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True) # <-- Esta línea debe eliminarse o comentarse
 
     class Meta:
         model = Venta
-        # Asegúrate de que 'metodo_pago' y 'anulada' estén en la lista de campos
         fields = ['id', 'fecha_venta', 'total', 'usuario', 'metodo_pago', 'tienda', 'detalles', 'anulada']
-        read_only_fields = ['id', 'fecha_venta', 'total', 'detalles', 'anulada'] 
+        read_only_fields = ['id', 'fecha_venta', 'total', 'detalles', 'anulada']
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
@@ -74,30 +77,24 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         tienda_slug = validated_data.pop('tienda_slug')
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
 
-        # Resolver la tienda a partir del slug
         try:
             tienda = Tienda.objects.get(nombre=tienda_slug)
         except Tienda.DoesNotExist:
             raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
 
-        # Resolver el método de pago a partir del nombre
         try:
             metodo_pago_obj = MetodoPago.objects.get(nombre=metodo_pago_nombre)
         except MetodoPago.DoesNotExist:
             raise serializers.ValidationError({"metodo_pago_nombre": "Método de pago no encontrado."})
 
-        # Asignar la tienda y el método de pago resueltos al validated_data
         validated_data['tienda'] = tienda
-        # Asignar el NOMBRE del método de pago, no el objeto, porque es un CharField
-        validated_data['metodo_pago'] = metodo_pago_obj.nombre 
+        validated_data['metodo_pago'] = metodo_pago_obj.nombre
 
-        # Obtener el usuario de la request (pasado desde la vista)
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             validated_data['usuario'] = request.user
         else:
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
-
 
         venta = Venta.objects.create(**validated_data)
         total_venta = Decimal('0.00')
@@ -118,15 +115,14 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             subtotal = precio_unitario * cantidad
             DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
             total_venta += subtotal
-            
+
             producto_obj.stock -= cantidad
             producto_obj.save()
-        
+
         venta.total = total_venta
         venta.save()
         return venta
 
-# Serializer para el token JWT personalizado
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
