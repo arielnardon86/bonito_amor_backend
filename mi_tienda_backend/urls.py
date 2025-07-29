@@ -18,8 +18,9 @@ from inventario.views import (
     ProductoViewSet,
     VentaViewSet,
     DetalleVentaViewSet,
-    DashboardMetricsView, # CAMBIADO: Antes era MetricasVentasViewSet
-    PaymentMethodListView,
+    DashboardMetricsView,
+    # PaymentMethodListView, # ELIMINADO: Ya no existe esta clase
+    MetodoPagoViewSet, # AÑADIDO: Usa el ViewSet en su lugar
     TiendaViewSet,
     CategoriaViewSet,
     CustomTokenObtainPairView
@@ -33,6 +34,7 @@ router.register(r'productos', ProductoViewSet, basename='producto')
 router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
 router.register(r'tiendas', TiendaViewSet)
+router.register(r'metodos-pago', MetodoPagoViewSet) # AÑADIDO: Registrar MetodoPagoViewSet con el router
 
 # Vista raíz de la API
 @api_view(['GET'])
@@ -43,8 +45,8 @@ def api_root(request, format=None):
         'productos': reverse('producto-list', request=request, format=format),
         'ventas': reverse('venta-list', request=request, format=format),
         'detalles-venta': reverse('detalleventa-list', request=request, format=format),
-        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format), # CAMBIADO: Nombre de la ruta
-        'metodos-pago': reverse('metodos_pago', request=request, format=format),
+        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format),
+        'metodos-pago': reverse('metodopago-list', request=request, format=format), # CAMBIADO: Nombre de la ruta del router
         'tiendas': reverse('tienda-list', request=request, format=format),
         'token': reverse('token_obtain_pair', request=request, format=format),
         'token-refresh': reverse('token_refresh', request=request, format=format),
@@ -57,18 +59,17 @@ urlpatterns = [
     path('api/', include(router.urls)), # Incluye todas las rutas del router
 
     # --- Rutas específicas para APIViews o acciones personalizadas ---
-    # Ruta para anular una venta completa (CORRECCIÓN DEL 404)
-    # Asegúrate de que esta línea esté presente y correcta
+    # Ruta para anular una venta completa
     path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
 
     # NUEVA RUTA: Para anular productos individuales dentro de una venta
     path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
 
     # Ruta para métricas de ventas
-    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'), # CAMBIADO: Clase de vista y nombre de ruta
+    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'),
 
-    # Ruta para métodos de pago
-    path('api/metodos-pago/', PaymentMethodListView.as_view(), name='metodos_pago'),
+    # Ruta para métodos de pago - ELIMINADO de aquí, ahora se maneja por el router
+    # path('api/metodos-pago/', PaymentMethodListView.as_view(), name='metodos_pago'),
 
     # Ruta para el perfil del usuario autenticado
     path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
