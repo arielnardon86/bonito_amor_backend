@@ -24,7 +24,6 @@ from .serializers import (
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
 )
-# IMPORTACIÓN CLAVE: Importar el filtro personalizado
 from .filters import VentaFilter 
 
 
@@ -182,7 +181,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    # CAMBIO CLAVE: Usar el filtro personalizado en lugar de filterset_fields directo
     filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
 
@@ -291,9 +289,11 @@ class DashboardMetricsView(APIView):
         ventas_queryset = ventas_queryset.filter(fecha_venta__range=[start_date, end_date], anulada=False)
 
         total_ventas_periodo = Coalesce(ventas_queryset.aggregate(total=Sum('total'))['total'], Value(Decimal('0.0')))
+        
+        # CORRECCIÓN CLAVE: Asegurar que Coalesce para cantidad use un Value de tipo entero
         total_productos_vendidos_periodo = Coalesce(
             DetalleVenta.objects.filter(venta__in=ventas_queryset).aggregate(total_cantidad=Sum('cantidad'))['total_cantidad'],
-            Value(0)
+            Value(0) # CAMBIO: Usar Value(0) en lugar de Value(Decimal('0.0'))
         )
 
         # Agregación de ventas por período (día, semana, mes)
@@ -332,7 +332,7 @@ class DashboardMetricsView(APIView):
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
         ).values('producto__nombre').annotate(
-            cantidad_total=Coalesce(Sum('cantidad'), Value(Decimal('0.0')))
+            cantidad_total=Coalesce(Sum('cantidad'), Value(0)) # CAMBIO: Usar Value(0) aquí también
         ).order_by('-cantidad_total')[:5]
 
         ventas_por_usuario = ventas_queryset.values(
@@ -342,7 +342,6 @@ class DashboardMetricsView(APIView):
             cantidad_ventas=Coalesce(Count('id'), Value(0))
         ).order_by('-monto_total_vendido')
 
-        # CORRECCIÓN: 'metodo_pago' es un CharField, no una FK. Acceder directamente.
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate( 
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id'), Value(0))
