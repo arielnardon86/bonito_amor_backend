@@ -19,8 +19,7 @@ from inventario.views import (
     VentaViewSet,
     DetalleVentaViewSet,
     DashboardMetricsView,
-    # PaymentMethodListView, # ELIMINADO: Ya no existe esta clase
-    MetodoPagoViewSet, # AÑADIDO: Usa el ViewSet en su lugar
+    MetodoPagoViewSet,
     TiendaViewSet,
     CategoriaViewSet,
     CustomTokenObtainPairView
@@ -34,7 +33,7 @@ router.register(r'productos', ProductoViewSet, basename='producto')
 router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
 router.register(r'tiendas', TiendaViewSet)
-router.register(r'metodos-pago', MetodoPagoViewSet) # AÑADIDO: Registrar MetodoPagoViewSet con el router
+router.register(r'metodos-pago', MetodoPagoViewSet)
 
 # Vista raíz de la API
 @api_view(['GET'])
@@ -46,10 +45,11 @@ def api_root(request, format=None):
         'ventas': reverse('venta-list', request=request, format=format),
         'detalles-venta': reverse('detalleventa-list', request=request, format=format),
         'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format),
-        'metodos-pago': reverse('metodopago-list', request=request, format=format), # CAMBIADO: Nombre de la ruta del router
+        'metodos-pago': reverse('metodopago-list', request=request, format=format),
         'tiendas': reverse('tienda-list', request=request, format=format),
         'token': reverse('token_obtain_pair', request=request, format=format),
         'token-refresh': reverse('token_refresh', request=request, format=format),
+        'user-me': reverse('user-me', request=request, format=format), # Mantener en api_root si lo necesitas para documentación
     })
 
 urlpatterns = [
@@ -68,11 +68,8 @@ urlpatterns = [
     # Ruta para métricas de ventas
     path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'),
 
-    # Ruta para métodos de pago - ELIMINADO de aquí, ahora se maneja por el router
-    # path('api/metodos-pago/', PaymentMethodListView.as_view(), name='metodos_pago'),
-
-    # Ruta para el perfil del usuario autenticado
-    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
+    # Ruta para el perfil del usuario autenticado - ELIMINADA DE AQUÍ, AHORA MANEJADA POR EL ROUTER
+    # path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), # <-- ELIMINADA
 
     # --- Rutas JWT (autenticación) ---
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
