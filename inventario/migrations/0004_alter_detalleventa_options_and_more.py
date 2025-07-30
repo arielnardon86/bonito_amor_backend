@@ -59,11 +59,7 @@ class Migration(migrations.Migration):
             name='descripcion',
             field=models.TextField(blank=True, null=True),
         ),
-        migrations.AddField(
-            model_name='venta',
-            name='anulada',
-            field=models.BooleanField(default=False),
-        ),
+
         migrations.AlterField(
             model_name='detalleventa',
             name='producto',
