@@ -19,7 +19,7 @@ from .models import (
 )
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
-    VentaSerializer, DetalleVentaSerializer,
+    VentaSerializer, DetalleVentaSerializer, # Asegúrate de que DetalleVentaSerializer esté importado
     MetodoPagoSerializer,
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
@@ -177,7 +177,6 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
 
 class VentaViewSet(viewsets.ModelViewSet):
-    # CORRECCIÓN CLAVE: Eliminar 'metodo_pago' de select_related
     queryset = Venta.objects.all().select_related('usuario', 'tienda') 
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
@@ -196,7 +195,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         """
         user = self.request.user
         if user.is_authenticated and user.tienda:
-            # CORRECCIÓN CLAVE: Eliminar 'metodo_pago' de select_related aquí también
             return Venta.objects.filter(tienda=user.tienda).select_related('usuario', 'tienda')
         return Venta.objects.none()
 
@@ -231,7 +229,7 @@ class VentaViewSet(viewsets.ModelViewSet):
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all().select_related('venta__tienda', 'producto')
-    serializer_class = DetalleVallerySerializer
+    serializer_class = DetalleVentaSerializer # CORRECCIÓN CLAVE: Cambiado de DetalleVallerySerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
@@ -269,11 +267,11 @@ class DashboardMetricsView(APIView):
             return Response({"detail": "No tienes una tienda asignada o permisos suficientes para ver métricas."}, status=status.HTTP_403_FORBIDDEN)
 
         # Obtener el período de tiempo de los parámetros de la URL
-        period = request.query_params.get('period', 'day') # CAMBIO: Default a 'day'
+        period = request.query_params.get('period', 'day') 
         end_date = timezone.now()
         start_date = end_date
 
-        period_label = "Últimas 24 Horas" # CAMBIO: Label por defecto para 'day'
+        period_label = "Últimas 24 Horas" 
 
         if period == 'day':
             start_date = end_date - timedelta(days=1)
