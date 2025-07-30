@@ -1,6 +1,6 @@
 # BONITO_AMOR/backend/inventario/views.py
 from rest_framework import viewsets, status
-from rest_framework.decorators import action # Asegúrate de que 'action' esté importado
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -11,7 +11,11 @@ from django.utils import timezone
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from decimal import Decimal # Importar Decimal!
+from decimal import Decimal
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 from .models import (
     Producto, Categoria, Tienda, User, Venta, DetalleVenta,
@@ -37,19 +41,14 @@ class ProductoViewSet(viewsets.ModelViewSet):
     ordering_fields = ['nombre', 'precio', 'stock', 'fecha_creacion']
 
     def get_queryset(self):
-        """
-        Todos los usuarios autenticados solo pueden ver productos de su tienda asignada.
-        """
         user = self.request.user
         if user.is_authenticated and user.tienda:
             return Producto.objects.filter(tienda=user.tienda)
-        return Producto.objects.none() # No autenticado o sin tienda asignada
+        return Producto.objects.none()
 
     def perform_create(self, serializer):
         user = self.request.user
         if user.is_authenticated and user.tienda:
-            # Asegura que el producto se cree en la tienda del usuario autenticado
-            # Si se intenta especificar una tienda diferente, lanzar error
             if 'tienda' in self.request.data and self.request.data['tienda'] != str(user.tienda.id):
                 raise serializers.ValidationError({"tienda": "No tienes permiso para crear productos en otra tienda."})
             serializer.save(tienda=user.tienda)
@@ -98,9 +97,6 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering_fields = ['username', 'email', 'date_joined']
 
     def get_queryset(self):
-        """
-        Todos los usuarios autenticados solo pueden ver usuarios de su propia tienda.
-        """
         user = self.request.user
         if user.is_authenticated and user.tienda:
             return User.objects.filter(tienda=user.tienda).select_related('tienda')
@@ -108,9 +104,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def me(self, request):
-        """
-        Devuelve los detalles del usuario autenticado.
-        """
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
 
@@ -212,82 +205,82 @@ class VentaViewSet(viewsets.ModelViewSet):
         else:
             raise serializers.ValidationError("No tienes permisos para eliminar ventas de otra tienda.")
 
-    # ====================================================================
-    # ACCIONES PERSONALIZADAS: ANULAR VENTA Y ANULAR DETALLE DE VENTA
-    # ====================================================================
-
-    @action(detail=True, methods=['patch']) # <--- ESTE DECORADOR ES CLAVE
+    @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
-        """
-        Anula una venta completa y revierte el stock de los productos.
-        Requiere que la venta no esté ya anulada.
-        """
         try:
             venta = self.get_queryset().get(pk=pk)
         except Venta.DoesNotExist:
             return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Verificar si la venta ya está anulada
         if venta.anulada:
             return Response({"detail": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Revertir stock de productos de todos los detalles de la venta
         for detalle in venta.detalles.all():
             producto = detalle.producto
-            producto.stock += detalle.cantidad # Sumar la cantidad de vuelta al stock
-            producto.save()
+            if producto:
+                producto.stock += detalle.cantidad
+                producto.save()
 
-        # Marcar la venta como anulada
         venta.anulada = True
         venta.save()
         return Response({"detail": "Venta anulada y stock revertido con éxito."}, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['patch']) # <--- ESTE DECORADOR ES CLAVE
+    @action(detail=True, methods=['patch'])
     def anular_detalle(self, request, pk=None):
-        """
-        Anula un detalle de venta específico y revierte el stock de ese producto.
-        Requiere el 'detalle_id' en el cuerpo de la solicitud.
-        """
+        logger.info(f"anular_detalle: Request received for venta ID: {pk}")
+        logger.info(f"anular_detalle: Request data: {request.data}")
+
         try:
             venta = self.get_queryset().get(pk=pk)
+            logger.info(f"anular_detalle: Venta found: {venta.id}")
         except Venta.DoesNotExist:
+            logger.error(f"anular_detalle: Venta with ID {pk} not found.")
             return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
-        # No permitir anular detalles si la venta completa ya está anulada
         if venta.anulada:
+            logger.warning(f"anular_detalle: Attempt to annul detail on already annulled venta {venta.id}.")
             return Response({"detail": "La venta completa ya está anulada, no se pueden anular detalles individuales."}, status=status.HTTP_400_BAD_REQUEST)
 
         detalle_id = request.data.get('detalle_id')
+        logger.info(f"anular_detalle: Received detalle_id: {detalle_id}")
+
         if not detalle_id:
+            logger.error("anular_detalle: detalle_id missing or empty from request data.")
             return Response({"detail": "Se requiere el ID del detalle de venta."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Buscar el detalle de venta dentro de la venta actual
             detalle = venta.detalles.get(id=detalle_id)
+            logger.info(f"anular_detalle: DetalleVenta found: {detalle.id} for venta {venta.id}. Initial anulado_individualmente: {detalle.anulado_individualmente}")
         except DetalleVenta.DoesNotExist:
+            logger.error(f"anular_detalle: DetalleVenta with ID {detalle_id} not found within venta {venta.id}.")
             return Response({"detail": "Detalle de venta no encontrado en esta venta."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"anular_detalle: Unexpected error finding DetalleVenta: {e}")
+            return Response({"detail": "Error interno al buscar el detalle de venta."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Asumiendo que tienes un campo `anulado_individualmente` en tu modelo DetalleVenta
-        # Si no lo tienes, deberías añadirlo o manejar la lógica de otra manera.
-        if hasattr(detalle, 'anulado_individualmente') and detalle.anulado_individualmente: 
-             return Response({"detail": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
+        if detalle.anulado_individualmente:
+            logger.warning(f"anular_detalle: Detalle {detalle.id} already individually annulled. Returning 400.")
+            return Response({"detail": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Revertir stock del producto
         producto = detalle.producto
-        producto.stock += detalle.cantidad # Sumar la cantidad de vuelta al stock
-        producto.save()
+        if producto:
+            logger.info(f"anular_detalle: Product {producto.id} stock BEFORE update: {producto.stock}")
+            producto.stock += detalle.cantidad
+            producto.save()
+            logger.info(f"anular_detalle: Product {producto.id} stock AFTER update: {producto.stock}")
+        else:
+            logger.warning(f"anular_detalle: Product for detail {detalle.id} is None. Stock not reverted.")
 
-        # Marcar el detalle como anulado individualmente (si el campo existe)
-        if hasattr(detalle, 'anulado_individualmente'):
-            detalle.anulado_individualmente = True 
-            detalle.save()
+        detalle.anulado_individualmente = True
+        detalle.save()
+        logger.info(f"anular_detalle: Detalle {detalle.id} marked as individually annulled. Final anulado_individualmente: {detalle.anulado_individualmente}")
 
-        # Opcional: Recalcular el total de la venta si un detalle es anulado
-        # Esto es importante para mantener la consistencia del total de la venta.
-        # Si el campo `anulado_individualmente` no existe, se recalcularía el total
-        # de la venta sin considerar los detalles anulados manualmente.
+        # Recalcular el total de la venta
+        # Es crucial que esta agregación NO incluya los detalles anulados individualmente
         venta.total = venta.detalles.filter(anulado_individualmente=False).aggregate(total=Coalesce(Sum('subtotal'), Value(Decimal('0.0'))))['total']
         venta.save()
+        logger.info(f"anular_detalle: Venta {venta.id} total recalculated. New total: {venta.total}")
 
         return Response({"detail": "Detalle de venta anulado y stock revertido con éxito."}, status=status.HTTP_200_OK)
 
@@ -305,13 +298,10 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ['fecha_creacion', 'subtotal']
 
     def get_queryset(self):
-        """
-        Todos los usuarios autenticados solo pueden ver detalles de venta de su tienda asignada.
-        """
         user = self.request.user
         if user.is_authenticated and user.tienda:
             return DetalleVenta.objects.filter(venta__tienda=user.tienda).select_related('venta__tienda', 'producto')
-        return DetalleVenta.objects.none()
+        return DetalleVeno.objects.none()
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -324,14 +314,12 @@ class DashboardMetricsView(APIView):
     def get(self, request, *args, **kwargs):
         user = request.user
         
-        # Las métricas siempre se filtran por la tienda del usuario autenticado
         ventas_queryset = Venta.objects.all()
         if user.is_authenticated and user.tienda:
             ventas_queryset = ventas_queryset.filter(tienda=user.tienda)
         else:
             return Response({"detail": "No tienes una tienda asignada o permisos suficientes para ver métricas."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Obtener el período de tiempo de los parámetros de la URL
         period = request.query_params.get('period', 'day') 
         end_date = timezone.now()
         start_date = end_date
@@ -357,12 +345,11 @@ class DashboardMetricsView(APIView):
         total_ventas_periodo = total_ventas_periodo_agg['total']
 
         total_productos_vendidos_periodo_agg = DetalleVenta.objects.filter(
-            venta__in=ventas_queryset
+            venta__in=ventas_queryset, anulado_individualmente=False
         ).aggregate(total_cantidad=Coalesce(Sum('cantidad'), Value(0))) 
         total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad']
 
 
-        # Agregación de ventas por período (día, semana, mes)
         if period == 'day':
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=F('fecha_venta__hour')
@@ -396,7 +383,7 @@ class DashboardMetricsView(APIView):
 
 
         productos_mas_vendidos = DetalleVenta.objects.filter(
-            venta__in=ventas_queryset
+            venta__in=ventas_queryset, anulado_individualmente=False
         ).values('producto__nombre').annotate(
             cantidad_total=Coalesce(Sum('cantidad'), Value(0)) 
         ).order_by('-cantidad_total')[:5]
