@@ -1,6 +1,6 @@
 # BONITO_AMOR/backend/inventario/views.py
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action # Asegúrate de que 'action' esté importado
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -19,7 +19,7 @@ from .models import (
 )
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
-    VentaSerializer, DetalleVentaSerializer, # Asegúrate de que DetalleVentaSerializer esté importado
+    VentaSerializer, DetalleVentaSerializer, 
     MetodoPagoSerializer,
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
@@ -76,10 +76,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
 class CategoriaViewSet(viewsets.ModelViewSet):
     queryset = Categoria.objects.all()
     serializer_class = CategoriaSerializer
-    # Las categorías pueden ser gestionadas por staff/superusuarios, y son globales.
-    # Si fueran por tienda, necesitarían un campo 'tienda' en el modelo Categoria
-    # y un get_queryset similar al de Producto.
-    permission_classes = [IsAuthenticated] # Ajusta si solo superusuarios deben gestionar categorías
+    permission_classes = [IsAuthenticated] 
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['nombre']
     ordering_fields = ['nombre', 'fecha_creacion']
@@ -88,7 +85,7 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
-    permission_classes = [AllowAny] # Las tiendas pueden ser listadas por cualquiera para el login
+    permission_classes = [AllowAny] 
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -120,11 +117,9 @@ class UserViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.is_authenticated and user.tienda:
-            # Un usuario autenticado solo puede crear usuarios en su propia tienda
             if 'tienda' in self.request.data and self.request.data['tienda'] != str(user.tienda.id):
                 raise serializers.ValidationError({"tienda": "No tienes permiso para asignar usuarios a otra tienda."})
             
-            # Solo superusuarios pueden crear otros superusuarios
             if self.request.data.get('is_superuser', False) and not user.is_superuser:
                 raise serializers.ValidationError({"is_superuser": "No tienes permiso para crear superusuarios."})
             
@@ -137,15 +132,12 @@ class UserViewSet(viewsets.ModelViewSet):
         instance_tienda = serializer.instance.tienda
 
         if user.is_authenticated and user.tienda:
-            # Un usuario autenticado solo puede actualizar usuarios de su propia tienda
             if instance_tienda != user.tienda:
                 raise serializers.ValidationError("No tienes permiso para actualizar usuarios de otra tienda.")
             
-            # Solo superusuarios pueden cambiar el estado de superusuario
             if 'is_superuser' in self.request.data and self.request.data['is_superuser'] != serializer.instance.is_superuser and not user.is_superuser:
                 raise serializers.ValidationError({"is_superuser": "No tienes permiso para cambiar el estado de superusuario."})
             
-            # Un usuario autenticado no puede cambiar la tienda de un usuario
             if 'tienda' in self.request.data and self.request.data['tienda'] != str(instance_tienda.id):
                 raise serializers.ValidationError({"tienda": "No tienes permiso para cambiar la tienda de un usuario."})
             
@@ -158,7 +150,6 @@ class UserViewSet(viewsets.ModelViewSet):
         instance_tienda = instance.tienda
 
         if user.is_authenticated and user.tienda:
-            # Un usuario autenticado solo puede eliminar usuarios de su propia tienda
             if instance_tienda != user.tienda:
                 raise serializers.ValidationError("No tienes permiso para eliminar usuarios de otra tienda.")
             instance.delete()
@@ -169,8 +160,7 @@ class UserViewSet(viewsets.ModelViewSet):
 class MetodoPagoViewSet(viewsets.ModelViewSet):
     queryset = MetodoPago.objects.all()
     serializer_class = MetodoPagoSerializer
-    # Los métodos de pago son globales para todas las tiendas, pero gestionados por autenticados.
-    permission_classes = [IsAuthenticated] # Ajusta si solo superusuarios deben gestionar métodos de pago
+    permission_classes = [IsAuthenticated] 
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['nombre']
     ordering_fields = ['nombre', 'fecha_creacion']
@@ -190,9 +180,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         return VentaSerializer
 
     def get_queryset(self):
-        """
-        Todos los usuarios autenticados solo pueden ver ventas de su tienda asignada.
-        """
         user = self.request.user
         if user.is_authenticated and user.tienda:
             return Venta.objects.filter(tienda=user.tienda).select_related('usuario', 'tienda')
@@ -201,7 +188,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.is_authenticated and user.tienda:
-            # Usuario autenticado solo puede crear ventas para su propia tienda
             if 'tienda' in self.request.data and self.request.data['tienda'] != str(user.tienda.id):
                 raise serializers.ValidationError({"tienda": "No tienes permiso para crear ventas en otra tienda."})
             serializer.save(usuario=user, tienda=user.tienda)
@@ -226,10 +212,89 @@ class VentaViewSet(viewsets.ModelViewSet):
         else:
             raise serializers.ValidationError("No tienes permisos para eliminar ventas de otra tienda.")
 
+    # ====================================================================
+    # ACCIONES PERSONALIZADAS: ANULAR VENTA Y ANULAR DETALLE DE VENTA
+    # ====================================================================
+
+    @action(detail=True, methods=['patch']) # <--- ESTE DECORADOR ES CLAVE
+    def anular(self, request, pk=None):
+        """
+        Anula una venta completa y revierte el stock de los productos.
+        Requiere que la venta no esté ya anulada.
+        """
+        try:
+            venta = self.get_queryset().get(pk=pk)
+        except Venta.DoesNotExist:
+            return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Verificar si la venta ya está anulada
+        if venta.anulada:
+            return Response({"detail": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Revertir stock de productos de todos los detalles de la venta
+        for detalle in venta.detalles.all():
+            producto = detalle.producto
+            producto.stock += detalle.cantidad # Sumar la cantidad de vuelta al stock
+            producto.save()
+
+        # Marcar la venta como anulada
+        venta.anulada = True
+        venta.save()
+        return Response({"detail": "Venta anulada y stock revertido con éxito."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['patch']) # <--- ESTE DECORADOR ES CLAVE
+    def anular_detalle(self, request, pk=None):
+        """
+        Anula un detalle de venta específico y revierte el stock de ese producto.
+        Requiere el 'detalle_id' en el cuerpo de la solicitud.
+        """
+        try:
+            venta = self.get_queryset().get(pk=pk)
+        except Venta.DoesNotExist:
+            return Response({"detail": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        # No permitir anular detalles si la venta completa ya está anulada
+        if venta.anulada:
+            return Response({"detail": "La venta completa ya está anulada, no se pueden anular detalles individuales."}, status=status.HTTP_400_BAD_REQUEST)
+
+        detalle_id = request.data.get('detalle_id')
+        if not detalle_id:
+            return Response({"detail": "Se requiere el ID del detalle de venta."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Buscar el detalle de venta dentro de la venta actual
+            detalle = venta.detalles.get(id=detalle_id)
+        except DetalleVenta.DoesNotExist:
+            return Response({"detail": "Detalle de venta no encontrado en esta venta."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Asumiendo que tienes un campo `anulado_individualmente` en tu modelo DetalleVenta
+        # Si no lo tienes, deberías añadirlo o manejar la lógica de otra manera.
+        if hasattr(detalle, 'anulado_individualmente') and detalle.anulado_individualmente: 
+             return Response({"detail": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Revertir stock del producto
+        producto = detalle.producto
+        producto.stock += detalle.cantidad # Sumar la cantidad de vuelta al stock
+        producto.save()
+
+        # Marcar el detalle como anulado individualmente (si el campo existe)
+        if hasattr(detalle, 'anulado_individualmente'):
+            detalle.anulado_individualmente = True 
+            detalle.save()
+
+        # Opcional: Recalcular el total de la venta si un detalle es anulado
+        # Esto es importante para mantener la consistencia del total de la venta.
+        # Si el campo `anulado_individualmente` no existe, se recalcularía el total
+        # de la venta sin considerar los detalles anulados manualmente.
+        venta.total = venta.detalles.filter(anulado_individualmente=False).aggregate(total=Coalesce(Sum('subtotal'), Value(Decimal('0.0'))))['total']
+        venta.save()
+
+        return Response({"detail": "Detalle de venta anulado y stock revertido con éxito."}, status=status.HTTP_200_OK)
+
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all().select_related('venta__tienda', 'producto')
-    serializer_class = DetalleVentaSerializer # CORRECCIÓN CLAVE: Cambiado de DetalleVallerySerializer
+    serializer_class = DetalleVentaSerializer 
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
