@@ -177,7 +177,8 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
 
 class VentaViewSet(viewsets.ModelViewSet):
-    queryset = Venta.objects.all().select_related('usuario', 'metodo_pago', 'tienda')
+    # CORRECCIÓN CLAVE: Eliminar 'metodo_pago' de select_related
+    queryset = Venta.objects.all().select_related('usuario', 'tienda') 
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
@@ -195,7 +196,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         """
         user = self.request.user
         if user.is_authenticated and user.tienda:
-            return Venta.objects.filter(tienda=user.tienda).select_related('usuario', 'metodo_pago', 'tienda')
+            # CORRECCIÓN CLAVE: Eliminar 'metodo_pago' de select_related aquí también
+            return Venta.objects.filter(tienda=user.tienda).select_related('usuario', 'tienda')
         return Venta.objects.none()
 
     def perform_create(self, serializer):
@@ -229,7 +231,7 @@ class VentaViewSet(viewsets.ModelViewSet):
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all().select_related('venta__tienda', 'producto')
-    serializer_class = DetalleVentaSerializer
+    serializer_class = DetalleVallerySerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
@@ -267,11 +269,11 @@ class DashboardMetricsView(APIView):
             return Response({"detail": "No tienes una tienda asignada o permisos suficientes para ver métricas."}, status=status.HTTP_403_FORBIDDEN)
 
         # Obtener el período de tiempo de los parámetros de la URL
-        period = request.query_params.get('period', 'week') # default to 'week'
+        period = request.query_params.get('period', 'day') # CAMBIO: Default a 'day'
         end_date = timezone.now()
         start_date = end_date
 
-        period_label = "Última Semana"
+        period_label = "Últimas 24 Horas" # CAMBIO: Label por defecto para 'day'
 
         if period == 'day':
             start_date = end_date - timedelta(days=1)
@@ -288,14 +290,12 @@ class DashboardMetricsView(APIView):
 
         ventas_queryset = ventas_queryset.filter(fecha_venta__range=[start_date, end_date], anulada=False)
 
-        # CORRECCIÓN CLAVE: Ejecutar .aggregate() y luego acceder al valor
         total_ventas_periodo_agg = ventas_queryset.aggregate(total=Coalesce(Sum('total'), Value(Decimal('0.0'))))
         total_ventas_periodo = total_ventas_periodo_agg['total']
 
-        # CORRECCIÓN CLAVE: Ejecutar .aggregate() y luego acceder al valor
         total_productos_vendidos_periodo_agg = DetalleVenta.objects.filter(
             venta__in=ventas_queryset
-        ).aggregate(total_cantidad=Coalesce(Sum('cantidad'), Value(0))) # Value(0) para IntegerField
+        ).aggregate(total_cantidad=Coalesce(Sum('cantidad'), Value(0))) 
         total_productos_vendidos_periodo = total_productos_vendidos_periodo_agg['total_cantidad']
 
 
@@ -351,8 +351,8 @@ class DashboardMetricsView(APIView):
         ).order_by('-monto_total')
 
         metrics = {
-            "total_ventas_periodo": total_ventas_periodo, # Ahora es un valor numérico
-            "total_productos_vendidos_periodo": total_productos_vendidos_periodo, # Ahora es un valor numérico
+            "total_ventas_periodo": total_ventas_periodo, 
+            "total_productos_vendidos_periodo": total_productos_vendidos_periodo, 
             "ventas_agrupadas_por_periodo": {
                 "label": period_label,
                 "data": list(ventas_agrupadas_por_periodo)
