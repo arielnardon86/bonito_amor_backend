@@ -5,10 +5,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, F, Count, Value, Q # Importar Q para condiciones OR
-from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour # Nuevas funciones de extracción
+from django.db.models import Sum, F, Count, Value, Q 
+from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour 
 from django.utils import timezone
-from datetime import timedelta, datetime # Importar datetime
+from datetime import timedelta, datetime 
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from decimal import Decimal
@@ -24,7 +24,7 @@ from .models import (
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, 
-    MetodoPagoSerializer, # Asegurarse de que MetodoPagoSerializer esté importado
+    MetodoPagoSerializer, 
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer
 )
@@ -49,7 +49,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return Producto.objects.none()
 
     def perform_create(self, serializer):
-        # Asignar la tienda del usuario autenticado si no es superusuario
         if not self.request.user.is_superuser:
             serializer.save(tienda=self.request.user.tienda)
         else:
@@ -82,7 +81,7 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.all()
         elif user.is_staff and user.tienda:
             return User.objects.filter(tienda=user.tienda)
-        return User.objects.filter(id=user.id) # Un usuario normal solo puede verse a sí mismo
+        return User.objects.filter(id=user.id)
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def me(self, request):
@@ -90,12 +89,29 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+class DetalleVentaViewSet(viewsets.ModelViewSet): # RE-INTRODUCIDO ESTE VIEWSET
+    queryset = DetalleVenta.objects.all()
+    serializer_class = DetalleVentaSerializer
+    permission_classes = [IsAuthenticated]
+    # Puedes añadir filtros o permisos más específicos si necesitas gestionar detalles de venta directamente
+    # Por ahora, solo lo reintroducimos para satisfacer urls.py
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return DetalleVenta.objects.all()
+        elif user.tienda:
+            # Solo permitir ver detalles de ventas de su tienda
+            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
+        return DetalleVenta.objects.none()
+
+
 class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_class = VentaFilter # Usar el filtro personalizado
+    filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
 
     def get_serializer_class(self):
@@ -112,7 +128,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         return Venta.objects.none()
 
     def perform_create(self, serializer):
-        # La lógica de usuario y tienda ya está en VentaCreateSerializer.create
         serializer.save()
 
     @action(detail=True, methods=['patch'], permission_classes=[IsAuthenticated])
@@ -125,17 +140,16 @@ class VentaViewSet(viewsets.ModelViewSet):
         if venta.anulada:
             return Response({"detail": "La venta ya está anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Revertir stock de todos los productos en la venta
         for detalle in venta.detalles.all():
-            if not detalle.anulado_individualmente: # Solo revertir si no ha sido anulado individualmente
+            if not detalle.anulado_individualmente: 
                 producto = detalle.producto
                 producto.stock += detalle.cantidad
                 producto.save()
-                detalle.anulado_individualmente = True # Marcar también el detalle como anulado
+                detalle.anulado_individualmente = True 
                 detalle.save()
 
         venta.anulada = True
-        venta.total = Decimal('0.00') # Establecer el total a 0
+        venta.total = Decimal('0.00') 
         venta.save()
         
         serializer = self.get_serializer(venta)
@@ -165,17 +179,13 @@ class VentaViewSet(viewsets.ModelViewSet):
             logger.warning(f"anular_detalle: Venta {pk} is already fully annulled. Cannot annul individual detail.")
             return Response({"detail": "La venta completa ya está anulada. No se puede anular un detalle individualmente."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Revertir stock del producto
         producto = detalle.producto
         producto.stock += detalle.cantidad
         producto.save()
 
-        # Marcar el detalle como anulado individualmente
         detalle.anulado_individualmente = True
         detalle.save()
 
-        # Recalcular el total de la venta
-        # Suma los subtotales de los detalles NO anulados individualmente
         total_venta_actualizado = sum(
             d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente
         )
@@ -193,7 +203,7 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
 
 class DashboardMetricsView(APIView):
-    permission_classes = [IsAuthenticated, IsAdminUser] # Solo superusuarios pueden ver métricas
+    permission_classes = [IsAuthenticated, IsAdminUser] 
 
     def get(self, request, *args, **kwargs):
         user = request.user
@@ -210,19 +220,14 @@ class DashboardMetricsView(APIView):
         except Tienda.DoesNotExist:
             return Response({"detail": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Obtener filtros del request
         year_filter = request.query_params.get('year')
         month_filter = request.query_params.get('month')
         day_filter = request.query_params.get('day')
         seller_id_filter = request.query_params.get('seller_id')
         payment_method_filter = request.query_params.get('payment_method')
 
-        # Construir el queryset base para ventas
-        # Excluir ventas completamente anuladas (anulada=True)
-        # Excluir ventas donde el total es 0 (lo que indica que todos los detalles fueron anulados individualmente)
         ventas_queryset = Venta.objects.filter(tienda=tienda).exclude(anulada=True).exclude(total=Decimal('0.00'))
 
-        # Aplicar filtros de fecha
         if year_filter:
             try:
                 year_filter = int(year_filter)
@@ -244,30 +249,27 @@ class DashboardMetricsView(APIView):
             except ValueError:
                 return Response({"detail": "Día inválido."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Aplicar filtro de vendedor
         if seller_id_filter:
             ventas_queryset = ventas_queryset.filter(usuario__id=seller_id_filter)
 
-        # Aplicar filtro de método de pago
         if payment_method_filter:
             ventas_queryset = ventas_queryset.filter(metodo_pago=payment_method_filter)
 
-        # --- Métricas de Resumen (Total Ventas y Total Productos Vendidos) ---
         total_ventas_periodo = ventas_queryset.aggregate(
             sum_total=Coalesce(Sum('total'), Value(Decimal('0.0')))
         )['sum_total']
 
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
-            venta__in=ventas_queryset, # Solo detalles de ventas no anuladas
-            anulado_individualmente=False # Excluir detalles anulados individualmente
+            venta__in=ventas_queryset, 
+            anulado_individualmente=False 
         ).aggregate(
             sum_cantidad=Coalesce(Sum('cantidad'), Value(0))
         )['sum_cantidad']
 
-        # --- Ventas Agrupadas por Período (para el gráfico de barras) ---
-        # Determinar el tipo de agrupación y la etiqueta del período
+        # Lógica de agrupación para el gráfico de barras
+        period_label = "Período" # Etiqueta por defecto
+        
         if day_filter and month_filter and year_filter:
-            # Agrupar por hora si se filtra por día específico
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=ExtractHour('fecha_venta')
             ).values('periodo').annotate(
@@ -275,7 +277,6 @@ class DashboardMetricsView(APIView):
             ).order_by('periodo')
             period_label = "Hora del Día"
         elif month_filter and year_filter:
-            # Agrupar por día si se filtra por mes específico
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=ExtractDay('fecha_venta')
             ).values('periodo').annotate(
@@ -283,7 +284,6 @@ class DashboardMetricsView(APIView):
             ).order_by('periodo')
             period_label = "Día del Mes"
         elif year_filter:
-            # Agrupar por mes si se filtra por año específico
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=ExtractMonth('fecha_venta')
             ).values('periodo').annotate(
@@ -291,38 +291,46 @@ class DashboardMetricsView(APIView):
             ).order_by('periodo')
             period_label = "Mes del Año"
         else:
-            # Por defecto, agrupar por mes del año actual si no hay filtros específicos de fecha
-            # O puedes elegir otro default, como por año si no hay filtros de fecha
-            # Para este caso, vamos a agrupar por mes si solo hay filtro de tienda
+            # Si no hay filtros de fecha específicos, agrupar por mes del año actual
+            # Esto se alinea con el comportamiento por defecto del frontend de mostrar el día actual
+            # pero si el usuario no selecciona nada, la API debería dar una agrupación por defecto razonable
+            # Podríamos aquí decidir agrupar por día de la semana, o por mes del año en curso.
+            # Para mantener la coherencia con el frontend que inicia con "día", si no hay filtros específicos,
+            # podríamos agrupar por hora del día actual, o por día del mes actual.
+            # Para simplificar y evitar un datetime.now() aquí que podría no coincidir con el frontend si no se refresca,
+            # mantendremos una agrupación por mes si no hay filtros de día/mes/año.
+            # Sin embargo, el frontend enviará siempre year, month, day por defecto.
+            # Así que esta rama 'else' es menos probable que se ejecute si el frontend siempre envía los parámetros.
+            # Si el frontend envía solo 'year', entonces 'year_filter' será True.
+            # Si el frontend envía 'year' y 'month', entonces 'month_filter' y 'year_filter' serán True.
+            # Si el frontend envía 'year', 'month', 'day', entonces 'day_filter', 'month_filter', 'year_filter' serán True.
+            # Por lo tanto, esta rama 'else' solo se ejecutaría si *ningún* filtro de fecha es enviado,
+            # lo cual no debería pasar con el frontend actual.
+            # Sin embargo, para un fallback robusto, podemos agrupar por mes.
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=ExtractMonth('fecha_venta')
             ).values('periodo').annotate(
                 total_ventas=Coalesce(Sum('total'), Value(Decimal('0.0')))
             ).order_by('periodo')
-            period_label = "Mes del Año" # Default si no hay filtros de fecha tan específicos
+            period_label = "Mes del Año"
 
 
-        # --- Productos Más Vendidos ---
         productos_mas_vendidos = DetalleVenta.objects.filter(
-            venta__in=ventas_queryset, # Solo detalles de ventas no anuladas
-            anulado_individualmente=False # Excluir detalles anulados individualmente
+            venta__in=ventas_queryset, 
+            anulado_individualmente=False 
         ).values('producto__nombre').annotate(
             cantidad_total=Coalesce(Sum('cantidad'), Value(0)) 
         ).order_by('-cantidad_total')[:5]
 
-        # --- Ventas por Usuario ---
         ventas_por_usuario = ventas_queryset.values(
             'usuario__username', 'usuario__first_name', 'usuario__last_name' 
         ).annotate(
             monto_total_vendido=Coalesce(Sum('total'), Value(Decimal('0.0'))),
-            # CAMBIO: Contar solo ventas con total > 0 para 'cantidad_ventas'
             cantidad_ventas=Coalesce(Count('id', filter=Q(total__gt=Decimal('0.00'))), Value(0)) 
         ).order_by('-monto_total_vendido')
 
-        # --- Ventas por Método de Pago ---
         ventas_por_metodo_pago = ventas_queryset.values('metodo_pago').annotate( 
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
-            # CAMBIO: Contar solo ventas con total > 0 para 'cantidad_ventas'
             cantidad_ventas=Coalesce(Count('id', filter=Q(total__gt=Decimal('0.00'))), Value(0))
         ).order_by('-monto_total')
 
