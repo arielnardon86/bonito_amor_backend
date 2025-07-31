@@ -10,7 +10,8 @@ from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, Extr
 from django.utils import timezone
 from datetime import timedelta, datetime 
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView # Importar TokenObtainPairView
+
 from decimal import Decimal
 import logging
 
@@ -26,7 +27,7 @@ from .serializers import (
     VentaSerializer, DetalleVentaSerializer, 
     MetodoPagoSerializer, 
     VentaCreateSerializer,
-    CustomTokenObtainPairSerializer
+    CustomTokenObtainPairSerializer # Importar el serializer personalizado
 )
 from .filters import VentaFilter 
 
@@ -89,19 +90,16 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class DetalleVentaViewSet(viewsets.ModelViewSet): # RE-INTRODUCIDO ESTE VIEWSET
+class DetalleVentaViewSet(viewsets.ModelViewSet): 
     queryset = DetalleVenta.objects.all()
     serializer_class = DetalleVentaSerializer
     permission_classes = [IsAuthenticated]
-    # Puedes añadir filtros o permisos más específicos si necesitas gestionar detalles de venta directamente
-    # Por ahora, solo lo reintroducimos para satisfacer urls.py
 
     def get_queryset(self):
         user = self.request.user
         if user.is_superuser:
             return DetalleVenta.objects.all()
         elif user.tienda:
-            # Solo permitir ver detalles de ventas de su tienda
             return DetalleVenta.objects.filter(venta__tienda=user.tienda)
         return DetalleVenta.objects.none()
 
@@ -266,8 +264,7 @@ class DashboardMetricsView(APIView):
             sum_cantidad=Coalesce(Sum('cantidad'), Value(0))
         )['sum_cantidad']
 
-        # Lógica de agrupación para el gráfico de barras
-        period_label = "Período" # Etiqueta por defecto
+        period_label = "Período" 
         
         if day_filter and month_filter and year_filter:
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
@@ -291,22 +288,6 @@ class DashboardMetricsView(APIView):
             ).order_by('periodo')
             period_label = "Mes del Año"
         else:
-            # Si no hay filtros de fecha específicos, agrupar por mes del año actual
-            # Esto se alinea con el comportamiento por defecto del frontend de mostrar el día actual
-            # pero si el usuario no selecciona nada, la API debería dar una agrupación por defecto razonable
-            # Podríamos aquí decidir agrupar por día de la semana, o por mes del año en curso.
-            # Para mantener la coherencia con el frontend que inicia con "día", si no hay filtros específicos,
-            # podríamos agrupar por hora del día actual, o por día del mes actual.
-            # Para simplificar y evitar un datetime.now() aquí que podría no coincidir con el frontend si no se refresca,
-            # mantendremos una agrupación por mes si no hay filtros de día/mes/año.
-            # Sin embargo, el frontend enviará siempre year, month, day por defecto.
-            # Así que esta rama 'else' es menos probable que se ejecute si el frontend siempre envía los parámetros.
-            # Si el frontend envía solo 'year', entonces 'year_filter' será True.
-            # Si el frontend envía 'year' y 'month', entonces 'month_filter' y 'year_filter' serán True.
-            # Si el frontend envía 'year', 'month', 'day', entonces 'day_filter', 'month_filter', 'year_filter' serán True.
-            # Por lo tanto, esta rama 'else' solo se ejecutaría si *ningún* filtro de fecha es enviado,
-            # lo cual no debería pasar con el frontend actual.
-            # Sin embargo, para un fallback robusto, podemos agrupar por mes.
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
                 periodo=ExtractMonth('fecha_venta')
             ).values('periodo').annotate(
@@ -348,3 +329,10 @@ class DashboardMetricsView(APIView):
 
         return Response(metrics, status=status.HTTP_200_OK)
 
+
+class CustomTokenObtainPairView(TokenObtainPairView): # RE-INTRODUCIDO ESTA CLASE DE VISTA
+    """
+    Vista personalizada para la obtención de tokens JWT.
+    Utiliza un serializer personalizado para incluir más datos del usuario.
+    """
+    serializer_class = CustomTokenObtainPairSerializer
