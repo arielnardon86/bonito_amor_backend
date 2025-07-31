@@ -1,43 +1,12 @@
 # BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate # Aunque no se usa directamente en este snippet, se mantiene si es necesario en otras partes
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import (
     User, Tienda, Categoria, Producto, Venta, DetalleVenta,
     MetodoPago
 )
 from decimal import Decimal # Importar Decimal para cálculos precisos
-
-
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """
-    Serializer personalizado para JWT que incluye información del usuario
-    y sus tiendas al iniciar sesión.
-    """
-    @classmethod
-    def get_token(cls, user):
-        token = super().get_token(user)
-        # Añadir información adicional al token
-        token['username'] = user.username
-        token['email'] = user.email
-        token['is_staff'] = user.is_staff
-        token['is_superuser'] = user.is_superuser
-        if user.tienda:
-            token['tienda_id'] = str(user.tienda.id)
-            token['tienda_nombre'] = user.tienda.nombre
-        else:
-            token['tienda_id'] = None
-            token['tienda_nombre'] = None
-        return token
-
-    def validate(self, attrs):
-        data = super().validate(attrs)
-        # Añadir la información de tiendas al response
-        user = self.user
-        tiendas = Tienda.objects.all() # Obtener todas las tiendas
-        data['user'] = UserSerializer(user).data
-        data['stores'] = TiendaSerializer(tiendas, many=True).data # Serializar todas las tiendas
-        return data
 
 
 class TiendaSerializer(serializers.ModelSerializer):
@@ -102,22 +71,28 @@ class ProductoSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
 
 
+class MetodoPagoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MetodoPago
+        fields = '__all__'
+        read_only_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
+
+
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     precio_unitario_venta = serializers.DecimalField(source='precio_unitario', max_digits=10, decimal_places=2, read_only=True)
-    # CAMBIO CLAVE: Asegurarse de que 'anulado_individualmente' sea un campo explícito
-    anulado_individualmente = serializers.BooleanField(read_only=True)
+    anulado_individualmente = serializers.BooleanField(read_only=True) # Asegurarse de que el campo esté aquí
 
     class Meta:
         model = DetalleVenta
         fields = [
             'id', 'venta', 'producto', 'producto_nombre', 'cantidad',
             'precio_unitario', 'precio_unitario_venta', 'subtotal',
-            'anulado_individualmente' # Incluir el campo
+            'anulado_individualmente'
         ]
         read_only_fields = [
             'subtotal', 'venta', 'id', 'producto_nombre', 'precio_unitario',
-            'precio_unitario_venta', 'anulado_individualmente' # También read-only
+            'precio_unitario_venta', 'anulado_individualmente'
         ]
 
 
@@ -209,3 +184,27 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         venta.total = total_venta
         venta.save()
         return venta
+
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Serializer personalizado para JWT que incluye información del usuario
+    y sus tiendas al iniciar sesión. (Esta clase se ha movido al final)
+    """
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token['username'] = user.username
+        token['email'] = user.email
+        token['is_staff'] = user.is_staff
+        token['is_superuser'] = user.is_superuser
+        if user.tienda:
+            token['tienda_id'] = str(user.tienda.id)
+            token['tienda_nombre'] = user.tienda.nombre
+        return token
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        # Aquí puedes añadir más datos al response del token si es necesario
+        # Por ejemplo, la lista de tiendas del usuario, etc.
+        return data
