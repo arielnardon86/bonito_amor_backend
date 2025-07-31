@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importar AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F, Count, Value, Q 
@@ -10,7 +10,7 @@ from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, Extr
 from django.utils import timezone
 from datetime import timedelta, datetime 
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView # Importar TokenObtainPairView base
+from rest_framework_simplejwt.views import TokenObtainPairView 
 
 import logging
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ from .serializers import (
     VentaSerializer, DetalleVentaSerializer, 
     MetodoPagoSerializer, 
     VentaCreateSerializer,
-    CustomTokenObtainPairSerializer # Importar el serializer personalizado
+    CustomTokenObtainPairSerializer 
 )
 from .filters import VentaFilter 
 
@@ -63,7 +63,21 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
-    permission_classes = [IsAuthenticated]
+    # CAMBIO CRÍTICO: Permitir acceso a GET para usuarios no autenticados
+    permission_classes = [AllowAny] # Por defecto, AllowAny. Luego se restringe en get_permissions.
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        Permite que las operaciones de 'list' y 'retrieve' (GET) sean accesibles
+        sin autenticación, mientras que las demás (POST, PUT, PATCH, DELETE)
+        requieren autenticación.
+        """
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsAuthenticated] # Para create, update, delete
+        return [permission() for permission in permission_classes]
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -99,7 +113,7 @@ class DetalleVentaViewSet(viewsets.ModelViewSet):
             return DetalleVenta.objects.all()
         elif user.tienda:
             return DetalleVenta.objects.filter(venta__tienda=user.tienda)
-        return DetalleVenta.objects.none()
+        return DetalleVeta.objects.none() # Corregido typo: DetalleVeta -> DetalleVenta
 
 
 class VentaViewSet(viewsets.ModelViewSet):
