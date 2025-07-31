@@ -10,11 +10,9 @@ from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, Extr
 from django.utils import timezone
 from datetime import timedelta, datetime 
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView # Importar TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView # Importar TokenObtainPairView base
 
-from decimal import Decimal
 import logging
-
 logger = logging.getLogger(__name__)
 
 
@@ -330,7 +328,7 @@ class DashboardMetricsView(APIView):
         return Response(metrics, status=status.HTTP_200_OK)
 
 
-class CustomTokenObtainPairView(TokenObtainPairView): # RE-INTRODUCIDO ESTA CLASE DE VISTA
+class CustomTokenObtainPairView(TokenObtainPairView): 
     """
     Vista personalizada para la obtención de tokens JWT.
     Utiliza un serializer personalizado para incluir más datos del usuario.
