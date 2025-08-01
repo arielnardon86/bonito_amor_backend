@@ -33,7 +33,7 @@ class VentaFilter(django_filters.FilterSet):
             # A sale is considered "annulled" if:
             # 1. Its 'anulada' field is True (complete sale annulment)
             # OR
-            # 2. Its 'anulada' field is False, but there is NO active detail for that sale
+            # 2. Its 'anulada' field is False, but NO active detail exists for that sale.
             #    (i.e., all its details are individually annulled).
             
             # Subquery to check if there is at least one detail NOT individually annulled
@@ -46,7 +46,7 @@ class VentaFilter(django_filters.FilterSet):
             # OR by sales that are not completely annulled (anulada=False) AND
             # do not have active details (i.e., all their details are individually annulled).
             queryset = queryset.filter(
-                Q(anulada=True) | (Q(anulada=False) & ~Exists(has_active_details)) # Corrected syntax here
+                Q(anulada=True) | (Q(anulada=False) & ~Exists(has_active_details)) 
             )
         else: # If the value is False (frontend sends 'false'), search for NON-annulled sales
             # A sale is considered "NON-annulled" if:
@@ -62,7 +62,7 @@ class VentaFilter(django_filters.FilterSet):
             )
 
             queryset = queryset.filter(
-                Q(anulada=False) & Q(Exists(has_active_details)) # Corrected syntax here
+                Q(anulada=False) & Q(Exists(has_active_details)) 
             )
         
         return queryset
