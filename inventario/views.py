@@ -12,7 +12,7 @@ from datetime import timedelta, datetime
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView 
 
-from decimal import Decimal # <-- ¡AÑADIDA ESTA LÍNEA!
+from decimal import Decimal 
 
 import logging
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ from .serializers import (
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer 
 )
-from .filters import VentaFilter 
+from .filters import VentaFilter # <-- Asegúrate de que esta línea esté presente y correcta
 
 
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -116,7 +116,7 @@ class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_class = VentaFilter 
+    filterset_class = VentaFilter # <-- ¡Esta línea es la clave!
     ordering_fields = ['fecha_venta', 'total']
 
     def get_serializer_class(self):
