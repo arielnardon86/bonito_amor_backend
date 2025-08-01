@@ -2,7 +2,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny # Importar AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny 
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F, Count, Value, Q 
@@ -11,6 +11,8 @@ from django.utils import timezone
 from datetime import timedelta, datetime 
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView 
+
+from decimal import Decimal # <-- ¡AÑADIDA ESTA LÍNEA!
 
 import logging
 logger = logging.getLogger(__name__)
@@ -63,20 +65,13 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
-    # CAMBIO CRÍTICO: Permitir acceso a GET para usuarios no autenticados
-    permission_classes = [AllowAny] # Por defecto, AllowAny. Luego se restringe en get_permissions.
+    permission_classes = [AllowAny] 
     
     def get_permissions(self):
-        """
-        Instantiates and returns the list of permissions that this view requires.
-        Permite que las operaciones de 'list' y 'retrieve' (GET) sean accesibles
-        sin autenticación, mientras que las demás (POST, PUT, PATCH, DELETE)
-        requieren autenticación.
-        """
         if self.action in ['list', 'retrieve']:
             permission_classes = [AllowAny]
         else:
-            permission_classes = [IsAuthenticated] # Para create, update, delete
+            permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
 
 
@@ -113,7 +108,7 @@ class DetalleVentaViewSet(viewsets.ModelViewSet):
             return DetalleVenta.objects.all()
         elif user.tienda:
             return DetalleVenta.objects.filter(venta__tienda=user.tienda)
-        return DetalleVeta.objects.none() # Corregido typo: DetalleVeta -> DetalleVenta
+        return DetalleVenta.objects.none() 
 
 
 class VentaViewSet(viewsets.ModelViewSet):
