@@ -119,11 +119,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     filterset_class = VentaFilter # <-- ¡Esta línea es la clave!
     ordering_fields = ['fecha_venta', 'total']
 
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return VentaCreateSerializer
-        return VentaSerializer
-
     def get_queryset(self):
         user = self.request.user
         if user.is_superuser:
