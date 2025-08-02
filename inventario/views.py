@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny 
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, F, Count, Value, Q 
+from django.db.models import Sum, F, Count, Value, Q, Exists, OuterRef 
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour 
 from django.utils import timezone
 from datetime import timedelta, datetime 
@@ -29,7 +29,7 @@ from .serializers import (
     VentaCreateSerializer,
     CustomTokenObtainPairSerializer 
 )
-from .filters import VentaFilter # <-- Asegúrate de que esta línea esté presente y correcta
+from .filters import VentaFilter 
 
 
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -80,16 +80,33 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['tienda', 'is_staff', 'is_superuser']
+    filterset_fields = ['tienda', 'is_staff', 'is_superuser'] 
     search_fields = ['username', 'email', 'first_name', 'last_name']
 
     def get_queryset(self):
         user = self.request.user
+        queryset = User.objects.all()
+
+        # Solo los superusuarios pueden acceder a esta vista de gestión.
+        # Si no es superusuario, la redirección en el frontend ya lo maneja.
+        # Aquí, si es superusuario, aplicamos el filtro de tienda si se proporciona.
         if user.is_superuser:
-            return User.objects.all()
-        elif user.is_staff and user.tienda:
-            return User.objects.filter(tienda=user.tienda)
-        return User.objects.filter(id=user.id)
+            tienda_id = self.request.query_params.get('tienda')
+            if tienda_id:
+                queryset = queryset.filter(tienda__id=tienda_id)
+            return queryset
+        
+        # Si no es superusuario, no debería llegar aquí, pero como fallback,
+        # solo puede ver su propio perfil.
+        return queryset.filter(id=user.id)
+
+    def perform_create(self, serializer):
+        # Si el usuario que crea es un superusuario:
+        # 1. Si se envió un 'tienda_id' en la request, se usa ese.
+        # 2. Si NO se envió 'tienda_id' (es decir, el campo no estaba en el payload
+        #    o era nulo), entonces se crea el usuario sin tienda asignada.
+        #    El frontend se encargará de enviar el 'tienda_id' si hay una tienda seleccionada.
+        serializer.save()
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def me(self, request):
@@ -116,8 +133,13 @@ class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_class = VentaFilter # <-- ¡Esta línea es la clave!
+    filterset_class = VentaFilter 
     ordering_fields = ['fecha_venta', 'total']
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return VentaCreateSerializer
+        return VentaSerializer
 
     def get_queryset(self):
         user = self.request.user
@@ -226,6 +248,8 @@ class DashboardMetricsView(APIView):
         seller_id_filter = request.query_params.get('seller_id')
         payment_method_filter = request.query_params.get('payment_method')
 
+        # NOTA: Aquí el filtro de anulada se aplica a nivel de DashboardMetricsView,
+        # no a través del VentaFilter. Esto es correcto si solo se usa en esta vista.
         ventas_queryset = Venta.objects.filter(tienda=tienda).exclude(anulada=True).exclude(total=Decimal('0.00'))
 
         if year_filter:
