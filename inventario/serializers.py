@@ -69,38 +69,39 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    tienda_slug = serializers.CharField(write_only=True, required=True)
+    # CAMBIO CLAVE AQUÍ: Usar SlugRelatedField para 'tienda'
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre',  # El frontend enviará el nombre de la tienda
+        queryset=Tienda.objects.all(),
+        write_only=True,
+        required=True # Este campo es requerido
+    )
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
-    # Añadir el campo de descuento para la creación
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
-    # El total se enviará desde el frontend ya con el descuento aplicado
     total = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
 
 
     class Meta:
         model = Venta
-        fields = ['tienda_slug', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
+        # Ahora 'tienda' está directamente en los campos del serializer
+        fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
         read_only_fields = ['usuario'] # El usuario se asigna automáticamente en el backend
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        tienda_slug = validated_data.pop('tienda_slug')
+        # 'tienda' ya es el objeto Tienda gracias a SlugRelatedField
+        tienda_obj = validated_data.pop('tienda') 
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
-        descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) # Obtener el descuento
-        total_venta_final = validated_data.pop('total') # Obtener el total final del frontend
-
-        try:
-            tienda = Tienda.objects.get(nombre=tienda_slug)
-        except Tienda.DoesNotExist:
-            raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
+        descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
+        total_venta_final = validated_data.pop('total') 
 
         try:
             metodo_pago_obj = MetodoPago.objects.get(nombre=metodo_pago_nombre)
         except MetodoPago.DoesNotExist:
             raise serializers.ValidationError({"metodo_pago_nombre": "Método de pago no encontrado."})
 
-        validated_data['tienda'] = tienda
         validated_data['metodo_pago'] = metodo_pago_obj.nombre
+        validated_data['tienda'] = tienda_obj # Asignar el objeto Tienda resuelto
 
         request = self.context.get('request')
         if request and request.user.is_authenticated:
@@ -110,14 +111,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         # Crear la venta principal con el descuento y el total final
         venta = Venta.objects.create(
-            total=total_venta_final, # Asignar el total final recibido del frontend
-            descuento_porcentaje=descuento_porcentaje, # Guardar el porcentaje de descuento
+            total=total_venta_final, 
+            descuento_porcentaje=descuento_porcentaje, 
             **validated_data
         )
         
-        # No necesitamos calcular total_venta aquí, ya lo recibimos del frontend
-        # total_venta = Decimal('0.00') 
-
         for detalle_data in detalles_data:
             producto = detalle_data['producto']
             cantidad = detalle_data['cantidad']
@@ -133,13 +131,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
             subtotal = precio_unitario * cantidad
             DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
-            # total_venta += subtotal # No es necesario acumular aquí si el total ya viene del frontend
 
             producto_obj.stock -= cantidad
             producto_obj.save()
 
-        # venta.total = total_venta # Ya asignado al crear la venta
-        venta.save() # Guardar cualquier cambio adicional (aunque total ya está seteado)
+        venta.save() 
         return venta
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
