@@ -100,34 +100,32 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         except MetodoPago.DoesNotExist:
             raise serializers.ValidationError({"metodo_pago_nombre": "Método de pago no encontrado."})
 
-        validated_data['metodo_pago'] = metodo_pago_obj.nombre
-        validated_data['tienda'] = tienda_obj # Asignar el objeto Tienda resuelto
-
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            validated_data['usuario'] = request.user
+            usuario_obj = request.user
         else:
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
 
-        # Crear la venta principal con el descuento y el total final
+        # Crear la venta principal pasando explícitamente los objetos y valores
         venta = Venta.objects.create(
-            total=total_venta_final, 
-            descuento_porcentaje=descuento_porcentaje, 
-            **validated_data
+            tienda=tienda_obj, # Asignar el objeto Tienda resuelto
+            metodo_pago=metodo_pago_obj.nombre, # Asignar el nombre del método de pago
+            usuario=usuario_obj, # Asignar el usuario autenticado
+            total=total_venta_final, # Asignar el total final recibido del frontend
+            descuento_porcentaje=descuento_porcentaje, # Guardar el porcentaje de descuento
+            # Cualquier otro campo que pueda venir en validated_data si no ha sido pop'd
+            **validated_data 
         )
         
         for detalle_data in detalles_data:
-            producto = detalle_data['producto']
+            producto_id = detalle_data['producto'] # Usar el ID del producto directamente
             cantidad = detalle_data['cantidad']
             precio_unitario = detalle_data['precio_unitario']
 
-            if isinstance(producto, str):
-                try:
-                    producto_obj = Producto.objects.get(id=producto)
-                except Producto.DoesNotExist:
-                    raise serializers.ValidationError({"detalles": f"Producto con ID {producto} no encontrado."})
-            else:
-                producto_obj = producto
+            try:
+                producto_obj = Producto.objects.get(id=producto_id)
+            except Producto.DoesNotExist:
+                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado."})
 
             subtotal = precio_unitario * cantidad
             DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
