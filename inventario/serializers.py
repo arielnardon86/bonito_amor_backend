@@ -84,7 +84,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        tienda_obj = validated_data.pop('tienda') # Ya es el objeto Tienda
+        tienda_obj = validated_data.pop('tienda') # Ya es el objeto Tienda resuelto por SlugRelatedField
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
         descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
         total_venta_final = validated_data.pop('total') 
@@ -100,16 +100,19 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         else:
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
 
-        # Crear la venta principal pasando los campos explícitamente.
-        # Esto es crucial para asegurar que 'tienda' y 'usuario' se asignen correctamente.
-        venta = Venta.objects.create(
-            tienda=tienda_obj,  # Objeto Tienda ya resuelto por SlugRelatedField
-            metodo_pago=metodo_pago_obj.nombre,
-            usuario=usuario_obj,
-            total=total_venta_final,
-            descuento_porcentaje=descuento_porcentaje,
-            **validated_data # Pasar cualquier otro campo restante
-        )
+        # Construir explícitamente los argumentos para la creación de la Venta
+        venta_args = {
+            'tienda': tienda_obj,  # Objeto Tienda resuelto
+            'metodo_pago': metodo_pago_obj.nombre,
+            'usuario': usuario_obj,
+            'total': total_venta_final,
+            'descuento_porcentaje': descuento_porcentaje,
+            # Incluir cualquier otro campo que pueda estar en validated_data y no haya sido pop'd
+            **validated_data 
+        }
+
+        # Crear la venta principal
+        venta = Venta.objects.create(**venta_args)
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
@@ -127,7 +130,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_obj.stock -= cantidad
             producto_obj.save()
 
-        venta.save() 
+        # No es estrictamente necesario llamar a venta.save() aquí si todos los campos se asignaron en create()
+        # pero no hace daño y puede ser útil si se añaden más lógicas de negocio después.
+        # venta.save() 
         return venta
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
