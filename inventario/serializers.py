@@ -69,13 +69,8 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    # CAMBIO CLAVE AQUÍ: Usar SlugRelatedField para 'tienda'
-    tienda = serializers.SlugRelatedField(
-        slug_field='nombre',  # El frontend enviará el nombre de la tienda
-        queryset=Tienda.objects.all(),
-        write_only=True,
-        required=True # Este campo es requerido
-    )
+    # CAMBIO CLAVE AQUÍ: Volvemos a usar tienda_nombre para que el frontend envíe el nombre
+    tienda_nombre = serializers.CharField(write_only=True, required=True) 
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
     total = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
@@ -83,17 +78,22 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        # Ahora 'tienda' está directamente en los campos del serializer
-        fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
+        # Ahora 'tienda_nombre' está en los campos del serializer
+        fields = ['tienda_nombre', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
         read_only_fields = ['usuario'] # El usuario se asigna automáticamente en el backend
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        # 'tienda' ya es el objeto Tienda gracias a SlugRelatedField
-        tienda_obj = validated_data.pop('tienda') 
+        # Pop tienda_nombre y buscar la instancia de Tienda manualmente
+        tienda_nombre = validated_data.pop('tienda_nombre') 
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
         descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
         total_venta_final = validated_data.pop('total') 
+
+        try:
+            tienda_obj = Tienda.objects.get(nombre=tienda_nombre) # Búsqueda manual
+        except Tienda.DoesNotExist:
+            raise serializers.ValidationError({"tienda_nombre": "Tienda no encontrada."})
 
         try:
             metodo_pago_obj = MetodoPago.objects.get(nombre=metodo_pago_nombre)
