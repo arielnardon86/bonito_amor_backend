@@ -46,21 +46,19 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     precio_unitario_venta = serializers.DecimalField(source='precio_unitario', max_digits=10, decimal_places=2, read_only=True)
-    # CAMBIO: Incluir el campo 'anulado_individualmente'
     anulado_individualmente = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = DetalleVenta
         fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'precio_unitario_venta', 'subtotal', 'anulado_individualmente']
-        read_only_fields = ['subtotal', 'venta', 'anulado_individualmente'] # También read-only
+        read_only_fields = ['subtotal', 'venta', 'anulado_individualmente']
 
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
     usuario = SimpleUserSerializer(read_only=True)
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    # Incluir descuento_porcentaje en el serializer de lectura
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
-
+    tienda = TiendaSerializer(read_only=True) # Para la lectura, mostrar el objeto completo de la tienda
 
     class Meta:
         model = Venta
@@ -69,8 +67,13 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    # CAMBIO CLAVE AQUÍ: Volvemos a usar tienda_nombre para que el frontend envíe el nombre
-    tienda_nombre = serializers.CharField(write_only=True, required=True) 
+    # CAMBIO CLAVE: Usar SlugRelatedField directamente para el campo 'tienda' del modelo
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre',  # Esto le dice a DRF que espere el 'nombre' de la tienda
+        queryset=Tienda.objects.all(),
+        write_only=True,
+        required=True # El campo 'tienda' en el modelo Venta es requerido
+    )
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
     total = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
@@ -78,22 +81,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        # Ahora 'tienda_nombre' está en los campos del serializer
-        fields = ['tienda_nombre', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
+        # Ahora 'tienda' (el campo ForeignKey) está directamente en los fields del serializer
+        fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
         read_only_fields = ['usuario'] # El usuario se asigna automáticamente en el backend
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        # Pop tienda_nombre y buscar la instancia de Tienda manualmente
-        tienda_nombre = validated_data.pop('tienda_nombre') 
+        # 'tienda' ya es el objeto Tienda gracias a SlugRelatedField, no necesitamos buscarlo
+        tienda_obj = validated_data.pop('tienda') 
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
         descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
         total_venta_final = validated_data.pop('total') 
-
-        try:
-            tienda_obj = Tienda.objects.get(nombre=tienda_nombre) # Búsqueda manual
-        except Tienda.DoesNotExist:
-            raise serializers.ValidationError({"tienda_nombre": "Tienda no encontrada."})
 
         try:
             metodo_pago_obj = MetodoPago.objects.get(nombre=metodo_pago_nombre)
@@ -108,17 +106,16 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         # Crear la venta principal pasando explícitamente los objetos y valores
         venta = Venta.objects.create(
-            tienda=tienda_obj, # Asignar el objeto Tienda resuelto
+            tienda=tienda_obj, # Asignar el objeto Tienda resuelto directamente
             metodo_pago=metodo_pago_obj.nombre, # Asignar el nombre del método de pago
             usuario=usuario_obj, # Asignar el usuario autenticado
             total=total_venta_final, # Asignar el total final recibido del frontend
             descuento_porcentaje=descuento_porcentaje, # Guardar el porcentaje de descuento
-            # Cualquier otro campo que pueda venir en validated_data si no ha sido pop'd
-            **validated_data 
+            **validated_data # Pasar cualquier otro dato validado que no haya sido pop'd
         )
         
         for detalle_data in detalles_data:
-            producto_id = detalle_data['producto'] # Usar el ID del producto directamente
+            producto_id = detalle_data['producto'] 
             cantidad = detalle_data['cantidad']
             precio_unitario = detalle_data['precio_unitario']
 
