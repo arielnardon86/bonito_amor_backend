@@ -25,12 +25,11 @@ class TiendaSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class UserSerializer(serializers.ModelSerializer):
-    # CAMBIO CLAVE AQUÍ: Serializar la tienda por su nombre
     tienda = serializers.SlugRelatedField(
-        slug_field='nombre', # Indica que queremos el campo 'nombre' de la Tienda
-        queryset=Tienda.objects.all(), # Necesario para la escritura (si se permite)
-        required=False, # El campo puede ser nulo
-        allow_null=True # Permite que el campo sea nulo
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=False, 
+        allow_null=True 
     )
 
     class Meta:
@@ -58,7 +57,7 @@ class VentaSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True)
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
-    tienda = TiendaSerializer(read_only=True) # Para la lectura, mostrar el objeto completo de la tienda
+    tienda = TiendaSerializer(read_only=True) 
 
     class Meta:
         model = Venta
@@ -67,12 +66,11 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True)
-    # CAMBIO CLAVE: Usar SlugRelatedField directamente para el campo 'tienda' del modelo
     tienda = serializers.SlugRelatedField(
-        slug_field='nombre',  # Esto le dice a DRF que espere el 'nombre' de la tienda
+        slug_field='nombre',  
         queryset=Tienda.objects.all(),
         write_only=True,
-        required=True # El campo 'tienda' en el modelo Venta es requerido
+        required=True 
     )
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
@@ -81,14 +79,12 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        # Ahora 'tienda' (el campo ForeignKey) está directamente en los fields del serializer
         fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
-        read_only_fields = ['usuario'] # El usuario se asigna automáticamente en el backend
+        read_only_fields = ['usuario'] 
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        # 'tienda' ya es el objeto Tienda gracias a SlugRelatedField, no necesitamos buscarlo
-        tienda_obj = validated_data.pop('tienda') 
+        tienda_obj = validated_data.pop('tienda') # Ya es el objeto Tienda
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
         descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
         total_venta_final = validated_data.pop('total') 
@@ -104,14 +100,15 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         else:
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
 
-        # Crear la venta principal pasando explícitamente los objetos y valores
+        # Crear la venta principal pasando los campos explícitamente.
+        # Esto es crucial para asegurar que 'tienda' y 'usuario' se asignen correctamente.
         venta = Venta.objects.create(
-            tienda=tienda_obj, # Asignar el objeto Tienda resuelto directamente
-            metodo_pago=metodo_pago_obj.nombre, # Asignar el nombre del método de pago
-            usuario=usuario_obj, # Asignar el usuario autenticado
-            total=total_venta_final, # Asignar el total final recibido del frontend
-            descuento_porcentaje=descuento_porcentaje, # Guardar el porcentaje de descuento
-            **validated_data # Pasar cualquier otro dato validado que no haya sido pop'd
+            tienda=tienda_obj,  # Objeto Tienda ya resuelto por SlugRelatedField
+            metodo_pago=metodo_pago_obj.nombre,
+            usuario=usuario_obj,
+            total=total_venta_final,
+            descuento_porcentaje=descuento_porcentaje,
+            **validated_data # Pasar cualquier otro campo restante
         )
         
         for detalle_data in detalles_data:
