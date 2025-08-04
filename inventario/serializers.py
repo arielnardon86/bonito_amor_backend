@@ -127,6 +127,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         # CAMBIO CLAVE: Recargar la instancia de venta para que los detalles estén disponibles
         # Usamos select_related y prefetch_related para cargar las relaciones de una vez
         venta = Venta.objects.select_related('tienda', 'usuario').prefetch_related('detalles__producto').get(id=venta.id)
+        
+        # --- LÍNEA DE DEPURACIÓN AÑADIDA ---
+        print(f"DEBUG: Tipo de venta.detalles antes de retornar: {type(venta.detalles)}")
+        print(f"DEBUG: Contenido de venta.detalles antes de retornar: {list(venta.detalles.all())}") # Convertir a lista para ver contenido
+
         return venta
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
