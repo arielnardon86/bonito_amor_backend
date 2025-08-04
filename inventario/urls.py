@@ -1,28 +1,199 @@
-# BONITO_AMOR/backend/inventario/urls.py
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from .views import (
-    ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet, # ¡Cambiado a UserViewSet!
-    VentaViewSet, DetalleVentaViewSet,
-    # MetodoPagoViewSet, # Ya no se importa aquí, se usa PaymentMethodListView en el urls.py principal
-    # MetricasVentasViewSet # Ya no se importa aquí, se usa MetricasVentasViewSet en el urls.py principal
+# BONITO_AMOR/backend/inventario/views.py
+from django.shortcuts import render, get_object_or_404
+from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago
+from .serializers import (
+    ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
+    VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
+    CustomTokenObtainPairSerializer, VentaCreateSerializer
 )
 
-router = DefaultRouter()
-router.register(r'productos', ProductoViewSet, basename='producto') 
-router.register(r'categorias', CategoriaViewSet)
-router.register(r'tiendas', TiendaViewSet)
-router.register(r'users', UserViewSet) # Usar 'users' para que coincida con el router principal
-router.register(r'ventas', VentaViewSet, basename='venta')
-router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
-# router.register(r'metodos-pago', MetodoPagoViewSet) # Ya no se registra aquí
-# router.register(r'metricas-ventas', MetricasVentasViewSet) # Ya no se registra aquí
+class ProductoViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductoSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-urlpatterns = [
-    path('', include(router.urls)),
-    # Rutas para funciones personalizadas
-    path('productos/buscar_por_barcode/', ProductoViewSet.as_view({'get': 'buscar_por_barcode'}), name='producto-buscar-barcode'),
-    path('productos/imprimir_etiquetas/', ProductoViewSet.as_view({'get': 'imprimir_etiquetas'}), name='producto-imprimir-etiquetas'),
+    def get_queryset(self):
+        # Permite a un superusuario ver todos los productos.
+        if self.request.user.is_superuser:
+            return Producto.objects.all()
+
+        # Si no es superusuario, sólo puede ver los productos de su tienda asignada.
+        if self.request.user.tienda:
+            return Producto.objects.filter(tienda=self.request.user.tienda).order_by('nombre')
+        
+        # Si no tiene tienda asignada, no ve ningún producto.
+        return Producto.objects.none()
+
+    # Acción personalizada para buscar un producto por su código de barras
+    @action(detail=False, methods=['get'])
+    def buscar_por_barcode(self, request):
+        barcode = request.query_params.get('barcode', None)
+        if not barcode:
+            return Response({'error': 'Parámetro de código de barras faltante.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tienda_slug = request.query_params.get('tienda_slug', None)
+        if not tienda_slug:
+            return Response({'error': 'Parámetro de tienda faltante.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tienda = Tienda.objects.get(nombre=tienda_slug)
+        except Tienda.DoesNotExist:
+            return Response({'error': 'Tienda no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            producto = Producto.objects.get(codigo_barras=barcode, tienda=tienda)
+            serializer = self.get_serializer(producto)
+            return Response(serializer.data)
+        except Producto.DoesNotExist:
+            return Response({'error': 'Producto no encontrado en esta tienda.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Restringe la creación, actualización y eliminación
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            self.permission_classes = [permissions.IsAdminUser]
+        return super().get_permissions()
+
+class CategoriaViewSet(viewsets.ModelViewSet):
+    queryset = Categoria.objects.all().order_by('nombre')
+    serializer_class = CategoriaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class TiendaViewSet(viewsets.ModelViewSet):
+    queryset = Tienda.objects.all().order_by('nombre')
+    serializer_class = TiendaSerializer
+    # CAMBIO CLAVE: Permitir acceso de solo lectura sin autenticación
+    # Para crear, actualizar o eliminar tiendas, se requerirá autenticación de Admin.
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']: # Acciones de lectura
+            return [permissions.AllowAny()] # Permitir a cualquiera ver la lista y el detalle
+        return [permissions.IsAdminUser()] # Para crear, actualizar, eliminar, requiere Admin
     
-    # Las rutas de métricas y métodos de pago ahora se definen en mi_tienda_backend/urls.py
-]
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all().order_by('username')
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class MetodoPagoViewSet(viewsets.ModelViewSet):
+    queryset = MetodoPago.objects.all().order_by('nombre')
+    serializer_class = MetodoPagoSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class VentaViewSet(viewsets.ModelViewSet):
+    queryset = Venta.objects.all().order_by('-fecha_venta')
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_serializer_class(self):
+        # Utiliza el serializer de creación para las peticiones de tipo POST (creación)
+        if self.action == 'create':
+            return VentaCreateSerializer
+        # Para las otras acciones (listado, detalle), utiliza el serializer de lectura
+        return VentaSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Venta.objects.all().order_by('-fecha_venta')
+        elif user.tienda:
+            return Venta.objects.filter(tienda=user.tienda).order_by('-fecha_venta')
+        return Venta.objects.none()
+
+    def perform_create(self, serializer):
+        # Aquí se pasa el usuario autenticado al serializer si se necesita
+        serializer.save(usuario=self.request.user)
+
+    @action(detail=True, methods=['patch'])
+    def anular(self, request, pk=None):
+        venta = get_object_or_404(Venta, pk=pk)
+        if venta.anulada:
+            return Response({"error": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        venta.anulada = True
+        venta.save()
+
+        # Restaurar el stock de los productos
+        detalles = DetalleVenta.objects.filter(venta=venta)
+        for detalle in detalles:
+            if detalle.producto and not detalle.anulado_individualmente:
+                producto = detalle.producto
+                producto.stock += detalle.cantidad
+                producto.save()
+        
+        return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
+
+class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = DetalleVenta.objects.all()
+    serializer_class = DetalleVentaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return DetalleVenta.objects.all()
+        elif user.tienda:
+            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
+        return DetalleVenta.objects.none()
+
+    @action(detail=True, methods=['patch'])
+    def anular_detalle(self, request, pk=None):
+        detalle = get_object_or_404(DetalleVenta, pk=pk)
+
+        # Comprobar si el usuario tiene permiso para anular este detalle
+        if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser:
+            return Response({"error": "No tienes permiso para anular este detalle de venta."}, status=status.HTTP_403_FORBIDDEN)
+        
+        if detalle.anulado_individualmente:
+            return Response({"error": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if detalle.venta.anulada:
+            return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Restaurar el stock del producto
+        if detalle.producto:
+            producto = detalle.producto
+            producto.stock += detalle.cantidad
+            producto.save()
+            detalle.anulado_individualmente = True
+            detalle.save()
+            
+            # Recalcular el total de la venta principal
+            venta = detalle.venta
+            total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
+            venta.total = total_recalculado
+            venta.save()
+            
+            return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
+        else:
+            detalle.anulado_individualmente = True
+            detalle.save()
+            return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
+
+
+class VentaPorUsuarioYFecha(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        fecha_str = request.query_params.get('fecha')
+        if not fecha_str:
+            return Response({"error": "Se requiere el parámetro 'fecha'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            fecha_obj = timezone.datetime.strptime(fecha_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"error": "Formato de fecha inválido. Usa YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        ventas = Venta.objects.filter(
+            usuario=request.user,
+            fecha_venta__date=fecha_obj
+        )
+        serializer = VentaSerializer(ventas, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
