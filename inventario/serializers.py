@@ -53,7 +53,8 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
         read_only_fields = ['subtotal', 'venta', 'anulado_individualmente']
 
 class VentaSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True, read_only=True)
+    # CAMBIO CLAVE AQUÍ: Aseguramos que 'detalles' se cargue como QuerySet iterable
+    detalles = DetalleVentaSerializer(many=True, read_only=True, source='detalles.all') # Usamos .all para asegurar un QuerySet
     usuario = SimpleUserSerializer(read_only=True)
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
@@ -124,14 +125,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_obj.stock -= cantidad
             producto_obj.save()
 
-        # CAMBIO CLAVE: Recargar la instancia de venta para que los detalles estén disponibles
-        # Usamos select_related y prefetch_related para cargar las relaciones de una vez
-        venta = Venta.objects.select_related('tienda', 'usuario').prefetch_related('detalles__producto').get(id=venta.id)
-        
-        # --- LÍNEA DE DEPURACIÓN AÑADIDA ---
-        print(f"DEBUG: Tipo de venta.detalles antes de retornar: {type(venta.detalles)}")
-        print(f"DEBUG: Contenido de venta.detalles antes de retornar: {list(venta.detalles.all())}") # Convertir a lista para ver contenido
-
+        # No es necesario recargar aquí si `VentaSerializer` usa `source='detalles.all'`
         return venta
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
