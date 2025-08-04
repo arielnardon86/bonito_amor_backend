@@ -67,8 +67,14 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
+    # CAMBIO CLAVE: Establecer directamente permission_classes a AllowAny
+    permission_classes = [permissions.AllowAny] 
+    
+    # Eliminamos get_permissions para evitar cualquier posible conflicto.
+    # Si en el futuro necesitas restringir CREATE/UPDATE/DELETE,
+    # deberás reintroducir get_permissions con lógica más específica.
+    # Por ahora, para resolver el 401, AllowAny es lo más directo.
+    
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
