@@ -18,7 +18,7 @@ from inventario.views import (
     ProductoViewSet,
     VentaViewSet,
     DetalleVentaViewSet,
-    DashboardMetricsView,
+    # DashboardMetricsView, # ¡ELIMINADA ESTA LÍNEA!
     MetodoPagoViewSet,
     TiendaViewSet,
     CategoriaViewSet,
@@ -44,7 +44,7 @@ def api_root(request, format=None):
         'productos': reverse('producto-list', request=request, format=format),
         'ventas': reverse('venta-list', request=request, format=format),
         'detalles-venta': reverse('detalleventa-list', request=request, format=format),
-        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format),
+        # 'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format), # ¡ELIMINADA ESTA LÍNEA!
         'metodos-pago': reverse('metodopago-list', request=request, format=format),
         'tiendas': reverse('tienda-list', request=request, format=format),
         'token': reverse('token_obtain_pair', request=request, format=format),
@@ -59,7 +59,7 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
     # --- RUTA EXPLÍCITA PARA USERS/ME/ ANTES DEL INCLUDE DEL ROUTER ---
-    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), # <-- RE-AÑADIDA AQUÍ
+    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), 
 
     path('api/', api_root, name='api-root'), # api_root después de las rutas específicas
     path('api/', include(router.urls)), # Incluye todas las rutas del router (después de las explícitas)
@@ -67,6 +67,6 @@ urlpatterns = [
     # --- Rutas específicas para APIViews o acciones personalizadas (si no están en el router) ---
     path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
     path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
-    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'),
+    # path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'), # ¡ELIMINADA ESTA LÍNEA!
     # 'metodos-pago' ya está en el router, no necesita una ruta explícita aquí
 ]
