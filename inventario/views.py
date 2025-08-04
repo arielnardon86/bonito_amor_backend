@@ -88,12 +88,30 @@ class VentaViewSet(viewsets.ModelViewSet):
             return VentaCreateSerializer
         return VentaSerializer
 
-    # CAMBIO CLAVE AQUÍ: Simplificamos perform_create
+    # CAMBIO CLAVE AQUÍ: Sobreescribir el método create directamente
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Llama a perform_create para guardar la instancia
+        self.perform_create(serializer)
+        
+        # Obtener la instancia de la venta recién creada desde el serializer
+        venta_instance = serializer.instance
+
+        # Recargar la instancia de la venta con los detalles y productos precargados
+        # Esto es CRÍTICO para asegurar que el serializer de respuesta tenga todo lo necesario
+        venta_with_details = Venta.objects.select_related('tienda', 'usuario').prefetch_related('detalles__producto').get(id=venta_instance.id)
+        
+        # Usar el VentaSerializer (el de lectura) para serializar la instancia completa
+        # Esto asegura que los detalles anidados se manejen correctamente para la respuesta
+        response_serializer = VentaSerializer(venta_with_details)
+
+        headers = self.get_success_headers(response_serializer.data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    # perform_create ahora solo guarda la instancia, sin preocuparse por la respuesta
     def perform_create(self, serializer):
-        # La instancia de venta se guarda y se asocia al usuario autenticado.
-        # El VentaCreateSerializer ya se encarga de crear los detalles y actualizar el stock.
-        # No es necesario recargar la instancia aquí, ya que el VentaSerializer
-        # ahora usa `source='detalles.all'` para la representación.
         serializer.save(usuario=self.request.user)
 
 
