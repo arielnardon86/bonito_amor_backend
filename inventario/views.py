@@ -67,13 +67,7 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all().order_by('nombre')
     serializer_class = TiendaSerializer
-    # CAMBIO CLAVE: Establecer directamente permission_classes a AllowAny
     permission_classes = [permissions.AllowAny] 
-    
-    # Eliminamos get_permissions para evitar cualquier posible conflicto.
-    # Si en el futuro necesitas restringir CREATE/UPDATE/DELETE,
-    # deberás reintroducir get_permissions con lógica más específica.
-    # Por ahora, para resolver el 401, AllowAny es lo más directo.
     
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all().order_by('username')
@@ -90,23 +84,25 @@ class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_serializer_class(self):
-        # Utiliza el serializer de creación para las peticiones de tipo POST (creación)
         if self.action == 'create':
             return VentaCreateSerializer
-        # Para las otras acciones (listado, detalle), utiliza el serializer de lectura
         return VentaSerializer
 
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_superuser:
-            return Venta.objects.all().order_by('-fecha_venta')
-        elif user.tienda:
-            return Venta.objects.filter(tienda=user.tienda).order_by('-fecha_venta')
-        return Venta.objects.none()
-
+    # CAMBIO CLAVE AQUÍ: Modificar perform_create para la respuesta
     def perform_create(self, serializer):
-        # Aquí se pasa el usuario autenticado al serializer si se necesita
-        serializer.save(usuario=self.request.user)
+        # Guarda la venta, lo que ejecuta el método create de VentaCreateSerializer
+        venta_instance = serializer.save(usuario=self.request.user)
+        
+        # Después de que la venta y sus detalles se han creado,
+        # recargamos la instancia de la venta con los detalles precargados
+        # para asegurar que el VentaSerializer pueda acceder a ellos.
+        # Esto es crucial para la serialización de la respuesta.
+        venta_with_details = Venta.objects.select_related('tienda', 'usuario').prefetch_related('detalles__producto').get(id=venta_instance.id)
+        
+        # Establecemos la instancia serializada para la respuesta
+        # Esto es lo que `serializer.data` usará para construir la respuesta HTTP
+        serializer.instance = venta_with_details
+
 
     @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
