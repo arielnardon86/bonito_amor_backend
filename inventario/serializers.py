@@ -66,7 +66,6 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = serializers.ListField(child=serializers.DictField()) 
-    # CAMBIO CRÍTICO: Ahora 'tienda' es un CharField simple para recibir el nombre
     tienda = serializers.CharField(write_only=True, required=True) 
     metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
@@ -75,18 +74,16 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        # Asegurarse de que 'tienda' esté aquí como el nombre del campo que recibimos
         fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
         read_only_fields = ['usuario'] 
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
-        tienda_nombre_recibido = validated_data.pop('tienda') # Obtener el nombre de la tienda
+        tienda_nombre_recibido = validated_data.pop('tienda')
         metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
         descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
         total_venta_final = validated_data.pop('total') 
 
-        # Búsqueda explícita de la instancia de Tienda por su nombre
         try:
             tienda_obj = Tienda.objects.get(nombre=tienda_nombre_recibido)
         except Tienda.DoesNotExist:
@@ -103,14 +100,12 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         else:
             raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
 
-        # Crear la venta principal, pasando el objeto Tienda directamente
         venta = Venta.objects.create(
-            tienda=tienda_obj,  # Asignar el objeto Tienda aquí
+            tienda=tienda_obj,
             metodo_pago=metodo_pago_obj.nombre,
             usuario=usuario_obj,
             total=total_venta_final,
             descuento_porcentaje=descuento_porcentaje,
-            # No se usa **validated_data aquí para evitar conflictos o valores None inesperados
         )
         
         for detalle_data in detalles_data:
@@ -129,6 +124,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_obj.stock -= cantidad
             producto_obj.save()
 
+        # CAMBIO CLAVE: Recargar la instancia de venta para que los detalles estén disponibles
+        # Usamos select_related y prefetch_related para cargar las relaciones de una vez
+        venta = Venta.objects.select_related('tienda', 'usuario').prefetch_related('detalles__producto').get(id=venta.id)
         return venta
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
