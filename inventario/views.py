@@ -127,7 +127,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
 
-    # CAMBIO CLAVE: Mover anular_detalle a VentaViewSet
     @action(detail=True, methods=['patch'])
     def anular_detalle(self, request, pk=None):
         venta = get_object_or_404(Venta, pk=pk)
@@ -141,7 +140,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         except DetalleVenta.DoesNotExist:
             return Response({"error": "Detalle de venta no encontrado para esta venta."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Comprobar si el usuario tiene permiso para anular este detalle
         if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser:
             return Response({"error": "No tienes permiso para anular este detalle de venta."}, status=status.HTTP_403_FORBIDDEN)
         
@@ -159,10 +157,13 @@ class VentaViewSet(viewsets.ModelViewSet):
             detalle.anulado_individualmente = True
             detalle.save()
             
-            # Recalcular el total de la venta principal
-            # Asegúrate de que solo los detalles NO anulados individualmente contribuyan al total
-            total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
-            venta.total = total_recalculado
+            # Recalcular el subtotal de los ítems NO anulados individualmente
+            subtotal_items_no_anulados = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
+            
+            # CAMBIO CLAVE AQUÍ: Aplicar el descuento_porcentaje de la venta al subtotal recalculado
+            descuento_factor = Decimal('1') - (venta.descuento_porcentaje / Decimal('100'))
+            venta.total = subtotal_items_no_anulados * descuento_factor
+            
             venta.save()
             
             return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
