@@ -42,7 +42,7 @@ else:
     ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 INSTALLED_APPS = [
-    'inventario',         # CAMBIO CLAVE: Mover 'inventario' al principio
+    'inventario',         
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -58,7 +58,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',      
+    'corsheaders.middleware.CorsMiddleware',      # ¡Mover esta línea más arriba!
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',  
     'django.contrib.auth.middleware.AuthenticationMiddleware', 
@@ -137,6 +137,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",              
     "https://bonitoamorstock.onrender.com", 
     "https://bonito-amor-backend.onrender.com", 
+    "https://totalstock.onrender.com", # ¡Asegúrate de que esta línea esté presente!
 ]
 CORS_ALLOW_CREDENTIALS = True 
 
@@ -144,6 +145,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     'https://bonito-amor-backend.onrender.com', 
     "https://bonitoamorstock.onrender.com", 
+    "https://totalstock.onrender.com", # ¡Asegúrate de que esta línea esté presente!
 ]
 
 REST_FRAMEWORK = {
@@ -172,12 +174,6 @@ SIMPLE_JWT = {
     'ISSUER': None,
     'JWK_URL': None,
     'LEEWAY': 0,
-
-    'AUTH_HEADER_TYPES': ('Bearer',),               
-    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
-    'USER_ID_FIELD': 'id',
-    'USER_ID_CLAIM': 'user_id',
-    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
 
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
