@@ -11,11 +11,12 @@ from datetime import timedelta, datetime
 from django.utils import timezone
 from decimal import Decimal 
 
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra # Importar solo Compra
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
-    CustomTokenObtainPairSerializer, VentaCreateSerializer
+    CustomTokenObtainPairSerializer, VentaCreateSerializer,
+    CompraSerializer, CompraCreateSerializer # Importar solo serializadores de Compra
 )
 from .filters import VentaFilter 
 
@@ -160,7 +161,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             # Recalcular el subtotal de los ítems NO anulados individualmente
             subtotal_items_no_anulados = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
-            # CAMBIO CLAVE AQUÍ: Aplicar el descuento_porcentaje de la venta al subtotal recalculado
+            # Aplicar el descuento_porcentaje de la venta al subtotal recalculado
             descuento_factor = Decimal('1') - (venta.descuento_porcentaje / Decimal('100'))
             venta.total = subtotal_items_no_anulados * descuento_factor
             
@@ -232,7 +233,7 @@ class DashboardMetricsView(APIView):
         # Base queryset para ventas de la tienda
         ventas_queryset = Venta.objects.filter(tienda=tienda, anulada=False)
 
-        # Aplicar filtros de fecha
+        # Aplicar filtros de fecha a ventas
         if year:
             ventas_queryset = ventas_queryset.filter(fecha_venta__year=year)
         if month:
@@ -307,6 +308,28 @@ class DashboardMetricsView(APIView):
             monto_total=Coalesce(Sum('total'), Value(Decimal('0.0'))),
             cantidad_ventas=Coalesce(Count('id', filter=Q(total__gt=Decimal('0.00'))), Value(0))\
         ).order_by('-monto_total')
+        
+        # --- NUEVAS MÉTRICAS DE COMPRA Y RENTABILIDAD (SIMPLIFICADAS) ---
+        compras_queryset = Compra.objects.filter(tienda=tienda)
+        # Aplicar los mismos filtros de fecha a las compras
+        if year:
+            compras_queryset = compras_queryset.filter(fecha_compra__year=year)
+        if month:
+            compras_queryset = compras_queryset.filter(fecha_compra__month=month)
+        if day:
+            compras_queryset = compras_queryset.filter(fecha_compra__day=day)
+
+        # Suma los campos 'total' de las compras registradas
+        total_compras_periodo = compras_queryset.aggregate(total=Coalesce(Sum('total'), Value(Decimal('0.00'))))['total']
+
+        # Rentabilidad Bruta: Ingresos por ventas - Costo de compras
+        rentabilidad_bruta_periodo = total_ventas_periodo - total_compras_periodo
+        
+        # Margen de Rentabilidad: (Rentabilidad Bruta / Total Ventas) * 100
+        margen_rentabilidad_periodo = Decimal('0.00')
+        if total_ventas_periodo > 0:
+            margen_rentabilidad_periodo = (rentabilidad_bruta_periodo / total_ventas_periodo) * Decimal('100')
+
 
         metrics = {
             "total_ventas_periodo": total_ventas_periodo, 
@@ -318,7 +341,39 @@ class DashboardMetricsView(APIView):
             "productos_mas_vendidos": list(productos_mas_vendidos),
             "ventas_por_usuario": list(ventas_por_usuario),
             "ventas_por_metodo_pago": list(ventas_por_metodo_pago),
+            # Nuevas métricas simplificadas
+            "total_compras_periodo": total_compras_periodo,
+            "rentabilidad_bruta_periodo": rentabilidad_bruta_periodo,
+            "margen_rentabilidad_periodo": margen_rentabilidad_periodo,
         }
 
         return Response(metrics, status=status.HTTP_200_OK)
 
+
+# --- NUEVAS VISTAS PARA REGISTRO DE COMPRAS SIMPLIFICADAS ---
+
+class CompraViewSet(viewsets.ModelViewSet):
+    serializer_class = CompraSerializer
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser] # Solo administradores pueden registrar compras
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Compra.objects.all()
+        elif user.tienda:
+            # Filtra las compras por la tienda asignada al usuario
+            return Compra.objects.filter(tienda=user.tienda).order_by('-fecha_compra')
+        return Compra.objects.none()
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CompraCreateSerializer
+        return CompraSerializer
+    
+    def perform_create(self, serializer):
+        # No hay interacción con el stock de productos en este modelo simplificado de compra
+        serializer.save(usuario=self.request.user) 
+
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer

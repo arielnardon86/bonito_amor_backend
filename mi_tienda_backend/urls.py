@@ -18,11 +18,12 @@ from inventario.views import (
     ProductoViewSet,
     VentaViewSet,
     DetalleVentaViewSet,
-    DashboardMetricsView, # ¡RE-AÑADIDA ESTA LÍNEA!
+    DashboardMetricsView, 
     MetodoPagoViewSet,
     TiendaViewSet,
     CategoriaViewSet,
-    CustomTokenObtainPairView
+    CustomTokenObtainPairView,
+    CompraViewSet, # NUEVA IMPORTACIÓN (simplificada)
 )
 
 # Configuración del Router para ViewSets
@@ -34,6 +35,7 @@ router.register(r'ventas', VentaViewSet, basename='venta')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
 router.register(r'tiendas', TiendaViewSet)
 router.register(r'metodos-pago', MetodoPagoViewSet)
+router.register(r'compras', CompraViewSet, basename='compra') # RUTA DE COMPRA SIMPLIFICADA
 
 # Vista raíz de la API
 @api_view(['GET'])
@@ -44,9 +46,10 @@ def api_root(request, format=None):
         'productos': reverse('producto-list', request=request, format=format),
         'ventas': reverse('venta-list', request=request, format=format),
         'detalles-venta': reverse('detalleventa-list', request=request, format=format),
-        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format), # ¡RE-AÑADIDA ESTA LÍNEA!
+        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format), 
         'metodos-pago': reverse('metodopago-list', request=request, format=format),
         'tiendas': reverse('tienda-list', request=request, format=format),
+        'compras': reverse('compra-list', request=request, format=format), # Añadir a la raíz de la API
         'token': reverse('token_obtain_pair', request=request, format=format),
         'token-refresh': reverse('token_refresh', request=request, format=format),
         'user-me': reverse('user-me', request=request, format=format),
@@ -65,5 +68,5 @@ urlpatterns = [
 
     path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
     path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
-    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'), # ¡RE-AÑADIDA ESTA LÍNEA!
+    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'), 
 ]

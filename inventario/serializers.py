@@ -1,7 +1,7 @@
 # BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago
-from decimal import Decimal # Importar Decimal para cálculos precisos
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra # Importar solo Compra
+from decimal import Decimal 
 
 # Serializer para el usuario, para anidar en VentaSerializer
 class SimpleUserSerializer(serializers.ModelSerializer):
@@ -12,7 +12,7 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = '__all__'
+        fields = '__all__' # Ya no incluye 'precio_compra' aquí
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -53,8 +53,7 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
         read_only_fields = ['subtotal', 'venta', 'anulado_individualmente']
 
 class VentaSerializer(serializers.ModelSerializer):
-    # CAMBIO CLAVE AQUÍ: Aseguramos que 'detalles' se cargue como QuerySet iterable
-    detalles = DetalleVentaSerializer(many=True, read_only=True, source='detalles.all') # Usamos .all para asegurar un QuerySet
+    detalles = DetalleVentaSerializer(many=True, read_only=True, source='detalles.all') 
     usuario = SimpleUserSerializer(read_only=True)
     total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
@@ -125,8 +124,42 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_obj.stock -= cantidad
             producto_obj.save()
 
-        # No es necesario recargar aquí si `VentaSerializer` usa `source='detalles.all'`
         return venta
+
+# --- NUEVOS SERIALIZADORES PARA COMPRAS SIMPLIFICADOS ---
+
+class CompraSerializer(serializers.ModelSerializer):
+    usuario = SimpleUserSerializer(read_only=True)
+    tienda = serializers.CharField(source='tienda.nombre', read_only=True)
+
+    class Meta:
+        model = Compra
+        fields = '__all__'
+
+class CompraCreateSerializer(serializers.ModelSerializer):
+    tienda = serializers.CharField(write_only=True) # Recibir el nombre de la tienda
+    
+    class Meta:
+        model = Compra
+        fields = ['tienda', 'total', 'proveedor'] # 'total' es el monto total de la compra
+
+    def create(self, validated_data):
+        tienda_nombre = validated_data.pop('tienda')
+        total_compra = validated_data.pop('total')
+        proveedor = validated_data.pop('proveedor', None)
+
+        try:
+            tienda_obj = Tienda.objects.get(nombre=tienda_nombre)
+        except Tienda.DoesNotExist:
+            raise serializers.ValidationError({"tienda": "Tienda no encontrada."})
+
+        compra = Compra.objects.create(
+            tienda=tienda_obj,
+            total=total_compra,
+            proveedor=proveedor,
+            usuario=self.context['request'].user, # Asigna el usuario autenticado
+        )
+        return compra
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
