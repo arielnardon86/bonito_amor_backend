@@ -11,12 +11,12 @@ from datetime import timedelta, datetime
 from django.utils import timezone
 from decimal import Decimal 
 
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra # Importar solo Compra
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer # Importar solo serializadores de Compra
+    CompraSerializer, CompraCreateSerializer 
 )
 from .filters import VentaFilter 
 
@@ -253,10 +253,12 @@ class DashboardMetricsView(APIView):
         # 2. Total de productos vendidos en el período
         total_productos_vendidos_periodo = DetalleVenta.objects.filter(
             venta__in=ventas_queryset,
-            anulado_individualmente=False
+            anulado_individualmente=False,
+            producto__isnull=False # Asegura que el producto no sea nulo
         ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
 
-        # 3. Ventas agrupadas por período (día, mes, hora)
+        # 3. Ventas agrupadas por período (día, mes, hora) - Datos que ya no se usan para gráficos
+        # Se mantienen en el backend por si se usan para otra cosa o se vuelven a habilitar gráficos
         period_label = "Período"
         if day: # Agrupar por hora
             ventas_agrupadas_por_periodo = ventas_queryset.annotate(
@@ -290,7 +292,10 @@ class DashboardMetricsView(APIView):
         # 4. Productos más vendidos
         productos_mas_vendidos = DetalleVenta.objects.filter(
             venta__in=ventas_queryset,
-            anulado_individualmente=False
+            anulado_individualmente=False,
+            producto__isnull=False, # Asegura que el producto no sea nulo
+            producto__nombre__isnull=False, # Asegura que el nombre del producto no sea nulo
+            producto__nombre__gt='' # Asegura que el nombre del producto no esté vacío
         ).values('producto__nombre').annotate(
             cantidad_total=Coalesce(Sum('cantidad'), Value(0))
         ).order_by('-cantidad_total')[:5] # Top 5
@@ -309,7 +314,7 @@ class DashboardMetricsView(APIView):
             cantidad_ventas=Coalesce(Count('id', filter=Q(total__gt=Decimal('0.00'))), Value(0))\
         ).order_by('-monto_total')
         
-        # --- NUEVAS MÉTRICAS DE COMPRA Y RENTABILIDAD (SIMPLIFICADAS) ---
+        # --- MÉTRICAS DE COMPRA Y RENTABILIDAD (SIMPLIFICADAS) ---
         compras_queryset = Compra.objects.filter(tienda=tienda)
         # Aplicar los mismos filtros de fecha a las compras
         if year:
@@ -334,7 +339,7 @@ class DashboardMetricsView(APIView):
         metrics = {
             "total_ventas_periodo": total_ventas_periodo, 
             "total_productos_vendidos_periodo": total_productos_vendidos_periodo, 
-            "ventas_agrupadas_por_periodo": {
+            "ventas_agrupadas_por_periodo": { # Se mantienen los datos, aunque no se usen para gráficos
                 "label": period_label,
                 "data": list(ventas_agrupadas_por_periodo)
             },
