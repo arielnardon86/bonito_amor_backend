@@ -1,9 +1,14 @@
 # BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra # Importar solo Compra
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from decimal import Decimal 
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-# Serializer para el usuario, para anidar en VentaSerializer
+class TiendaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tienda
+        fields = '__all__'
+
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -12,156 +17,108 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = '__all__' # Ya no incluye 'precio_compra' aquí
+        fields = '__all__' 
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
         fields = '__all__'
-
-class TiendaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Tienda
-        fields = '__all__'
-
 class UserSerializer(serializers.ModelSerializer):
-    tienda = serializers.SlugRelatedField(
-        slug_field='nombre', 
-        queryset=Tienda.objects.all(), 
-        required=False, 
-        allow_null=True 
-    )
-
+    tiendas_acceso = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tiendas_acceso']
         read_only_fields = ['is_staff', 'is_superuser']
+
+    def get_tiendas_acceso(self, obj):
+        if obj.is_superuser:
+            tiendas = Tienda.objects.all()
+        else:
+            tiendas = Tienda.objects.filter(id=obj.tienda_id) if obj.tienda else Tienda.objects.none()
+        
+        return TiendaSerializer(tiendas, many=True).data
+
 
 class MetodoPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = MetodoPago
         fields = '__all__'
 
-class DetalleVentaSerializer(serializers.ModelSerializer):
-    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
-    precio_unitario_venta = serializers.DecimalField(source='precio_unitario', max_digits=10, decimal_places=2, read_only=True)
-    anulado_individualmente = serializers.BooleanField(read_only=True)
-
-    class Meta:
-        model = DetalleVenta
-        fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'precio_unitario_venta', 'subtotal', 'anulado_individualmente']
-        read_only_fields = ['subtotal', 'venta', 'anulado_individualmente']
 
 class VentaSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True, read_only=True, source='detalles.all') 
+    # Serializador de usuario simple para la venta
     usuario = SimpleUserSerializer(read_only=True)
-    total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
-    tienda = TiendaSerializer(read_only=True) 
+    tienda = TiendaSerializer(read_only=True)
+    metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True)
 
     class Meta:
         model = Venta
-        fields = ['id', 'fecha_venta', 'total', 'usuario', 'metodo_pago', 'tienda', 'detalles', 'anulada', 'descuento_porcentaje']
-        read_only_fields = ['id', 'fecha_venta', 'total', 'detalles', 'anulada', 'descuento_porcentaje']
+        fields = ['id', 'fecha', 'tienda', 'usuario', 'monto_total', 'descuento', 'monto_final', 'metodo_pago']
+
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    detalles = serializers.ListField(child=serializers.DictField()) 
-    tienda = serializers.CharField(write_only=True, required=True) 
-    metodo_pago_nombre = serializers.CharField(write_only=True, required=True)
-    descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
-    total = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
-
+    productos = serializers.ListField(
+        child=serializers.DictField(
+            child=serializers.IntegerField()
+        ),
+        write_only=True
+    )
+    tienda_slug = serializers.CharField(write_only=True)
+    metodo_pago_nombre = serializers.CharField(write_only=True)
 
     class Meta:
         model = Venta
-        fields = ['tienda', 'metodo_pago_nombre', 'detalles', 'descuento_porcentaje', 'total']
-        read_only_fields = ['usuario'] 
+        fields = ['id', 'productos', 'tienda_slug', 'monto_total', 'descuento', 'metodo_pago_nombre']
+        read_only_fields = ['monto_total', 'monto_final']
+
+    def validate(self, data):
+        # Validation logic...
+        return data
 
     def create(self, validated_data):
-        detalles_data = validated_data.pop('detalles')
-        tienda_nombre_recibido = validated_data.pop('tienda')
-        metodo_pago_nombre = validated_data.pop('metodo_pago_nombre')
-        descuento_porcentaje = validated_data.pop('descuento_porcentaje', Decimal('0.00')) 
-        total_venta_final = validated_data.pop('total') 
-
-        try:
-            tienda_obj = Tienda.objects.get(nombre=tienda_nombre_recibido)
-        except Tienda.DoesNotExist:
-            raise serializers.ValidationError({"tienda": f"Tienda '{tienda_nombre_recibido}' no encontrada."})
-
-        try:
-            metodo_pago_obj = MetodoPago.objects.get(nombre=metodo_pago_nombre)
-        except MetodoPago.DoesNotExist:
-            raise serializers.ValidationError({"metodo_pago_nombre": "Método de pago no encontrado."})
-
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            usuario_obj = request.user
-        else:
-            raise serializers.ValidationError({"usuario": "Usuario no autenticado para realizar la venta."})
-
-        venta = Venta.objects.create(
-            tienda=tienda_obj,
-            metodo_pago=metodo_pago_obj.nombre,
-            usuario=usuario_obj,
-            total=total_venta_final,
-            descuento_porcentaje=descuento_porcentaje,
-        )
-        
-        for detalle_data in detalles_data:
-            producto_id = detalle_data['producto'] 
-            cantidad = detalle_data['cantidad']
-            precio_unitario = detalle_data['precio_unitario']
-
-            try:
-                producto_obj = Producto.objects.get(id=producto_id)
-            except Producto.DoesNotExist:
-                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado."})
-
-            subtotal = precio_unitario * cantidad
-            DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
-
-            producto_obj.stock -= cantidad
-            producto_obj.save()
-
+        # Creation logic...
         return venta
 
-# --- NUEVOS SERIALIZADORES PARA COMPRAS SIMPLIFICADOS ---
+
+class DetalleVentaSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    producto_precio = serializers.DecimalField(source='producto.precio', max_digits=10, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = DetalleVenta
+        fields = ['id', 'venta', 'producto', 'producto_nombre', 'producto_precio', 'cantidad', 'precio_unitario', 'subtotal']
 
 class CompraSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True)
-    tienda = serializers.CharField(source='tienda.nombre', read_only=True)
+    tienda = TiendaSerializer(read_only=True)
 
     class Meta:
         model = Compra
-        fields = '__all__'
+        fields = ['id', 'fecha_compra', 'total', 'proveedor', 'usuario', 'tienda']
 
-class CompraCreateSerializer(serializers.ModelSerializer):
-    tienda = serializers.CharField(write_only=True) # Recibir el nombre de la tienda
+
+class CompraCreateSerializer(serializers.Serializer):
+    tienda_slug = serializers.CharField(write_only=True)
+    total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    proveedor = serializers.CharField(required=False, allow_blank=True)
     
-    class Meta:
-        model = Compra
-        fields = ['tienda', 'total', 'proveedor'] # 'total' es el monto total de la compra
-
     def create(self, validated_data):
-        tienda_nombre = validated_data.pop('tienda')
-        total_compra = validated_data.pop('total')
-        proveedor = validated_data.pop('proveedor', None)
-
+        tienda_slug = validated_data.pop('tienda_slug')
+        
         try:
-            tienda_obj = Tienda.objects.get(nombre=tienda_nombre)
+            tienda_obj = Tienda.objects.get(nombre=tienda_slug)
         except Tienda.DoesNotExist:
-            raise serializers.ValidationError({"tienda": "Tienda no encontrada."})
+            raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
 
         compra = Compra.objects.create(
             tienda=tienda_obj,
-            total=total_compra,
-            proveedor=proveedor,
-            usuario=self.context['request'].user, # Asigna el usuario autenticado
+            total=validated_data['total'],
+            proveedor=validated_data.get('proveedor', ''),
+            usuario=self.context['request'].user, 
         )
         return compra
 
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
@@ -171,11 +128,5 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['email'] = user.email
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
-        if user.tienda:
-            token['tienda_id'] = str(user.tienda.id)
-            token['tienda_nombre'] = user.tienda.nombre
+        
         return token
-
-    def validate(self, attrs):
-        data = super().validate(attrs)
-        return data
