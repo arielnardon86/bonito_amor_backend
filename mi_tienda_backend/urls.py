@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from inventario.views import (
-    ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,  # <-- Se ha añadido UserViewSet
+    ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
     CustomTokenObtainPairView, MetricasAPIView
 )
@@ -15,7 +15,7 @@ router = DefaultRouter()
 router.register(r'productos', ProductoViewSet, basename='productos')
 router.register(r'categorias', CategoriaViewSet, basename='categorias')
 router.register(r'tiendas', TiendaViewSet, basename='tiendas')
-router.register(r'users', UserViewSet, basename='users') # <-- Se ha añadido el router para UserViewSet
+router.register(r'users', UserViewSet, basename='users')
 router.register(r'ventas', VentaViewSet, basename='ventas')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalles-venta')
 router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
