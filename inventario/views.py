@@ -65,20 +65,50 @@ class ProductoViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-# Vistas de Categoría, Tienda, User, etc.
-# ... (el resto de tus vistas) ...
+class CategoriaViewSet(viewsets.ModelViewSet):
+    queryset = Categoria.objects.all()
+    serializer_class = CategoriaSerializer
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+class TiendaViewSet(viewsets.ModelViewSet):
+    queryset = Tienda.objects.all()
+    serializer_class = TiendaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+class VentaViewSet(viewsets.ModelViewSet):
+    queryset = Venta.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_class = VentaFilter
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return VentaCreateSerializer
+        return VentaSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(usuario=self.request.user)
 
 
-class CustomTokenObtainPairView(TokenObtainPairView):
-    serializer_class = CustomTokenObtainPairSerializer
+class DetalleVentaViewSet(viewsets.ModelViewSet):
+    queryset = DetalleVenta.objects.all()
+    serializer_class = DetalleVentaSerializer
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
 
-# --- NUEVAS VISTAS PARA REGISTRO DE COMPRAS SIMPLIFICADAS ---
+class MetodoPagoViewSet(viewsets.ModelViewSet):
+    queryset = MetodoPago.objects.all()
+    serializer_class = MetodoPagoSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 
 class CompraViewSet(viewsets.ModelViewSet):
     serializer_class = CompraSerializer
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
@@ -87,7 +117,7 @@ class CompraViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__nombre=tienda_slug)
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('-fecha_compra')
             return queryset.order_by('-fecha_compra')
         elif user.tienda:
             return queryset.filter(tienda=user.tienda).order_by('-fecha_compra')
@@ -104,3 +134,90 @@ class CompraViewSet(viewsets.ModelViewSet):
             tienda_obj = self.request.user.tienda
         
         serializer.save(usuario=self.request.user, tienda=tienda_obj)
+        
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+
+# APIView para las métricas
+class MetricasAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+    def get(self, request, *args, **kwargs):
+        tienda_slug = request.query_params.get('tienda_slug', None)
+        year = request.query_params.get('year', None)
+        month = request.query_params.get('month', None)
+        day = request.query_params.get('day', None)
+        seller_id = request.query_params.get('seller_id', None)
+        payment_method = request.query_params.get('payment_method', None)
+
+        if not tienda_slug:
+            return Response({"error": "Parámetro 'tienda_slug' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        except:
+            return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        
+        queryset_ventas = Venta.objects.filter(tienda=tienda_obj)
+        queryset_compras = Compra.objects.filter(tienda=tienda_obj)
+
+        if year:
+            queryset_ventas = queryset_ventas.filter(fecha__year=year)
+            queryset_compras = queryset_compras.filter(fecha_compra__year=year)
+        if month:
+            queryset_ventas = queryset_ventas.filter(fecha__month=month)
+            queryset_compras = queryset_compras.filter(fecha_compra__month=month)
+        if day:
+            queryset_ventas = queryset_ventas.filter(fecha__day=day)
+            queryset_compras = queryset_compras.filter(fecha_compra__day=day)
+        if seller_id:
+            queryset_ventas = queryset_ventas.filter(usuario__id=seller_id)
+        if payment_method:
+            queryset_ventas = queryset_ventas.filter(metodo_pago__nombre=payment_method)
+
+
+        total_ventas_periodo = queryset_ventas.aggregate(Sum('monto_final'))['monto_final__sum'] or Decimal('0.00')
+        total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
+
+        rentabilidad_bruta = total_ventas_periodo - total_compras_periodo
+        margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
+
+        productos_mas_vendidos = DetalleVenta.objects.filter(venta__in=queryset_ventas).values(
+            'producto__nombre', 'producto__talle'
+        ).annotate(
+            cantidad_total=Sum('cantidad')
+        ).order_by('-cantidad_total')[:10]
+        
+        ventas_por_usuario = queryset_ventas.values('usuario__username').annotate(
+            total_vendido=Sum('monto_final'),
+            cantidad_ventas=Count('id')
+        ).order_by('-total_vendido')
+
+        ventas_por_metodo_pago = queryset_ventas.values('metodo_pago__nombre').annotate(
+            total_vendido=Sum('monto_final')
+        ).order_by('-total_vendido')
+
+        egresos_por_mes = queryset_compras.annotate(
+            year=ExtractYear('fecha_compra'),
+            mes=ExtractMonth('fecha_compra')
+        ).values('year', 'mes').annotate(
+            total_egresos=Sum('total')
+        ).order_by('year', 'mes')
+
+        total_productos_vendidos_periodo = DetalleVenta.objects.filter(venta__in=queryset_ventas).aggregate(Sum('cantidad'))['cantidad__sum'] or 0
+
+        data = {
+            'total_ventas_periodo': total_ventas_periodo,
+            'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
+            'total_compras_periodo': total_compras_periodo,
+            'rentabilidad_bruta_periodo': rentabilidad_bruta,
+            'margen_rentabilidad_periodo': margen_rentabilidad,
+            'productos_mas_vendidos': list(productos_mas_vendidos),
+            'ventas_por_usuario': list(ventas_por_usuario),
+            'ventas_por_metodo_pago': list(ventas_por_metodo_pago),
+            'egresos_por_mes': list(egresos_por_mes),
+        }
+
+        return Response(data)

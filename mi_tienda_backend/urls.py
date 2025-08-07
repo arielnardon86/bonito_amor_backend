@@ -1,72 +1,31 @@
-# BONITO_AMOR/backend/mi_tienda_backend/urls.py
+# mi_tienda_backend/urls.py
+
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework.reverse import reverse
-from django.views.generic.base import RedirectView
-
-# Importaciones de Simple JWT
-from rest_framework_simplejwt.views import (
-    TokenRefreshView,
-)
-
-# Importa TODAS las vistas de tu aplicación inventario que se usarán en urls.py
 from inventario.views import (
-    UserViewSet,
-    ProductoViewSet,
-    VentaViewSet,
-    DetalleVentaViewSet,
-    DashboardMetricsView, 
-    MetodoPagoViewSet,
-    TiendaViewSet,
-    CategoriaViewSet,
-    CustomTokenObtainPairView,
-    CompraViewSet, # NUEVA IMPORTACIÓN (simplificada)
+    ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,  # <-- Se ha añadido UserViewSet
+    VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
+    CustomTokenObtainPairView, MetricasAPIView
 )
+from rest_framework_simplejwt.views import TokenRefreshView
 
-# Configuración del Router para ViewSets
+
 router = DefaultRouter()
-router.register(r'users', UserViewSet)
-router.register(r'categorias', CategoriaViewSet)
-router.register(r'productos', ProductoViewSet, basename='producto')
-router.register(r'ventas', VentaViewSet, basename='venta')
-router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalleventa')
-router.register(r'tiendas', TiendaViewSet)
-router.register(r'metodos-pago', MetodoPagoViewSet)
-router.register(r'compras', CompraViewSet, basename='compra') # RUTA DE COMPRA SIMPLIFICADA
+router.register(r'productos', ProductoViewSet, basename='productos')
+router.register(r'categorias', CategoriaViewSet, basename='categorias')
+router.register(r'tiendas', TiendaViewSet, basename='tiendas')
+router.register(r'users', UserViewSet, basename='users') # <-- Se ha añadido el router para UserViewSet
+router.register(r'ventas', VentaViewSet, basename='ventas')
+router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalles-venta')
+router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
+router.register(r'compras', CompraViewSet, basename='compras')
 
-# Vista raíz de la API
-@api_view(['GET'])
-def api_root(request, format=None):
-    return Response({
-        'users': reverse('user-list', request=request, format=format),
-        'categorias': reverse('categoria-list', request=request, format=format),
-        'productos': reverse('producto-list', request=request, format=format),
-        'ventas': reverse('venta-list', request=request, format=format),
-        'detalles-venta': reverse('detalleventa-list', request=request, format=format),
-        'dashboard-metrics': reverse('dashboard_metrics', request=request, format=format), 
-        'metodos-pago': reverse('metodopago-list', request=request, format=format),
-        'tiendas': reverse('tienda-list', request=request, format=format),
-        'compras': reverse('compra-list', request=request, format=format), # Añadir a la raíz de la API
-        'token': reverse('token_obtain_pair', request=request, format=format),
-        'token-refresh': reverse('token_refresh', request=request, format=format),
-        'user-me': reverse('user-me', request=request, format=format),
-    })
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('', RedirectView.as_view(url='/api/', permanent=False)),
+    path('api/', include(router.urls)),
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-
-    path('api/users/me/', UserViewSet.as_view({'get': 'me'}), name='user-me'), 
-
-    path('api/', api_root, name='api-root'),
-    path('api/', include(router.urls)),
-
-    path('api/ventas/<uuid:pk>/anular/', VentaViewSet.as_view({'patch': 'anular'}), name='venta-anular'),
-    path('api/ventas/<uuid:pk>/anular_detalle/', VentaViewSet.as_view({'patch': 'anular_detalle'}), name='venta-anular-detalle'),
-    path('api/metricas/metrics/', DashboardMetricsView.as_view(), name='dashboard_metrics'), 
+    path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
 ]
