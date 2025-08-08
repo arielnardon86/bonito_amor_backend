@@ -46,17 +46,6 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class VentaSerializer(serializers.ModelSerializer):
-    # Serializador de usuario simple para la venta
-    usuario = SimpleUserSerializer(read_only=True)
-    tienda = TiendaSerializer(read_only=True)
-    metodo_pago = serializers.CharField(source='metodo_pago.nombre', read_only=True)
-
-    class Meta:
-        model = Venta
-        fields = ['id', 'fecha', 'tienda', 'usuario', 'monto_total', 'descuento', 'monto_final', 'metodo_pago']
-
-
 class VentaCreateSerializer(serializers.ModelSerializer):
     productos = serializers.ListField(
         child=serializers.DictField(
@@ -66,11 +55,13 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     )
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
+    # Definir el campo 'descuento' explícitamente para evitar el error
+    descuento = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True, default=0.0)
 
     class Meta:
         model = Venta
-        fields = ['id', 'productos', 'tienda_slug', 'descuento', 'metodo_pago_nombre'] # <-- 'monto_total' eliminado de esta lista
-        read_only_fields = ['monto_total', 'monto_final'] # <-- Se mantiene aquí
+        fields = ['id', 'productos', 'tienda_slug', 'descuento', 'metodo_pago_nombre']
+        read_only_fields = ['monto_total', 'monto_final']
 
     def validate(self, data):
         # Validation logic...
