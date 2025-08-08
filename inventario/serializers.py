@@ -57,14 +57,16 @@ class DetalleVentaCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(f"No hay suficiente stock para el producto '{producto.nombre}'. Stock disponible: {producto.stock}, solicitado: {cantidad}.")
         return data
 
-class VentaCreateSerializer(serializers.ModelSerializer):
+# CORRECCIÓN: Se cambia a serializers.Serializer
+class VentaCreateSerializer(serializers.Serializer):
     productos = DetalleVentaCreateSerializer(many=True, write_only=True)
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
     descuento = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True, default=Decimal('0.00'))
 
+    # Se eliminan los campos 'read_only_fields' y 'model' de la clase Meta
     class Meta:
-        model = Venta
+        # Se elimina 'model = Venta' porque no es un ModelSerializer
         fields = ['id', 'productos', 'tienda_slug', 'metodo_pago_nombre', 'descuento']
 
     def validate(self, data):
@@ -95,7 +97,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         monto_final = monto_total * (Decimal(1) - (descuento / Decimal(100)))
 
         # Crear la venta, pasando todos los argumentos de forma explícita
-        # Se elimina el uso de **validated_data para evitar conflictos.
         venta = Venta.objects.create(
             usuario=usuario,
             tienda=tienda,
