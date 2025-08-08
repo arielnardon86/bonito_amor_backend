@@ -69,10 +69,7 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = serializers.ListField(
-        child=serializers.DictField(
-            child=serializers.UUIDField(),
-            help_text="Lista de productos y cantidades para la venta"
-        )
+        child=serializers.DictField()
     )
     tienda_slug = serializers.CharField(write_only=True)
     
@@ -80,10 +77,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         model = Venta
         fields = [
             'descuento_porcentaje', 'metodo_pago', 
-            'tienda_slug', 'detalles', 'observaciones'
+            'tienda_slug', 'detalles'
         ]
         extra_kwargs = {
-            'observaciones': {'required': False},
             'descuento_porcentaje': {'required': False},
         }
 
@@ -132,6 +128,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         data['monto_descontado'] = calculated_total * (descuento_porcentaje / Decimal('100'))
         data['fecha_venta'] = timezone.now()
+        data['observaciones'] = "" # Puedes agregar observaciones si el frontend las envía.
 
         return data
 
@@ -139,14 +136,14 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         detalles_data = validated_data.pop('detalles')
         
         venta = Venta.objects.create(
-            total=validated_data.pop('total'),
+            total=validated_data['total'],
             usuario=self.context['request'].user, 
-            tienda=validated_data.pop('tienda'),
-            metodo_pago=validated_data.pop('metodo_pago'),
-            descuento_porcentaje=validated_data.pop('descuento_porcentaje', Decimal('0.00')),
-            monto_descontado=validated_data.pop('monto_descontado', Decimal('0.00')),
-            fecha_venta=validated_data.pop('fecha_venta'),
-            observaciones=validated_data.pop('observaciones', ''),
+            tienda=validated_data['tienda'],
+            metodo_pago=validated_data['metodo_pago'],
+            descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
+            monto_descontado=validated_data.get('monto_descontado', Decimal('0.00')),
+            fecha_venta=validated_data['fecha_venta'],
+            observaciones=validated_data.get('observaciones', ''),
         )
         
         for detalle_data in detalles_data:
