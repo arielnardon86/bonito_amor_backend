@@ -79,6 +79,15 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetalleVenta
         fields = ['id', 'venta', 'producto', 'producto_nombre', 'producto_precio', 'cantidad', 'precio_unitario', 'subtotal']
+class VentaSerializer(serializers.ModelSerializer):
+    usuario = serializers.ReadOnlyField(source='usuario.username')
+    tienda = serializers.ReadOnlyField(source='tienda.nombre')
+    metodo_pago = serializers.ReadOnlyField(source='metodo_pago.nombre')
+    detalles = DetalleVentaSerializer(many=True, read_only=True, source='detalleventa_set')
+    
+    class Meta:
+        model = Venta
+        fields = ['id', 'fecha', 'monto_total', 'monto_final', 'descuento', 'usuario', 'tienda', 'metodo_pago', 'detalles']
 
 class CompraSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True)
