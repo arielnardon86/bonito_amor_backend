@@ -45,17 +45,23 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         model = MetodoPago
         fields = '__all__'
 
+# Serializador para los detalles de venta en la creación de una venta
+class DetalleVentaCreateSerializer(serializers.Serializer):
+    producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
+    cantidad = serializers.IntegerField(min_value=1)
+
+    def validate(self, data):
+        producto = data['producto']
+        cantidad = data['cantidad']
+        if cantidad > producto.stock:
+            raise serializers.ValidationError(f"No hay suficiente stock para el producto '{producto.nombre}'. Stock disponible: {producto.stock}, solicitado: {cantidad}.")
+        return data
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    productos = serializers.ListField(
-        child=serializers.DictField(
-            child=serializers.IntegerField()
-        ),
-        write_only=True
-    )
+    # CAMBIO: Usar un serializador anidado para validar los detalles de la venta
+    productos = DetalleVentaCreateSerializer(many=True, write_only=True)
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
-    # Definir el campo 'descuento' explícitamente para evitar el error
     descuento = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True, default=0.0)
 
     class Meta:
@@ -64,12 +70,62 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['monto_total', 'monto_final']
 
     def validate(self, data):
-        # Validation logic...
+        # Asegúrate de que el slug de la tienda existe
+        try:
+            tienda = Tienda.objects.get(slug=data['tienda_slug'])
+            data['tienda'] = tienda
+        except Tienda.DoesNotExist:
+            raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
+
+        # Asegúrate de que el método de pago existe
+        try:
+            metodo_pago = MetodoPago.objects.get(nombre=data['metodo_pago_nombre'])
+            data['metodo_pago'] = metodo_pago
+        except MetodoPago.DoesNotExist:
+            raise serializers.ValidationError({"metodo_pago_nombre": "Método de pago no encontrado."})
+
         return data
 
     def create(self, validated_data):
-        # Creation logic...
-        return Venta
+        # CAMBIO: Separar los detalles de los productos para la creación de DetalleVenta
+        productos_data = validated_data.pop('productos')
+        tienda = validated_data.pop('tienda')
+        metodo_pago = validated_data.pop('metodo_pago')
+
+        # Calcular el monto total y final
+        monto_total = sum(item['producto'].precio * item['cantidad'] for item in productos_data)
+        descuento_porcentaje = validated_data.get('descuento', Decimal(0))
+        monto_final = monto_total * (Decimal(1) - (descuento_porcentaje / Decimal(100)))
+
+        # Crear la venta
+        venta = Venta.objects.create(
+            usuario=self.context['request'].user,
+            tienda=tienda,
+            metodo_pago=metodo_pago,
+            monto_total=monto_total,
+            monto_final=monto_final,
+            **validated_data
+        )
+
+        # Crear los detalles de venta y actualizar el stock
+        for item_data in productos_data:
+            producto = item_data['producto']
+            cantidad = item_data['cantidad']
+            
+            # Crear el detalle de la venta
+            DetalleVenta.objects.create(
+                venta=venta,
+                producto=producto,
+                cantidad=cantidad,
+                precio_unitario=producto.precio,
+                subtotal=producto.precio * cantidad
+            )
+
+            # Actualizar el stock del producto
+            producto.stock -= cantidad
+            producto.save()
+
+        return venta
 
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
