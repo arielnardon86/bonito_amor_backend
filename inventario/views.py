@@ -30,15 +30,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
         queryset = Producto.objects.all()
 
         tienda_slug = self.request.query_params.get('tienda_slug', None)
-        if tienda_slug:
-            queryset = queryset.filter(tienda__nombre=tienda_slug)
-        else:
-            if not user.is_superuser and user.tienda:
-                queryset = queryset.filter(tienda=user.tienda)
-            elif not user.is_superuser and not user.tienda:
-                return Producto.objects.none()
 
-        return queryset.order_by('nombre')
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug)
+            return queryset.order_by('nombre')
+        
+        elif user.tienda:
+            # Validación clave: Un usuario normal solo puede acceder a su propia tienda.
+            if tienda_slug and user.tienda.nombre != tienda_slug:
+                return Producto.objects.none() # Devuelve un queryset vacío
+            
+            return queryset.filter(tienda=user.tienda).order_by('nombre')
+        
+        return Producto.objects.none() # Si el usuario no tiene una tienda, no ve productos
 
     @action(detail=False, methods=['get'])
     def productos_sin_codigo(self, request):
