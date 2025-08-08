@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from decimal import Decimal 
 from django.utils import timezone
+from django.shortcuts import get_object_or_404
 
 # Serializer para el usuario, para anidar en VentaSerializer
 class SimpleUserSerializer(serializers.ModelSerializer):
@@ -67,47 +68,60 @@ class VentaSerializer(serializers.ModelSerializer):
         ]
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    detalles = DetalleVentaSerializer(many=True)
+    detalles = serializers.ListField(
+        child=serializers.DictField(
+            child=serializers.UUIDField(),
+            help_text="Lista de productos y cantidades para la venta"
+        )
+    )
+    tienda_slug = serializers.CharField(write_only=True)
     
     class Meta:
         model = Venta
         fields = [
-            'fecha_venta', 'total', 'descuento_porcentaje', 'metodo_pago', 
-            'tienda', 'detalles', 'observaciones', 'monto_descontado'
+            'descuento_porcentaje', 'metodo_pago', 
+            'tienda_slug', 'detalles', 'observaciones'
         ]
         extra_kwargs = {
-            'total': {'required': False},
-            'fecha_venta': {'required': False},
-            'descuento_porcentaje': {'required': False}, # Asegura que este campo no sea requerido
-            'observaciones': {'required': False}, # Asegura que este campo no sea requerido
-            'monto_descontado': {'required': False}, # Asegura que este campo no sea requerido
+            'observaciones': {'required': False},
+            'descuento_porcentaje': {'required': False},
         }
 
     def validate(self, data):
         detalles_data = data.get('detalles', [])
+        tienda_slug = data.get('tienda_slug')
+
         if not detalles_data:
             raise serializers.ValidationError("La venta debe tener al menos un detalle de venta.")
+        if not tienda_slug:
+            raise serializers.ValidationError({"tienda_slug": "El slug de la tienda es obligatorio."})
 
+        try:
+            tienda_obj = Tienda.objects.get(nombre=tienda_slug)
+        except Tienda.DoesNotExist:
+            raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
+
+        data['tienda'] = tienda_obj
+        
         calculated_total = Decimal('0.00')
         for detalle_data in detalles_data:
             producto_id = detalle_data.get('producto')
             cantidad = detalle_data.get('cantidad')
             precio_unitario = detalle_data.get('precio_unitario')
 
-            if not producto_id:
-                raise serializers.ValidationError({"detalles": "Cada detalle debe tener un producto."})
-            if cantidad is None or cantidad <= 0:
-                raise serializers.ValidationError({"detalles": "La cantidad debe ser un número positivo."})
-            if precio_unitario is None or precio_unitario < 0:
-                raise serializers.ValidationError({"detalles": "El precio unitario debe ser un número no negativo."})
+            if not all([producto_id, cantidad, precio_unitario is not None]):
+                raise serializers.ValidationError({"detalles": "Cada detalle debe tener un 'producto', 'cantidad' y 'precio_unitario'."})
 
             try:
-                producto_obj = Producto.objects.get(id=producto_id)
+                producto_obj = Producto.objects.get(id=producto_id, tienda=tienda_obj)
             except Producto.DoesNotExist:
-                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado."})
+                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado en la tienda {tienda_slug}."})
             
             if producto_obj.stock < cantidad:
                 raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_obj.nombre}. Stock disponible: {producto_obj.stock}, solicitado: {cantidad}."})
+            
+            if precio_unitario < 0:
+                raise serializers.ValidationError({"detalles": "El precio unitario no puede ser negativo."})
 
             calculated_total += precio_unitario * cantidad
 
@@ -117,9 +131,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         data['monto_descontado'] = calculated_total * (descuento_porcentaje / Decimal('100'))
-        
-        if 'fecha_venta' not in data or not data['fecha_venta']:
-            data['fecha_venta'] = timezone.now()
+        data['fecha_venta'] = timezone.now()
 
         return data
 
@@ -131,10 +143,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             usuario=self.context['request'].user, 
             tienda=validated_data.pop('tienda'),
             metodo_pago=validated_data.pop('metodo_pago'),
-            descuento_porcentaje=validated_data.pop('descuento_porcentaje', Decimal('0.00')), # Uso de .pop con valor por defecto
-            monto_descontado=validated_data.pop('monto_descontado', Decimal('0.00')), # Uso de .pop con valor por defecto
+            descuento_porcentaje=validated_data.pop('descuento_porcentaje', Decimal('0.00')),
+            monto_descontado=validated_data.pop('monto_descontado', Decimal('0.00')),
             fecha_venta=validated_data.pop('fecha_venta'),
-            observaciones=validated_data.pop('observaciones', ''), # Uso de .pop con valor por defecto
+            observaciones=validated_data.pop('observaciones', ''),
         )
         
         for detalle_data in detalles_data:
@@ -142,11 +154,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             cantidad = detalle_data['cantidad']
             precio_unitario = detalle_data['precio_unitario']
 
-            try:
-                producto_obj = Producto.objects.get(id=producto_id)
-            except Producto.DoesNotExist:
-                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado."})
-
+            producto_obj = Producto.objects.get(id=producto_id)
             subtotal = precio_unitario * cantidad
             DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
 
@@ -184,20 +192,21 @@ class CompraSerializer(serializers.ModelSerializer):
         read_only_fields = ['usuario', 'fecha_compra']
 
 class CompraCreateSerializer(serializers.ModelSerializer):
+    tienda_slug = serializers.CharField(write_only=True)
+
     class Meta:
         model = Compra
-        fields = ['total', 'proveedor', 'tienda']
+        fields = ['total', 'proveedor', 'tienda_slug']
         extra_kwargs = {
             'total': {'required': True},
-            'tienda': {'required': True},
+            'proveedor': {'required': False},
         }
-    
-    def validate_tienda(self, value):
-        # Esta validación es importante para evitar errores
-        if not Tienda.objects.filter(id=value.id).exists():
-            raise serializers.ValidationError("La tienda especificada no existe.")
-        return value
 
     def create(self, validated_data):
+        tienda_slug = validated_data.pop('tienda_slug')
+        tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        validated_data['tienda'] = tienda_obj
+        validated_data['usuario'] = self.context['request'].user
+        
         compra = Compra.objects.create(**validated_data)
         return compra

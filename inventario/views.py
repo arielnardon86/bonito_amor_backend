@@ -1,19 +1,22 @@
-from django.shortcuts import get_object_or_404
+# BONITO_AMOR/backend/inventario/views.py
+from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.db.models import Sum, Count
-from django.db.models.functions import ExtractYear, ExtractMonth
+from django.db.models import Sum, Count, F, Q, Value 
+from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
+from datetime import timedelta, datetime
+from django.utils import timezone
 from decimal import Decimal 
 
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer
+    CompraSerializer, CompraCreateSerializer 
 )
 from .filters import VentaFilter 
 
@@ -25,6 +28,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = Producto.objects.all()
+
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if user.is_superuser:
@@ -33,74 +37,70 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return queryset.order_by('nombre')
         
         elif user.tienda:
+            # Validación clave: Un usuario normal solo puede acceder a su propia tienda.
             if tienda_slug and user.tienda.nombre != tienda_slug:
-                return Producto.objects.none()
+                return Producto.objects.none() # Devuelve un queryset vacío
+            
             return queryset.filter(tienda=user.tienda).order_by('nombre')
         
-        return Producto.objects.none()
+        return Producto.objects.none() # Si el usuario no tiene una tienda, no ve productos
+
+    @action(detail=False, methods=['get'])
+    def productos_sin_codigo(self, request):
+        productos = self.get_queryset().filter(codigo_barras__isnull=True)
+        serializer = self.get_serializer(productos, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def buscar_por_barcode(self, request):
-        barcode = request.query_params.get('barcode', None)
+        codigo = request.query_params.get('barcode', None)
         tienda_slug = request.query_params.get('tienda_slug', None)
 
-        if not barcode or not tienda_slug:
-            return Response({'error': 'Parámetros faltantes (barcode y tienda_slug).'}, status=status.HTTP_400_BAD_REQUEST)
+        if not codigo or not tienda_slug:
+            return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            tienda = Tienda.objects.get(nombre=tienda_slug)
-        except Tienda.DoesNotExist:
-            return Response({'error': 'Tienda no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            producto = Producto.objects.get(codigo_barras=barcode, tienda=tienda)
+            producto = self.get_queryset().get(codigo_barras=codigo, tienda__nombre=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
         except Producto.DoesNotExist:
-            return Response({'error': 'Producto no encontrado en esta tienda.'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        
+        return Response({"detail": "Código de barras no proporcionado."}, status=status.HTTP_400_BAD_REQUEST)
 
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            self.permission_classes = [permissions.IsAdminUser]
-        return super().get_permissions()
+    @action(detail=False, methods=['get'])
+    def productos_con_stock(self, request):
+        productos = self.get_queryset().filter(stock__gt=0)
+        serializer = self.get_serializer(productos, many=True)
+        return Response(serializer.data)
+
 
 class CategoriaViewSet(viewsets.ModelViewSet):
-    queryset = Categoria.objects.all().order_by('nombre')
+    queryset = Categoria.objects.all()
     serializer_class = CategoriaSerializer
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
 class TiendaViewSet(viewsets.ModelViewSet):
-    queryset = Tienda.objects.all().order_by('nombre')
+    queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
     
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [permissions.AllowAny()]
-        return [permissions.IsAdminUser()]
-    
+        if self.action == 'list':
+            permission_classes = [permissions.AllowAny]
+        else:
+            permission_classes = [permissions.IsAuthenticated]
+        return [permission() for permission in permission_classes]
+
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all().order_by('username')
+    queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        # Asegúrate de que los usuarios no puedan ver otros usuarios de otras tiendas
-        if self.request.user.is_superuser:
-            return User.objects.all()
-        return User.objects.filter(tienda=self.request.user.tienda)
-
-class MetodoPagoViewSet(viewsets.ModelViewSet):
-    queryset = MetodoPago.objects.all().order_by('nombre')
-    serializer_class = MetodoPagoSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
 class VentaViewSet(viewsets.ModelViewSet):
-    queryset = Venta.objects.all().order_by('-fecha_venta')
+    queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     filterset_class = VentaFilter
-    
+
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer
@@ -115,82 +115,20 @@ class VentaViewSet(viewsets.ModelViewSet):
         return Venta.objects.none()
 
     def perform_create(self, serializer):
-        tienda_obj = get_object_or_404(Tienda, nombre=serializer.validated_data.pop('tienda_slug'))
-        serializer.save(usuario=self.request.user, tienda=tienda_obj)
+        serializer.save(usuario=self.request.user)
 
-    @action(detail=True, methods=['patch'])
-    def anular(self, request, pk=None):
-        venta = get_object_or_404(Venta, pk=pk)
-        if venta.anulada:
-            return Response({"error": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        venta.anulada = True
-        venta.save()
 
-        detalles = DetalleVenta.objects.filter(venta=venta)
-        for detalle in detalles:
-            if detalle.producto and not detalle.anulado_individualmente:
-                producto = detalle.producto
-                producto.stock += detalle.cantidad
-                producto.save()
-        
-        return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
-
-    @action(detail=True, methods=['patch'])
-    def anular_detalle(self, request, pk=None):
-        detalle_id = request.data.get('detalle_id')
-        if not detalle_id:
-            return Response({"error": "Se requiere el ID del detalle de venta."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            detalle = DetalleVenta.objects.get(id=detalle_id, venta__id=pk)
-        except DetalleVenta.DoesNotExist:
-            return Response({"error": "Detalle de venta no encontrado."}, status=status.HTTP_404_NOT_FOUND)
-        
-        if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser:
-            return Response({"error": "No tienes permiso para anular este detalle de venta."}, status=status.HTTP_403_FORBIDDEN)
-        
-        if detalle.anulado_individualmente:
-            return Response({"error": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if detalle.venta.anulada:
-            return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if detalle.producto:
-            producto = detalle.producto
-            producto.stock += detalle.cantidad
-            producto.save()
-            detalle.anulado_individualmente = True
-            detalle.save()
-            
-            venta = detalle.venta
-            total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
-            venta.total = total_recalculado
-            venta.save()
-            
-            return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
-        else:
-            detalle.anulado_individualmente = True
-            detalle.save()
-            return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
-
-class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
+class DetalleVentaViewSet(viewsets.ModelViewSet):
     queryset = DetalleVenta.objects.all()
     serializer_class = DetalleVentaSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_superuser:
-            return DetalleVenta.objects.all()
-        elif user.tienda:
-            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
-        return DetalleVenta.objects.none()
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
 
 class MetodoPagoViewSet(viewsets.ModelViewSet):
-    queryset = MetodoPago.objects.all().order_by('nombre')
+    queryset = MetodoPago.objects.all()
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
+
 
 class CompraViewSet(viewsets.ModelViewSet):
     serializer_class = CompraSerializer
@@ -219,9 +157,12 @@ class CompraViewSet(viewsets.ModelViewSet):
         tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
         serializer.save(usuario=self.request.user, tienda=tienda_obj)
         
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
+
+# APIView para las métricas
 class MetricasAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
