@@ -69,7 +69,8 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = serializers.ListField(
-        child=serializers.DictField()
+        child=serializers.DictField(),
+        write_only=True # CAMBIO CLAVE: Marcar como write_only para evitar la serialización de salida
     )
     tienda_slug = serializers.CharField(write_only=True)
     
@@ -135,15 +136,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
+        # CAMBIO CLAVE: Eliminar campos que no existen en el modelo Venta
+        validated_data.pop('tienda_slug')
+        validated_data.pop('monto_descontado', None)
+        validated_data.pop('observaciones', None)
+
         venta = Venta.objects.create(
             total=validated_data['total'],
             usuario=self.context['request'].user, 
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
-            # Los campos 'monto_descontado' y 'observaciones' no son del modelo Venta, 
-            # por lo que deben ser extraídos antes de crear el objeto.
-            # En tu modelo Venta solo hay un campo 'descuento_porcentaje'
             fecha_venta=validated_data['fecha_venta'],
         )
         
