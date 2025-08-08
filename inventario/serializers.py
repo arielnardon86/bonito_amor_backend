@@ -61,22 +61,19 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     productos = DetalleVentaCreateSerializer(many=True, write_only=True)
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
-    descuento = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True, default=0.0)
+    descuento = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True, default=Decimal('0.00'))
 
     class Meta:
         model = Venta
-        fields = ['id', 'productos', 'tienda_slug', 'descuento', 'metodo_pago_nombre']
-        read_only_fields = ['monto_total', 'monto_final']
+        fields = ['id', 'productos', 'tienda_slug', 'metodo_pago_nombre', 'descuento']
 
     def validate(self, data):
-        # Asegúrate de que el nombre de la tienda existe
         try:
             tienda = Tienda.objects.get(nombre=data['tienda_slug'])
             data['tienda'] = tienda
         except Tienda.DoesNotExist:
             raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
 
-        # Asegúrate de que el método de pago existe
         try:
             metodo_pago = MetodoPago.objects.get(nombre=data['metodo_pago_nombre'])
             data['metodo_pago'] = metodo_pago
@@ -86,19 +83,18 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        # CORRECCIÓN: Separar todos los datos que no son campos directos del modelo Venta
+        # Extraer los datos de los productos y otros datos de validación
         productos_data = validated_data.pop('productos')
         tienda = validated_data.pop('tienda')
         metodo_pago = validated_data.pop('metodo_pago')
         usuario = validated_data.pop('usuario')
         descuento = validated_data.pop('descuento')
-
-        # CORRECCIÓN: Eliminar los campos solo de validación para que no se pasen al modelo
+        
+        # Quitar los campos que solo son para validación y no campos del modelo
         validated_data.pop('tienda_slug', None)
         validated_data.pop('metodo_pago_nombre', None)
 
-
-        # Calcular el monto total y final
+        # Calcular los montos totales y finales
         monto_total = sum(item['producto'].precio * item['cantidad'] for item in productos_data)
         monto_final = monto_total * (Decimal(1) - (descuento / Decimal(100)))
 
@@ -110,7 +106,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             monto_total=monto_total,
             monto_final=monto_final,
             descuento=descuento,
-            **validated_data # Esto debería ser un diccionario vacío ahora
+            **validated_data
         )
 
         # Crear los detalles de venta y actualizar el stock
@@ -118,7 +114,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto = item_data['producto']
             cantidad = item_data['cantidad']
             
-            # Crear el detalle de la venta
             DetalleVenta.objects.create(
                 venta=venta,
                 producto=producto,
@@ -127,7 +122,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 subtotal=producto.precio * cantidad
             )
 
-            # Actualizar el stock del producto
             producto.stock -= cantidad
             producto.save()
 
