@@ -69,8 +69,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        fields = ['id', 'productos', 'tienda_slug', 'monto_total', 'descuento', 'metodo_pago_nombre']
-        read_only_fields = ['monto_total', 'monto_final']
+        fields = ['id', 'productos', 'tienda_slug', 'descuento', 'metodo_pago_nombre'] # <-- 'monto_total' eliminado de esta lista
+        read_only_fields = ['monto_total', 'monto_final'] # <-- Se mantiene aquí
 
     def validate(self, data):
         # Validation logic...
@@ -78,7 +78,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         # Creation logic...
-        return venta
+        return Venta
 
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
