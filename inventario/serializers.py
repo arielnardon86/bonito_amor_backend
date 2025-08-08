@@ -45,7 +45,6 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         model = MetodoPago
         fields = '__all__'
 
-# Serializador para los detalles de venta en la creación de una venta
 class DetalleVentaCreateSerializer(serializers.Serializer):
     producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
     cantidad = serializers.IntegerField(min_value=1)
@@ -58,7 +57,6 @@ class DetalleVentaCreateSerializer(serializers.Serializer):
         return data
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    # CORRECCIÓN: Se revierte a 'productos' ya que el backend lo requiere
     productos = DetalleVentaCreateSerializer(many=True, write_only=True)
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
@@ -70,7 +68,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['monto_total', 'monto_final']
 
     def validate(self, data):
-        # CAMBIO: Asegúrate de que el nombre de la tienda existe
+        # Asegúrate de que el nombre de la tienda existe
         try:
             tienda = Tienda.objects.get(nombre=data['tienda_slug'])
             data['tienda'] = tienda
@@ -91,6 +89,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         productos_data = validated_data.pop('productos')
         tienda = validated_data.pop('tienda')
         metodo_pago = validated_data.pop('metodo_pago')
+        
+        # CORRECCIÓN: Obtener el usuario de validated_data, ya que viene de views.py
+        usuario = validated_data.pop('usuario')
 
         # Calcular el monto total y final
         monto_total = sum(item['producto'].precio * item['cantidad'] for item in productos_data)
@@ -99,7 +100,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         # Crear la venta
         venta = Venta.objects.create(
-            usuario=self.context['request'].user,
+            usuario=usuario,  # CAMBIO: Usar la variable 'usuario' extraída
             tienda=tienda,
             metodo_pago=metodo_pago,
             monto_total=monto_total,
