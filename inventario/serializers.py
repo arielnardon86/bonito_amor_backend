@@ -58,7 +58,7 @@ class DetalleVentaCreateSerializer(serializers.Serializer):
         return data
 
 class VentaCreateSerializer(serializers.ModelSerializer):
-    # CAMBIO: Usar un serializador anidado para validar los detalles de la venta
+    # CORRECCIÓN: Se revierte a 'productos' ya que el backend lo requiere
     productos = DetalleVentaCreateSerializer(many=True, write_only=True)
     tienda_slug = serializers.CharField(write_only=True)
     metodo_pago_nombre = serializers.CharField(write_only=True)
@@ -70,9 +70,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['monto_total', 'monto_final']
 
     def validate(self, data):
-        # Asegúrate de que el slug de la tienda existe
+        # CAMBIO: Asegúrate de que el nombre de la tienda existe
         try:
-            tienda = Tienda.objects.get(slug=data['tienda_slug'])
+            tienda = Tienda.objects.get(nombre=data['tienda_slug'])
             data['tienda'] = tienda
         except Tienda.DoesNotExist:
             raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
