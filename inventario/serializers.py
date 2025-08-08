@@ -128,23 +128,25 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         data['monto_descontado'] = calculated_total * (descuento_porcentaje / Decimal('100'))
         data['fecha_venta'] = timezone.now()
-        data['observaciones'] = "" # Puedes agregar observaciones si el frontend las envía.
+        data['observaciones'] = "" 
 
         return data
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
-        venta = Venta.objects.create(
-            total=validated_data['total'],
-            usuario=self.context['request'].user, 
-            tienda=validated_data['tienda'],
-            metodo_pago=validated_data['metodo_pago'],
-            descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
-            monto_descontado=validated_data.get('monto_descontado', Decimal('0.00')),
-            fecha_venta=validated_data['fecha_venta'],
-            observaciones=validated_data.get('observaciones', ''),
-        )
+        venta_fields = {
+            'total': validated_data.pop('total'),
+            'usuario': self.context['request'].user, 
+            'tienda': validated_data.pop('tienda'),
+            'metodo_pago': validated_data.pop('metodo_pago'),
+            'descuento_porcentaje': validated_data.pop('descuento_porcentaje', Decimal('0.00')),
+            'monto_descontado': validated_data.pop('monto_descontado', Decimal('0.00')),
+            'fecha_venta': validated_data.pop('fecha_venta'),
+            'observaciones': validated_data.pop('observaciones', ''),
+        }
+
+        venta = Venta.objects.create(**venta_fields)
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
@@ -202,8 +204,13 @@ class CompraCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         tienda_slug = validated_data.pop('tienda_slug')
         tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
-        validated_data['tienda'] = tienda_obj
-        validated_data['usuario'] = self.context['request'].user
         
-        compra = Compra.objects.create(**validated_data)
+        compra_fields = {
+            'total': validated_data.pop('total'),
+            'proveedor': validated_data.pop('proveedor', None),
+            'tienda': tienda_obj,
+            'usuario': self.context['request'].user
+        }
+        
+        compra = Compra.objects.create(**compra_fields)
         return compra

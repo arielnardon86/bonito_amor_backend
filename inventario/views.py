@@ -115,9 +115,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         return Venta.objects.none()
 
     def perform_create(self, serializer):
-        tienda_slug = self.request.data.get('tienda_slug')
-        tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
-        serializer.save(usuario=self.request.user, tienda=tienda_obj)
+        serializer.save(usuario=self.request.user)
 
 
 class DetalleVentaViewSet(viewsets.ModelViewSet):
@@ -155,9 +153,7 @@ class CompraViewSet(viewsets.ModelViewSet):
         return CompraSerializer
     
     def perform_create(self, serializer):
-        tienda_slug = self.request.data.get('tienda_slug')
-        tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
-        serializer.save(usuario=self.request.user, tienda=tienda_obj)
+        serializer.save(usuario=self.request.user)
         
 
 class CustomTokenObtainPairView(TokenObtainPairView):
