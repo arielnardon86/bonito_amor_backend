@@ -45,6 +45,7 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         model = MetodoPago
         fields = '__all__'
 
+# Serializador para los detalles de venta en la creación de una venta
 class DetalleVentaCreateSerializer(serializers.Serializer):
     producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
     cantidad = serializers.IntegerField(min_value=1)
@@ -85,27 +86,31 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        # CAMBIO: Separar los detalles de los productos para la creación de DetalleVenta
+        # CORRECCIÓN: Separar todos los datos que no son campos directos del modelo Venta
         productos_data = validated_data.pop('productos')
         tienda = validated_data.pop('tienda')
         metodo_pago = validated_data.pop('metodo_pago')
-        
-        # CORRECCIÓN: Obtener el usuario de validated_data, ya que viene de views.py
         usuario = validated_data.pop('usuario')
+        descuento = validated_data.pop('descuento')
+
+        # CORRECCIÓN: Eliminar los campos solo de validación para que no se pasen al modelo
+        validated_data.pop('tienda_slug', None)
+        validated_data.pop('metodo_pago_nombre', None)
+
 
         # Calcular el monto total y final
         monto_total = sum(item['producto'].precio * item['cantidad'] for item in productos_data)
-        descuento_porcentaje = validated_data.get('descuento', Decimal(0))
-        monto_final = monto_total * (Decimal(1) - (descuento_porcentaje / Decimal(100)))
+        monto_final = monto_total * (Decimal(1) - (descuento / Decimal(100)))
 
-        # Crear la venta
+        # Crear la venta, pasando todos los argumentos de forma explícita
         venta = Venta.objects.create(
-            usuario=usuario,  # CAMBIO: Usar la variable 'usuario' extraída
+            usuario=usuario,
             tienda=tienda,
             metodo_pago=metodo_pago,
             monto_total=monto_total,
             monto_final=monto_final,
-            **validated_data
+            descuento=descuento,
+            **validated_data # Esto debería ser un diccionario vacío ahora
         )
 
         # Crear los detalles de venta y actualizar el stock
