@@ -128,25 +128,24 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         data['monto_descontado'] = calculated_total * (descuento_porcentaje / Decimal('100'))
         data['fecha_venta'] = timezone.now()
-        data['observaciones'] = "" 
+        data['observaciones'] = ""
 
         return data
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
-        venta_fields = {
-            'total': validated_data.pop('total'),
-            'usuario': self.context['request'].user, 
-            'tienda': validated_data.pop('tienda'),
-            'metodo_pago': validated_data.pop('metodo_pago'),
-            'descuento_porcentaje': validated_data.pop('descuento_porcentaje', Decimal('0.00')),
-            'monto_descontado': validated_data.pop('monto_descontado', Decimal('0.00')),
-            'fecha_venta': validated_data.pop('fecha_venta'),
-            'observaciones': validated_data.pop('observaciones', ''),
-        }
-
-        venta = Venta.objects.create(**venta_fields)
+        venta = Venta.objects.create(
+            total=validated_data['total'],
+            usuario=self.context['request'].user, 
+            tienda=validated_data['tienda'],
+            metodo_pago=validated_data['metodo_pago'],
+            descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
+            # Los campos 'monto_descontado' y 'observaciones' no son del modelo Venta, 
+            # por lo que deben ser extraídos antes de crear el objeto.
+            # En tu modelo Venta solo hay un campo 'descuento_porcentaje'
+            fecha_venta=validated_data['fecha_venta'],
+        )
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
