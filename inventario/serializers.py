@@ -93,7 +93,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         # Quitar los campos que solo son para validación y no campos del modelo
         validated_data.pop('tienda_slug', None)
         validated_data.pop('metodo_pago_nombre', None)
-
+        
         # Calcular los montos totales y finales
         monto_total = sum(item['producto'].precio * item['cantidad'] for item in productos_data)
         monto_final = monto_total * (Decimal(1) - (descuento / Decimal(100)))
@@ -106,7 +106,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             monto_total=monto_total,
             monto_final=monto_final,
             descuento=descuento,
-            **validated_data
         )
 
         # Crear los detalles de venta y actualizar el stock
