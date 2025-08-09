@@ -55,7 +55,8 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
     usuario = SimpleUserSerializer(read_only=True)
-    metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True) # Cambio de source a metodo_pago
+    # CORRECCIÓN: el campo metodo_pago en el modelo Venta es un CharField, no un ForeignKey.
+    metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
 
     class Meta:
@@ -63,10 +64,10 @@ class VentaSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 
             'metodo_pago', 'metodo_pago_nombre', 
-            'usuario', 'tienda', 'tienda_nombre', 'detalles', 'observaciones',
+            'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'fecha_creacion', 'fecha_actualizacion'
         ]
-        # CORRECCIÓN: Se eliminó 'monto_descontado' del serializador, ya que no existe en el modelo.
+        # CORRECCIÓN: se eliminó 'observaciones' del serializador, ya que no existe en el modelo.
 
 
 class VentaCreateSerializer(serializers.ModelSerializer):
@@ -130,23 +131,20 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         data['fecha_venta'] = timezone.now()
-        data['observaciones'] = "" 
 
         return data
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
-        venta_fields = {
-            'total': validated_data.pop('total'),
-            'usuario': self.context['request'].user, 
-            'tienda': validated_data.pop('tienda'),
-            'metodo_pago': validated_data.pop('metodo_pago'),
-            'descuento_porcentaje': validated_data.get('descuento_porcentaje', Decimal('0.00')),
-            'fecha_venta': validated_data.pop('fecha_venta'),
-        }
-
-        venta = Venta.objects.create(**venta_fields)
+        venta = Venta.objects.create(
+            total=validated_data['total'],
+            usuario=self.context['request'].user, 
+            tienda=validated_data['tienda'],
+            metodo_pago=validated_data['metodo_pago'],
+            descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
+            fecha_venta=validated_data['fecha_venta'],
+        )
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 

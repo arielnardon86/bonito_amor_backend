@@ -110,8 +110,10 @@ class VentaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = Venta.objects.all().order_by('-fecha_venta')
         
+        # CORRECCIÓN: Usar 'tienda__nombre' para filtrar por slug en el backend
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
+        
         if user.is_superuser:
-            tienda_slug = self.request.query_params.get('tienda_slug', None)
             if tienda_slug:
                 queryset = queryset.filter(tienda__nombre=tienda_slug)
             return queryset
