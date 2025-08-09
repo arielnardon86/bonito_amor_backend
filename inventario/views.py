@@ -123,11 +123,74 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         return Venta.objects.none()
 
-class DetalleVentaViewSet(viewsets.ModelViewSet):
+    @action(detail=True, methods=['patch'])
+    def anular(self, request, pk=None):
+        venta = get_object_or_404(Venta, pk=pk)
+        if venta.anulada:
+            return Response({"error": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        venta.anulada = True
+        venta.save()
+
+        detalles = DetalleVenta.objects.filter(venta=venta)
+        for detalle in detalles:
+            if detalle.producto and not detalle.anulado_individualmente:
+                producto = detalle.producto
+                producto.stock += detalle.cantidad
+                producto.save()
+        
+        return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['patch'])
+    def anular_detalle(self, request, pk=None):
+        detalle_id = request.data.get('detalle_id')
+        if not detalle_id:
+            return Response({"error": "Se requiere el ID del detalle de venta."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            detalle = DetalleVenta.objects.get(id=detalle_id, venta__id=pk)
+        except DetalleVenta.DoesNotExist:
+            return Response({"error": "Detalle de venta no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        
+        if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser:
+            return Response({"error": "No tienes permiso para anular este detalle de venta."}, status=status.HTTP_403_FORBIDDEN)
+        
+        if detalle.anulado_individualmente:
+            return Response({"error": "Este detalle de venta ya ha sido anulado individualmente."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if detalle.venta.anulada:
+            return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if detalle.producto:
+            producto = detalle.producto
+            producto.stock += detalle.cantidad
+            producto.save()
+            detalle.anulado_individualmente = True
+            detalle.save()
+            
+            venta = detalle.venta
+            total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
+            venta.total = total_recalculado
+            venta.save()
+            
+            return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
+        else:
+            detalle.anulado_individualmente = True
+            detalle.save()
+            return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
+
+class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all()
     serializer_class = DetalleVentaSerializer
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
-
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return DetalleVenta.objects.all()
+        elif user.tienda:
+            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
+        return DetalleVenta.objects.none()
 
 class MetodoPagoViewSet(viewsets.ModelViewSet):
     queryset = MetodoPago.objects.all()
