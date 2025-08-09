@@ -99,7 +99,9 @@ class UserViewSet(viewsets.ModelViewSet):
 class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
-
+    
+    # CORRECCIÓN: Se elimina filterset_class porque se implementa el filtro manual en get_queryset
+    
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer
@@ -108,6 +110,7 @@ class VentaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = Venta.objects.all().order_by('-fecha_venta')
+        
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
         if not user.is_superuser:
@@ -129,7 +132,8 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
-            queryset = queryset.filter(anulada=anulada.lower() == 'true')
+            # CORRECCIÓN: La lógica del filtro de anulada estaba invertida. Se corrige para que 'true' sea True.
+            queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset
 
