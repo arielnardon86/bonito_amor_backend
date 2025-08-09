@@ -55,22 +55,24 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
     usuario = SimpleUserSerializer(read_only=True)
-    metodo_pago_nombre = serializers.CharField(source='metodo_pago.nombre', read_only=True)
+    metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True) # Cambio de source a metodo_pago
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
 
     class Meta:
         model = Venta
         fields = [
             'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 
-            'monto_descontado', 'metodo_pago', 'metodo_pago_nombre', 
+            'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles', 'observaciones',
             'fecha_creacion', 'fecha_actualizacion'
         ]
+        # CORRECCIÓN: Se eliminó 'monto_descontado' del serializador, ya que no existe en el modelo.
+
 
 class VentaCreateSerializer(serializers.ModelSerializer):
     detalles = serializers.ListField(
         child=serializers.DictField(),
-        write_only=True # CAMBIO CLAVE: Marcar como write_only para evitar la serialización de salida
+        write_only=True 
     )
     tienda_slug = serializers.CharField(write_only=True)
     
@@ -127,28 +129,24 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"descuento_porcentaje": "El porcentaje de descuento debe estar entre 0 y 100."})
 
         data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
-        data['monto_descontado'] = calculated_total * (descuento_porcentaje / Decimal('100'))
         data['fecha_venta'] = timezone.now()
-        data['observaciones'] = ""
+        data['observaciones'] = "" 
 
         return data
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
-        # CAMBIO CLAVE: Eliminar campos que no existen en el modelo Venta
-        validated_data.pop('tienda_slug')
-        validated_data.pop('monto_descontado', None)
-        validated_data.pop('observaciones', None)
+        venta_fields = {
+            'total': validated_data.pop('total'),
+            'usuario': self.context['request'].user, 
+            'tienda': validated_data.pop('tienda'),
+            'metodo_pago': validated_data.pop('metodo_pago'),
+            'descuento_porcentaje': validated_data.get('descuento_porcentaje', Decimal('0.00')),
+            'fecha_venta': validated_data.pop('fecha_venta'),
+        }
 
-        venta = Venta.objects.create(
-            total=validated_data['total'],
-            usuario=self.context['request'].user, 
-            tienda=validated_data['tienda'],
-            metodo_pago=validated_data['metodo_pago'],
-            descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
-            fecha_venta=validated_data['fecha_venta'],
-        )
+        venta = Venta.objects.create(**venta_fields)
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
