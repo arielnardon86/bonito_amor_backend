@@ -108,15 +108,18 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        queryset = Venta.objects.all().order_by('-fecha_venta')
+        
         if user.is_superuser:
-            return Venta.objects.all().order_by('-fecha_venta')
+            tienda_slug = self.request.query_params.get('tienda_slug', None)
+            if tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+            return queryset
+        
         elif user.tienda:
-            return Venta.objects.filter(tienda=user.tienda).order_by('-fecha_venta')
+            return queryset.filter(tienda=user.tienda)
+        
         return Venta.objects.none()
-
-    def perform_create(self, serializer):
-        serializer.save(usuario=self.request.user)
-
 
 class DetalleVentaViewSet(viewsets.ModelViewSet):
     queryset = DetalleVenta.objects.all()
