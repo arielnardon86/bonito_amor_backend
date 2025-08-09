@@ -99,7 +99,6 @@ class UserViewSet(viewsets.ModelViewSet):
 class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
-    filterset_class = VentaFilter
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -109,19 +108,30 @@ class VentaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = Venta.objects.all().order_by('-fecha_venta')
-        
-        # CORRECCIÓN: Usar 'tienda__nombre' para filtrar por slug en el backend
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
-        if user.is_superuser:
-            if tienda_slug:
-                queryset = queryset.filter(tienda__nombre=tienda_slug)
-            return queryset
-        
-        elif user.tienda:
-            return queryset.filter(tienda=user.tienda)
-        
-        return Venta.objects.none()
+        if not user.is_superuser:
+            if user.tienda:
+                queryset = queryset.filter(tienda=user.tienda)
+            else:
+                return Venta.objects.none()
+        elif tienda_slug:
+            queryset = queryset.filter(tienda__nombre=tienda_slug)
+
+        # Aplicar filtros adicionales de fecha, vendedor y anulación
+        fecha_venta_date = self.request.query_params.get('fecha_venta__date', None)
+        if fecha_venta_date:
+            queryset = queryset.filter(fecha_venta__date=fecha_venta_date)
+
+        usuario = self.request.query_params.get('usuario', None)
+        if usuario:
+            queryset = queryset.filter(usuario=usuario)
+
+        anulada = self.request.query_params.get('anulada', None)
+        if anulada is not None:
+            queryset = queryset.filter(anulada=anulada.lower() == 'true')
+            
+        return queryset
 
     @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
