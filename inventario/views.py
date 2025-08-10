@@ -58,7 +58,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def buscar_por_barcode(self, request):
         codigo = request.query_params.get('barcode', None)
-        tienda_slug = request.query_params.get('tienda_slug', None)
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if not codigo or not tienda_slug:
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
@@ -293,7 +293,7 @@ class MetricasAPIView(APIView):
             'producto__nombre', 'producto__talle'
         ).annotate(
             cantidad_total=Sum('cantidad')
-        ).order_by('-cantidad_total')[:10]
+        ).order_by('-cantidad-total')[:10]
         
         ventas_por_usuario = queryset_ventas.values('usuario__username').annotate(
             total_vendido=Sum('total'),
