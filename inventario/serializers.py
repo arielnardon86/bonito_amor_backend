@@ -12,10 +12,13 @@ class SimpleUserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name']
 
 class ProductoSerializer(serializers.ModelSerializer):
+    # CORRECCIÓN CLAVE: Hacemos el campo tienda no requerido en el serializador
+    # La vista se encargará de asignarlo automáticamente con el usuario autenticado.
     tienda = serializers.SlugRelatedField(
         slug_field='nombre', 
         queryset=Tienda.objects.all(), 
-        required=False
+        required=False,
+        allow_null=True
     )
     class Meta:
         model = Producto
