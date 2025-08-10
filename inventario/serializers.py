@@ -12,10 +12,13 @@ class SimpleUserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name']
 
 class ProductoSerializer(serializers.ModelSerializer):
+    # CORRECCIÓN CLAVE: Hacemos el campo tienda no requerido en el serializador
+    # La vista se encargará de asignarlo automáticamente con el usuario autenticado.
     tienda = serializers.SlugRelatedField(
         slug_field='nombre', 
         queryset=Tienda.objects.all(), 
-        required=False
+        required=False,
+        allow_null=True
     )
     class Meta:
         model = Producto
@@ -100,7 +103,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"tienda_slug": "El slug de la tienda es obligatorio."})
 
         try:
-            tienda_obj = Tienda.objects.get(nombre=tienda_slug)
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
         except Tienda.DoesNotExist:
             raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
 
