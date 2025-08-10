@@ -45,6 +45,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
         
         return Producto.objects.none() # Si el usuario no tiene una tienda, no ve productos
 
+    def perform_create(self, serializer):
+        # CORRECCIÓN: Asigna la tienda del usuario al producto antes de guardarlo
+        serializer.save(tienda=self.request.user.tienda)
+
     @action(detail=False, methods=['get'])
     def productos_sin_codigo(self, request):
         productos = self.get_queryset().filter(codigo_barras__isnull=True)
