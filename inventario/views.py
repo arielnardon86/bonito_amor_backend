@@ -37,16 +37,14 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return queryset.order_by('nombre')
         
         elif user.tienda:
-            # Validación clave: Un usuario normal solo puede acceder a su propia tienda.
             if tienda_slug and user.tienda.nombre != tienda_slug:
-                return Producto.objects.none() # Devuelve un queryset vacío
+                return Producto.objects.none()
             
             return queryset.filter(tienda=user.tienda).order_by('nombre')
         
-        return Producto.objects.none() # Si el usuario no tiene una tienda, no ve productos
+        return Producto.objects.none()
 
     def perform_create(self, serializer):
-        # CORRECCIÓN: Asigna la tienda del usuario al producto antes de guardarlo
         serializer.save(tienda=self.request.user.tienda)
 
     @action(detail=False, methods=['get'])
@@ -104,8 +102,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     
-    # CORRECCIÓN: Se elimina filterset_class porque se implementa el filtro manual en get_queryset
-    
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer
@@ -124,7 +120,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         elif tienda_slug:
             queryset = queryset.filter(tienda__nombre=tienda_slug)
 
-        # Aplicar filtros adicionales de fecha, vendedor y anulación
         fecha_venta_date = self.request.query_params.get('fecha_venta__date', None)
         if fecha_venta_date:
             queryset = queryset.filter(fecha_venta__date=fecha_venta_date)
@@ -135,7 +130,6 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
-            # CORRECCIÓN: La lógica del filtro de anulada estaba invertida. Se corrige para que 'true' sea True.
             queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset

@@ -12,17 +12,24 @@ class SimpleUserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name']
 
 class ProductoSerializer(serializers.ModelSerializer):
-    # CORRECCIÓN CLAVE: Hacemos el campo tienda no requerido en el serializador
-    # La vista se encargará de asignarlo automáticamente con el usuario autenticado.
-    tienda = serializers.SlugRelatedField(
-        slug_field='nombre', 
-        queryset=Tienda.objects.all(), 
-        required=False,
-        allow_null=True
+    # CORRECCIÓN CLAVE: Agregamos un campo tienda_slug que es de solo escritura.
+    # El serializador usará este campo para encontrar la tienda, pero no lo mostrará en la respuesta.
+    tienda_slug = serializers.SlugRelatedField(
+        source='tienda',
+        slug_field='nombre',
+        queryset=Tienda.objects.all(),
+        write_only=True,
+        required=False  # Hacemos que sea opcional para que la vista lo asigne si no se provee.
     )
+
     class Meta:
         model = Producto
-        fields = '__all__'
+        fields = ['id', 'nombre', 'talle', 'precio', 'stock', 'codigo_barras', 'tienda', 'tienda_slug']
+
+    def create(self, validated_data):
+        # Esta lógica asegura que, si el `tienda_slug` se provee, se use para crear el producto.
+        # Si no, `perform_create` en la vista se encarga de asignarlo desde el usuario autenticado.
+        return super().create(validated_data)
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
