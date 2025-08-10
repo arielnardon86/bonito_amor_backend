@@ -58,7 +58,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def buscar_por_barcode(self, request):
         codigo = request.query_params.get('barcode', None)
-        tienda_slug = request.query_params.get('tienda_slug', None)
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if not codigo or not tienda_slug:
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
@@ -103,6 +103,8 @@ class UserViewSet(viewsets.ModelViewSet):
 class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
+    
+    # CORRECCIÓN: Se elimina filterset_class porque se implementa el filtro manual en get_queryset
     
     def get_serializer_class(self):
         if self.action == 'create':
