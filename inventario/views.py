@@ -104,8 +104,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     
-    # CORRECCIÓN: Se elimina filterset_class porque se implementa el filtro manual en get_queryset
-    
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer

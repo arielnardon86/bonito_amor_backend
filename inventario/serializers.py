@@ -12,6 +12,11 @@ class SimpleUserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name']
 
 class ProductoSerializer(serializers.ModelSerializer):
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=False
+    )
     class Meta:
         model = Producto
         fields = '__all__'
@@ -55,7 +60,6 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, read_only=True)
     usuario = SimpleUserSerializer(read_only=True)
-    # CORRECCIÓN: el campo metodo_pago en el modelo Venta es un CharField, no un ForeignKey.
     metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
 
@@ -67,7 +71,6 @@ class VentaSerializer(serializers.ModelSerializer):
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'fecha_creacion', 'fecha_actualizacion'
         ]
-        # CORRECCIÓN: se eliminó 'observaciones' del serializador, ya que no existe en el modelo.
 
 
 class VentaCreateSerializer(serializers.ModelSerializer):
