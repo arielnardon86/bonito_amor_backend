@@ -110,7 +110,6 @@ class VentaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = Venta.objects.all().order_by('-fecha_venta')
-        
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
         if not user.is_superuser:
