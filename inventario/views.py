@@ -194,7 +194,8 @@ class VentaViewSet(viewsets.ModelViewSet):
             
             venta = detalle.venta
             total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
-            venta.total = total_recalculado
+            # CORRECCIÓN: Aplicar el descuento al total recalculado
+            venta.total = total_recalculado * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
             venta.save()
             
             return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
