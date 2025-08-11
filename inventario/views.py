@@ -94,12 +94,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
         return [permission() for permission in permission_classes]
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = User.objects.all().order_by('username')
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
+        
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug)
+            return queryset
+        
+        elif user.tienda:
+            return queryset.filter(tienda=user.tienda)
+        
+        return User.objects.none()
 
 class VentaViewSet(viewsets.ModelViewSet):
-    queryset = Venta.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     
     def get_serializer_class(self):
@@ -130,7 +143,6 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
-            # CORRECCIÓN: La lógica del filtro de anulada estaba invertida. Se corrige para que 'true' sea True.
             queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset
