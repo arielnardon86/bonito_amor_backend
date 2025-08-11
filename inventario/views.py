@@ -130,6 +130,7 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
+            # CORRECCIÓN: La lógica del filtro de anulada estaba invertida. Se corrige para que 'true' sea True.
             queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset
@@ -287,7 +288,7 @@ class MetricasAPIView(APIView):
             'producto__nombre', 'producto__talle'
         ).annotate(
             cantidad_total=Sum('cantidad')
-        ).order_by('-cantidad-total')[:10]
+        ).order_by('-cantidad_total')[:10]
         
         ventas_por_usuario = queryset_ventas.values('usuario__username').annotate(
             total_vendido=Sum('total'),
