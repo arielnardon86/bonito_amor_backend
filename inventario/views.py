@@ -185,6 +185,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         if detalle.venta.anulada:
             return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Restaurar el stock del producto
         if detalle.producto:
             producto = detalle.producto
             producto.stock += detalle.cantidad
@@ -194,14 +195,30 @@ class VentaViewSet(viewsets.ModelViewSet):
             
             venta = detalle.venta
             total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
-            # CORRECCIÓN: Aplicar el descuento al total recalculado
+            # Aplicar el descuento al total recalculado
             venta.total = total_recalculado * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
+            
+            # --- CORRECCIÓN CLAVE AQUÍ ---
+            # Verificar si todos los detalles de la venta están ahora anulados
+            if not venta.detalles.filter(anulado_individualmente=False).exists():
+                venta.anulada = True
+            # --- FIN DE LA CORRECCIÓN ---
+
             venta.save()
             
             return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
         else:
             detalle.anulado_individualmente = True
             detalle.save()
+
+            # --- CORRECCIÓN CLAVE AQUÍ ---
+            # Verificar si todos los detalles de la venta están ahora anulados
+            venta = detalle.venta
+            if not venta.detalles.filter(anulado_individualmente=False).exists():
+                venta.anulada = True
+                venta.save()
+            # --- FIN DE LA CORRECCIÓN ---
+
             return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
