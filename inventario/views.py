@@ -10,6 +10,8 @@ from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, Extr
 from datetime import timedelta, datetime
 from django.utils import timezone
 from decimal import Decimal 
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
 
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from .serializers import (
@@ -24,6 +26,8 @@ from .filters import VentaFilter
 class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    search_fields = ['nombre', 'talle', 'codigo_barras']
 
     def get_queryset(self):
         user = self.request.user
@@ -33,11 +37,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
+                return queryset.filter(tienda__slug=tienda_slug).order_by('nombre')
             return queryset.order_by('nombre')
         
         elif user.tienda:
-            if tienda_slug and user.tienda.nombre != tienda_slug:
+            if tienda_slug and user.tienda.slug != tienda_slug:
                 return Producto.objects.none()
             
             return queryset.filter(tienda=user.tienda).order_by('nombre')
@@ -62,13 +66,12 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            producto = self.get_queryset().get(codigo_barras=codigo, tienda__nombre=tienda_slug)
+            producto = self.get_queryset().get(codigo_barras=codigo, tienda__slug=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
         except Producto.DoesNotExist:
             return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
-        
-        return Response({"detail": "Código de barras no proporcionado."}, status=status.HTTP_400_BAD_REQUEST)
+
 
     @action(detail=False, methods=['get'])
     def productos_con_stock(self, request):
@@ -104,7 +107,7 @@ class UserViewSet(viewsets.ModelViewSet):
         
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__nombre=tienda_slug)
+                return queryset.filter(tienda__slug=tienda_slug)
             return queryset
         
         elif user.tienda:
@@ -131,7 +134,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             else:
                 return Venta.objects.none()
         elif tienda_slug:
-            queryset = queryset.filter(tienda__nombre=tienda_slug)
+            queryset = queryset.filter(tienda__slug=tienda_slug)
 
         fecha_venta_date = self.request.query_params.get('fecha_venta__date', None)
         if fecha_venta_date:
@@ -198,11 +201,8 @@ class VentaViewSet(viewsets.ModelViewSet):
             # Aplicar el descuento al total recalculado
             venta.total = total_recalculado * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
             
-            # --- CORRECCIÓN CLAVE AQUÍ ---
-            # Verificar si todos los detalles de la venta están ahora anulados
             if not venta.detalles.filter(anulado_individualmente=False).exists():
                 venta.anulada = True
-            # --- FIN DE LA CORRECCIÓN ---
 
             venta.save()
             
@@ -211,13 +211,10 @@ class VentaViewSet(viewsets.ModelViewSet):
             detalle.anulado_individualmente = True
             detalle.save()
 
-            # --- CORRECCIÓN CLAVE AQUÍ ---
-            # Verificar si todos los detalles de la venta están ahora anulados
             venta = detalle.venta
             if not venta.detalles.filter(anulado_individualmente=False).exists():
                 venta.anulada = True
                 venta.save()
-            # --- FIN DE LA CORRECCIÓN ---
 
             return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
 
@@ -251,7 +248,7 @@ class CompraViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__nombre=tienda_slug).order_by('-fecha_compra')
+                return queryset.filter(tienda__slug=tienda_slug).order_by('-fecha_compra')
             return queryset.order_by('-fecha_compra')
         elif user.tienda:
             return queryset.filter(tienda=user.tienda).order_by('-fecha_compra')
@@ -286,11 +283,12 @@ class MetricasAPIView(APIView):
             return Response({"error": "Parámetro 'tienda_slug' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+            tienda_obj = get_object_or_404(Tienda, slug=tienda_slug)
         except:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
         
-        queryset_ventas = Venta.objects.filter(tienda=tienda_obj)
+        # Filtramos las ventas para excluir las anuladas
+        queryset_ventas = Venta.objects.filter(tienda=tienda_obj, anulada=False)
         queryset_compras = Compra.objects.filter(tienda=tienda_obj)
 
         if year:
@@ -309,12 +307,17 @@ class MetricasAPIView(APIView):
 
 
         total_ventas_periodo = queryset_ventas.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
+        
+        # Filtramos los detalles de venta para excluir los anulados individualmente
+        detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
+        total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
+
         total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
 
         rentabilidad_bruta = total_ventas_periodo - total_compras_periodo
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
-        productos_mas_vendidos = DetalleVenta.objects.filter(venta__in=queryset_ventas).values(
+        productos_mas_vendidos = detalles_activos.values(
             'producto__nombre', 'producto__talle'
         ).annotate(
             cantidad_total=Sum('cantidad')
@@ -335,8 +338,6 @@ class MetricasAPIView(APIView):
         ).values('year', 'mes').annotate(
             total_egresos=Sum('total')
         ).order_by('year', 'mes')
-
-        total_productos_vendidos_periodo = DetalleVenta.objects.filter(venta__in=queryset_ventas).aggregate(Sum('cantidad'))['cantidad__sum'] or 0
 
         data = {
             'total_ventas_periodo': total_ventas_periodo,
