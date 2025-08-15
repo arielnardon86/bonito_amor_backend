@@ -78,7 +78,7 @@ TEMPLATES = [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+                'django.template.context_processors.messages',
             ],
         },
     },
@@ -137,7 +137,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",              
     "https://bonitoamorstock.onrender.com", 
     "https://bonito-amor-backend.onrender.com", 
-    "https://totalstock.onrender.com", # ¡Asegúrate de que esta línea esté presente!
+    "https://totalstock.onrender.com", 
 ]
 CORS_ALLOW_CREDENTIALS = True 
 
@@ -145,7 +145,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     'https://bonito-amor-backend.onrender.com', 
     "https://bonitoamorstock.onrender.com", 
-    "https://totalstock.onrender.com", # ¡Asegúrate de que esta línea esté presente!
+    "https://totalstock.onrender.com", 
 ]
 
 REST_FRAMEWORK = {
@@ -161,9 +161,9 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15), 
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    
-    'ROTATE_REFRESH_TOKENS': False,                 
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=5), 
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),    
+    'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': False,              
     'UPDATE_LAST_LOGIN': False,                     
 
