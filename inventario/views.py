@@ -37,11 +37,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__slug=tienda_slug).order_by('nombre')
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
             return queryset.order_by('nombre')
         
         elif user.tienda:
-            if tienda_slug and user.tienda.slug != tienda_slug:
+            if tienda_slug and user.tienda.nombre != tienda_slug:
                 return Producto.objects.none()
             
             return queryset.filter(tienda=user.tienda).order_by('nombre')
@@ -66,7 +66,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            producto = self.get_queryset().get(codigo_barras=codigo, tienda__slug=tienda_slug)
+            producto = self.get_queryset().get(codigo_barras=codigo, tienda__nombre=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
         except Producto.DoesNotExist:
@@ -107,7 +107,7 @@ class UserViewSet(viewsets.ModelViewSet):
         
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__slug=tienda_slug)
+                return queryset.filter(tienda__nombre=tienda_slug)
             return queryset
         
         elif user.tienda:
@@ -134,7 +134,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             else:
                 return Venta.objects.none()
         elif tienda_slug:
-            queryset = queryset.filter(tienda__slug=tienda_slug)
+            queryset = queryset.filter(tienda__nombre=tienda_slug)
 
         fecha_venta_date = self.request.query_params.get('fecha_venta__date', None)
         if fecha_venta_date:
@@ -248,7 +248,7 @@ class CompraViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__slug=tienda_slug).order_by('-fecha_compra')
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('-fecha_compra')
             return queryset.order_by('-fecha_compra')
         elif user.tienda:
             return queryset.filter(tienda=user.tienda).order_by('-fecha_compra')
@@ -283,7 +283,7 @@ class MetricasAPIView(APIView):
             return Response({"error": "Parámetro 'tienda_slug' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            tienda_obj = get_object_or_404(Tienda, slug=tienda_slug)
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
         except:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
         
