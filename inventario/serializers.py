@@ -1,4 +1,3 @@
-# BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from decimal import Decimal 
@@ -70,7 +69,7 @@ class VentaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Venta
         fields = [
-            'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 
+            'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 'descuento_monto',
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'fecha_creacion', 'fecha_actualizacion'
@@ -82,15 +81,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         write_only=True 
     )
     tienda_slug = serializers.CharField(write_only=True)
+    descuento_monto = serializers.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), required=False)
     
     class Meta:
         model = Venta
         fields = [
-            'descuento_porcentaje', 'metodo_pago', 
+            'descuento_porcentaje', 'descuento_monto', 'metodo_pago', 
             'tienda_slug', 'detalles'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
+            'descuento_monto': {'required': False},
         }
 
     def validate(self, data):
@@ -109,7 +110,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         data['tienda'] = tienda_obj
         
-        calculated_total = Decimal('0.00')
+        calculated_subtotal = Decimal('0.00')
         for detalle_data in detalles_data:
             producto_id = detalle_data.get('producto')
             cantidad = detalle_data.get('cantidad')
@@ -129,13 +130,22 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             if precio_unitario < 0:
                 raise serializers.ValidationError({"detalles": "El precio unitario no puede ser negativo."})
 
-            calculated_total += precio_unitario * cantidad
+            calculated_subtotal += precio_unitario * cantidad
 
         descuento_porcentaje = data.get('descuento_porcentaje', Decimal('0.00'))
+        descuento_monto = data.get('descuento_monto', Decimal('0.00'))
+
         if not (Decimal('0.00') <= descuento_porcentaje <= Decimal('100.00')):
             raise serializers.ValidationError({"descuento_porcentaje": "El porcentaje de descuento debe estar entre 0 y 100."})
 
-        data['total'] = calculated_total * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
+        if descuento_monto < Decimal('0.00'):
+            raise serializers.ValidationError({"descuento_monto": "El monto de descuento no puede ser negativo."})
+
+        subtotal_after_perc = calculated_subtotal * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
+        if descuento_monto > subtotal_after_perc:
+            raise serializers.ValidationError({"descuento_monto": "El monto de descuento no puede exceder el subtotal después del porcentaje."})
+
+        data['total'] = subtotal_after_perc - descuento_monto
         data['fecha_venta'] = timezone.now()
 
         return data
@@ -149,6 +159,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
+            descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
             fecha_venta=validated_data['fecha_venta'],
         )
         
