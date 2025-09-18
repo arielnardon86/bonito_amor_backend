@@ -8,7 +8,6 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Count, F, Q, Value 
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime
-from django.utils import timezone
 from decimal import Decimal 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
@@ -197,9 +196,13 @@ class VentaViewSet(viewsets.ModelViewSet):
             detalle.save()
             
             venta = detalle.venta
-            total_recalculado = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
-            # Aplicar el descuento al total recalculado
-            venta.total = total_recalculado * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
+            total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
+            
+            # Recalcular el total final aplicando el descuento apropiado
+            if venta.descuento_monto > 0:
+                venta.total = max(Decimal('0.00'), total_subtotal - venta.descuento_monto)
+            else:
+                venta.total = total_subtotal * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
             
             if not venta.detalles.filter(anulado_individualmente=False).exists():
                 venta.anulada = True

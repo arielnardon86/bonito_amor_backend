@@ -108,6 +108,8 @@ class Venta(models.Model):
     )
     anulada = models.BooleanField(default=False) 
     descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Porcentaje de descuento aplicado a la venta total.")
+    # NUEVO: Campo para el descuento por monto
+    descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de descuento aplicado a la venta total.")
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
