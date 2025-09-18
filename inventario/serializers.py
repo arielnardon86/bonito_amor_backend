@@ -1,4 +1,3 @@
-# BONITO_AMOR/backend/inventario/serializers.py
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from decimal import Decimal 
@@ -82,6 +81,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         write_only=True 
     )
     tienda_slug = serializers.CharField(write_only=True)
+    descuento_monto = serializers.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), required=False)
     
     class Meta:
         model = Venta
