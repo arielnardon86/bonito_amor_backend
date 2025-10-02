@@ -1,4 +1,4 @@
-# inventario/views.py
+# BONITO_AMOR/backend/inventario/views.py
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
@@ -311,7 +311,9 @@ class MetricasAPIView(APIView):
         
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
-        total_costo_periodo = detalles_activos.aggregate(Sum(F('cantidad') * F('costo_unitario')))['cantidad__sum'] or Decimal('0.00')
+        
+        # CAMBIO REALIZADO: Agregamos el alias 'total_costo_periodo' para que la consulta sea válida.
+        total_costo_periodo = detalles_activos.aggregate(total_costo_periodo=Sum(F('cantidad') * F('costo_unitario')))['total_costo_periodo'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
 
