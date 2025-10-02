@@ -1,4 +1,4 @@
-# BONITO_AMOR/backend/inventario/views.py
+# inventario/views.py
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
@@ -187,7 +187,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         if detalle.venta.anulada:
             return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Restaurar el stock del producto
         if detalle.producto:
             producto = detalle.producto
             producto.stock += detalle.cantidad
@@ -198,7 +197,6 @@ class VentaViewSet(viewsets.ModelViewSet):
             venta = detalle.venta
             total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
-            # Recalcular el total final aplicando el descuento apropiado
             if venta.descuento_monto > 0:
                 venta.total = max(Decimal('0.00'), total_subtotal - venta.descuento_monto)
             else:
@@ -220,6 +218,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.save()
 
             return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
+
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all()
@@ -290,7 +289,6 @@ class MetricasAPIView(APIView):
         except:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
         
-        # Filtramos las ventas para excluir las anuladas
         queryset_ventas = Venta.objects.filter(tienda=tienda_obj, anulada=False)
         queryset_compras = Compra.objects.filter(tienda=tienda_obj)
 
@@ -311,13 +309,13 @@ class MetricasAPIView(APIView):
 
         total_ventas_periodo = queryset_ventas.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
         
-        # Filtramos los detalles de venta para excluir los anulados individualmente
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
+        total_costo_periodo = detalles_activos.aggregate(Sum(F('cantidad') * F('costo_unitario')))['cantidad__sum'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
 
-        rentabilidad_bruta = total_ventas_periodo - total_compras_periodo
+        rentabilidad_bruta = total_ventas_periodo - total_costo_periodo
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         productos_mas_vendidos = detalles_activos.values(

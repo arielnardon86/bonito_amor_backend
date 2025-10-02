@@ -1,3 +1,4 @@
+# inventario/models.py
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 import uuid 
@@ -57,8 +58,8 @@ class Producto(models.Model):
     nombre = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True, null=True) 
     precio = models.DecimalField(max_digits=10, decimal_places=2) # Precio de venta
+    costo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True) # NUEVO CAMPO
     stock = models.IntegerField(default=0)
-    # Los talles ahora se manejan en el frontend, no en el modelo con choices
     talle = models.CharField(max_length=50, blank=True, null=True) 
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
@@ -97,7 +98,7 @@ class Venta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     fecha_venta = models.DateTimeField(auto_now_add=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    metodo_pago = models.CharField(max_length=100, blank=True, null=True) # Nombre del método de pago como string
+    metodo_pago = models.CharField(max_length=100, blank=True, null=True)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -107,8 +108,8 @@ class Venta(models.Model):
     )
     anulada = models.BooleanField(default=False) 
     descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Porcentaje de descuento aplicado a la venta total.")
-    # NUEVO: Campo para el descuento por monto
     descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de descuento aplicado a la venta total.")
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -127,6 +128,7 @@ class DetalleVenta(models.Model):
     producto = models.ForeignKey(Producto, on_delete=models.SET_NULL, null=True, blank=True, related_name='detalles_venta') 
     cantidad = models.IntegerField(default=1)
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    costo_unitario = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True) # NUEVO CAMPO
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     anulado_individualmente = models.BooleanField(default=False) 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
@@ -141,15 +143,15 @@ class DetalleVenta(models.Model):
     def __str__(self):
         return f"Detalle {self.id} - Venta {self.venta.id} - Producto: {self.producto.nombre if self.producto else 'N/A'} - Cantidad: {self.cantidad}"
 
-# --- NUEVO MODELO PARA REGISTRO DE COMPRAS SIMPLIFICADO ---
+# --- MODELO PARA REGISTRO DE COMPRAS ---
 
 class Compra(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='compras_totales') 
     fecha_compra = models.DateTimeField(auto_now_add=True)
-    total = models.DecimalField(max_digits=10, decimal_places=2) # El monto total de la compra
-    proveedor = models.CharField(max_length=255, blank=True, null=True) # Nombre del proveedor
-    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='compras_registradas') # Usuario que registró la compra
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    proveedor = models.CharField(max_length=255, blank=True, null=True)
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='compras_registradas')
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
     class Meta:

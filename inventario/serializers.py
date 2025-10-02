@@ -1,17 +1,16 @@
+# inventario/serializers.py
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from decimal import Decimal 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
-# Serializer para el usuario, para anidar en VentaSerializer
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'first_name', 'last_name']
 
 class ProductoSerializer(serializers.ModelSerializer):
-    # CORRECCIÓN CLAVE: Agregamos un campo tienda_slug que es de solo escritura.
     tienda_slug = serializers.SlugRelatedField(
         source='tienda',
         slug_field='nombre',
@@ -22,7 +21,8 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'talle', 'precio', 'stock', 'codigo_barras', 'tienda_slug']
+        # NUEVO CAMPO en fields
+        fields = ['id', 'nombre', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug']
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -57,7 +57,8 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DetalleVenta
-        fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
+        # NUEVO CAMPO en fields
+        fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
         read_only_fields = ['subtotal']
 
 class VentaSerializer(serializers.ModelSerializer):
@@ -81,7 +82,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         write_only=True 
     )
     tienda_slug = serializers.CharField(write_only=True)
-    descuento_monto = serializers.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), required=False)
     
     class Meta:
         model = Venta
@@ -131,6 +131,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"detalles": "El precio unitario no puede ser negativo."})
 
             calculated_subtotal += precio_unitario * cantidad
+            # Agrega el costo al detalle de datos si existe
+            detalle_data['costo_unitario'] = producto_obj.costo
 
         descuento_porcentaje = data.get('descuento_porcentaje', Decimal('0.00'))
         descuento_monto = data.get('descuento_monto', Decimal('0.00'))
@@ -164,10 +166,18 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_id = detalle_data['producto'] 
             cantidad = detalle_data['cantidad']
             precio_unitario = detalle_data['precio_unitario']
+            costo_unitario = detalle_data.get('costo_unitario', None)
 
             producto_obj = Producto.objects.get(id=producto_id)
             subtotal = precio_unitario * cantidad
-            DetalleVenta.objects.create(venta=venta, subtotal=subtotal, producto=producto_obj, cantidad=cantidad, precio_unitario=precio_unitario)
+            DetalleVenta.objects.create(
+                venta=venta,
+                subtotal=subtotal,
+                producto=producto_obj,
+                cantidad=cantidad,
+                precio_unitario=precio_unitario,
+                costo_unitario=costo_unitario
+            )
 
             producto_obj.stock -= cantidad
             producto_obj.save()
