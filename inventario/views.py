@@ -187,6 +187,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         if detalle.venta.anulada:
             return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Restaurar el stock del producto
         if detalle.producto:
             producto = detalle.producto
             producto.stock += detalle.cantidad
@@ -197,6 +198,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             venta = detalle.venta
             total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
+            # Recalcular el total final aplicando el descuento apropiado
             if venta.descuento_monto > 0:
                 venta.total = max(Decimal('0.00'), total_subtotal - venta.descuento_monto)
             else:
@@ -268,8 +270,42 @@ class CompraViewSet(viewsets.ModelViewSet):
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
+# --- VISTA PARA MÉTRICAS DE INVENTARIO ---
+class InventarioMetricsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
-# APIView para las métricas
+    def get(self, request, *args, **kwargs):
+        tienda_slug = request.query_params.get('tienda_slug', None)
+        if not tienda_slug:
+            return Response({"error": "Parámetro 'tienda_slug' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        except:
+            return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Métrica de stock total (cantidad)
+        total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(Sum('stock'))['stock__sum'] or 0
+
+        # Métrica de monto total del stock (costo)
+        monto_total_stock_costo = Producto.objects.filter(tienda=tienda_obj).aggregate(
+            total_monto_stock_costo=Sum(F('stock') * F('costo'))
+        )['total_monto_stock_costo'] or Decimal('0.00')
+
+        # Métrica de monto total del stock (precio de venta)
+        monto_total_stock_precio = Producto.objects.filter(tienda=tienda_obj).aggregate(
+            total_monto_stock_precio=Sum(F('stock') * F('precio'))
+        )['total_monto_stock_precio'] or Decimal('0.00')
+
+        data = {
+            'total_stock': total_stock,
+            'monto_total_stock_costo': monto_total_stock_costo,
+            'monto_total_stock_precio': monto_total_stock_precio,
+        }
+
+        return Response(data)
+
+# --- VISTA PARA MÉTRICAS DE VENTAS ---
 class MetricasAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
@@ -289,6 +325,7 @@ class MetricasAPIView(APIView):
         except:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
         
+        # Filtramos las ventas para excluir las anuladas
         queryset_ventas = Venta.objects.filter(tienda=tienda_obj, anulada=False)
         queryset_compras = Compra.objects.filter(tienda=tienda_obj)
 
@@ -309,6 +346,7 @@ class MetricasAPIView(APIView):
 
         total_ventas_periodo = queryset_ventas.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
         
+        # Filtramos los detalles de venta para excluir los anulados individualmente
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
         
