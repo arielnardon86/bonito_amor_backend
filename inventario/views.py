@@ -11,7 +11,7 @@ from datetime import timedelta, datetime
 from decimal import Decimal 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
-from django.db.models import DecimalField # <- NUEVA IMPORTACIÓN
+from django.db.models import DecimalField # <- IMPORTACIÓN NECESARIA
 
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
 from .serializers import (
@@ -345,7 +345,7 @@ class MetricasAPIView(APIView):
         
         # CORRECCIÓN: Agregamos el alias 'total_costo_periodo' para que la consulta sea válida.
         # Y usamos Coalesce para que si costo_unitario es null, se trate como 0.
-        total_costo_vendido = detalles_activos.aggregate(total_costo_vendido=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido'] or Decimal('0.00')
+        total_costo_vendido = detalles_activos.aggregate(total_costo_vendido_periodo=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido_periodo'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(total_compras=Sum('total'))['total_compras'] or Decimal('0.00')
 
