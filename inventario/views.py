@@ -11,16 +11,7 @@ from datetime import timedelta, datetime
 from decimal import Decimal 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
-from django.db.models import DecimalField # <- IMPORTACIÓN NECESARIA
-
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
-from .serializers import (
-    ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
-    VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
-    CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer 
-)
-from .filters import VentaFilter 
+from django.db.models import DecimalField 
 
 
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -299,8 +290,7 @@ class InventarioMetricsAPIView(APIView):
 
         data = {
             'total_stock': total_stock,
-            'total_monto_stock_costo': monto_total_stock_costo,
-            'total_monto_stock_precio': monto_total_stock_precio,
+            'total_monto_stock': monto_total_stock_precio, # El frontend espera este nombre de campo
         }
 
         return Response(data)
@@ -350,14 +340,13 @@ class MetricasAPIView(APIView):
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(total_productos_vendidos=Sum('cantidad'))['total_productos_vendidos'] or 0
         
-        # CORRECCIÓN: Agregamos el alias 'total_costo_vendido' para que la consulta sea válida.
-        # Y usamos Coalesce para que si costo_unitario es null, se trate como 0.
-        total_costo_vendido = detalles_activos.aggregate(total_costo_vendido=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido'] or Decimal('0.00')
+        # CORRECCIÓN: Cálculo correcto de costo de productos vendidos con Coalesce
+        total_costo_vendido_periodo = detalles_activos.aggregate(total_costo_vendido=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido'] or Decimal('0.00')
 
-        total_compras_periodo = queryset_compras.aggregate(total_compras=Sum('total'))['total_compras'] or Decimal('0.00')
+        total_compras_periodo = queryset_compras.aggregate(total_egresos=Sum('total'))['total_egresos'] or Decimal('0.00')
 
         # CORRECCIÓN: La rentabilidad ahora resta el costo de los productos vendidos Y los egresos del período
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido_periodo - total_compras_periodo
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         productos_mas_vendidos = detalles_activos.values(
@@ -385,7 +374,7 @@ class MetricasAPIView(APIView):
         data = {
             'total_ventas_periodo': total_ventas_periodo,
             'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
-            'total_costo_vendido_periodo': total_costo_vendido,
+            'total_costo_vendido_periodo': total_costo_vendido_periodo,
             'total_compras_periodo': total_compras_periodo,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
