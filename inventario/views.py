@@ -286,6 +286,12 @@ class InventarioMetricsAPIView(APIView):
         # Métrica de stock total (cantidad)
         total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(total_stock=Sum('stock'))['total_stock'] or 0
 
+        # Métrica de monto total del stock (costo)
+        # CORRECCIÓN: Se agrega output_field=DecimalField() para evitar el FieldError
+        monto_total_stock_costo = Producto.objects.filter(tienda=tienda_obj).aggregate(
+            total_monto_stock=Sum(F('stock') * Coalesce('costo', Value(0), output_field=DecimalField()))
+        )['total_monto_stock'] or Decimal('0.00')
+
         # Métrica de monto total del stock (precio de venta)
         monto_total_stock_precio = Producto.objects.filter(tienda=tienda_obj).aggregate(
             total_monto_stock=Sum(F('stock') * Coalesce('precio', Value(0), output_field=DecimalField()))
@@ -293,7 +299,8 @@ class InventarioMetricsAPIView(APIView):
 
         data = {
             'total_stock': total_stock,
-            'total_monto_stock': monto_total_stock_precio,
+            'total_monto_stock_costo': monto_total_stock_costo,
+            'total_monto_stock_precio': monto_total_stock_precio,
         }
 
         return Response(data)
@@ -343,9 +350,9 @@ class MetricasAPIView(APIView):
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(total_productos_vendidos=Sum('cantidad'))['total_productos_vendidos'] or 0
         
-        # CORRECCIÓN: Agregamos el alias 'total_costo_periodo' para que la consulta sea válida.
+        # CORRECCIÓN: Agregamos el alias 'total_costo_vendido' para que la consulta sea válida.
         # Y usamos Coalesce para que si costo_unitario es null, se trate como 0.
-        total_costo_vendido = detalles_activos.aggregate(total_costo_vendido_periodo=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido_periodo'] or Decimal('0.00')
+        total_costo_vendido = detalles_activos.aggregate(total_costo_vendido=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(total_compras=Sum('total'))['total_compras'] or Decimal('0.00')
 
