@@ -187,7 +187,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         if detalle.venta.anulada:
             return Response({"error": "No se puede anular un detalle de una venta que ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Restaurar el stock del producto
         if detalle.producto:
             producto = detalle.producto
             producto.stock += detalle.cantidad
@@ -198,7 +197,6 @@ class VentaViewSet(viewsets.ModelViewSet):
             venta = detalle.venta
             total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
-            # Recalcular el total final aplicando el descuento apropiado
             if venta.descuento_monto > 0:
                 venta.total = max(Decimal('0.00'), total_subtotal - venta.descuento_monto)
             else:
@@ -270,7 +268,7 @@ class CompraViewSet(viewsets.ModelViewSet):
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
-# --- VISTA PARA MÉTRICAS DE INVENTARIO ---
+# --- NUEVA VISTA PARA MÉTRICAS DE INVENTARIO ---
 class InventarioMetricsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
@@ -285,22 +283,16 @@ class InventarioMetricsAPIView(APIView):
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
         # Métrica de stock total (cantidad)
-        total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(Sum('stock'))['stock__sum'] or 0
-
-        # Métrica de monto total del stock (costo)
-        monto_total_stock_costo = Producto.objects.filter(tienda=tienda_obj).aggregate(
-            total_monto_stock_costo=Sum(F('stock') * F('costo'))
-        )['total_monto_stock_costo'] or Decimal('0.00')
+        total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(total_stock=Sum('stock'))['total_stock'] or 0
 
         # Métrica de monto total del stock (precio de venta)
         monto_total_stock_precio = Producto.objects.filter(tienda=tienda_obj).aggregate(
-            total_monto_stock_precio=Sum(F('stock') * F('precio'))
+            total_monto_stock_precio=Sum(F('stock') * Coalesce('precio', Value(0), output_field=Decimal))
         )['total_monto_stock_precio'] or Decimal('0.00')
 
         data = {
             'total_stock': total_stock,
-            'monto_total_stock_costo': monto_total_stock_costo,
-            'monto_total_stock_precio': monto_total_stock_precio,
+            'total_monto_stock': monto_total_stock_precio,
         }
 
         return Response(data)
@@ -348,14 +340,17 @@ class MetricasAPIView(APIView):
         
         # Filtramos los detalles de venta para excluir los anulados individualmente
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
-        total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
+        total_productos_vendidos_periodo = detalles_activos.aggregate(total_productos_vendidos_periodo=Sum('cantidad'))['total_productos_vendidos_periodo'] or 0
         
-        # CAMBIO REALIZADO: Agregamos el alias 'total_costo_periodo' para que la consulta sea válida.
-        total_costo_periodo = detalles_activos.aggregate(total_costo_periodo=Sum(F('cantidad') * F('costo_unitario')))['total_costo_periodo'] or Decimal('0.00')
+        # CAMBIO: Usamos Coalesce para que si costo_unitario es null, se trate como 0
+        total_costo_vendido = detalles_activos.aggregate(
+            total_costo=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=Decimal))
+        )['total_costo'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
 
-        rentabilidad_bruta = total_ventas_periodo - total_costo_periodo
+        # CAMBIO: La rentabilidad ahora resta el costo de los productos vendidos Y los egresos del período
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         productos_mas_vendidos = detalles_activos.values(
@@ -383,6 +378,98 @@ class MetricasAPIView(APIView):
         data = {
             'total_ventas_periodo': total_ventas_periodo,
             'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
+            'total_costo_periodo': total_costo_vendido, # CAMBIO: Nombre del campo corregido
+            'total_compras_periodo': total_compras_periodo,
+            'rentabilidad_bruta_periodo': rentabilidad_bruta,
+            'margen_rentabilidad_periodo': margen_rentabilidad,
+            'productos_mas_vendidos': list(productos_mas_vendidos),
+            'ventas_por_usuario': list(ventas_por_usuario),
+            'ventas_por_metodo_pago': list(ventas_por_metodo_pago),
+            'egresos_por_mes': list(egresos_por_mes),
+        }
+
+        return Response(data)
+
+class MetricasAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+    def get(self, request, *args, **kwargs):
+        tienda_slug = request.query_params.get('tienda_slug', None)
+        year = request.query_params.get('year', None)
+        month = request.query_params.get('month', None)
+        day = request.query_params.get('day', None)
+        seller_id = request.query_params.get('seller_id', None)
+        payment_method = request.query_params.get('payment_method', None)
+
+        if not tienda_slug:
+            return Response({"error": "Parámetro 'tienda_slug' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        except:
+            return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Filtramos las ventas para excluir las anuladas
+        queryset_ventas = Venta.objects.filter(tienda=tienda_obj, anulada=False)
+        queryset_compras = Compra.objects.filter(tienda=tienda_obj)
+
+        if year:
+            queryset_ventas = queryset_ventas.filter(fecha_venta__year=year)
+            queryset_compras = queryset_compras.filter(fecha_compra__year=year)
+        if month:
+            queryset_ventas = queryset_ventas.filter(fecha_venta__month=month)
+            queryset_compras = queryset_compras.filter(fecha_compra__month=month)
+        if day:
+            queryset_ventas = queryset_ventas.filter(fecha_venta__day=day)
+            queryset_compras = queryset_compras.filter(fecha_compra__day=day)
+        if seller_id:
+            queryset_ventas = queryset_ventas.filter(usuario__id=seller_id)
+        if payment_method:
+            queryset_ventas = queryset_ventas.filter(metodo_pago=payment_method)
+
+
+        total_ventas_periodo = queryset_ventas.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
+        
+        # Filtramos los detalles de venta para excluir los anulados individualmente
+        detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
+        total_productos_vendidos_periodo = detalles_activos.aggregate(Sum('cantidad'))['cantidad__sum'] or 0
+        
+        # CORRECCIÓN: Agregamos el alias 'total_costo_periodo' para que la consulta sea válida.
+        # Y usamos Coalesce para que si costo_unitario es null, se trate como 0.
+        total_costo_periodo = detalles_activos.aggregate(total_costo_periodo=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=Decimal)))['total_costo_periodo'] or Decimal('0.00')
+        
+        total_compras_periodo = queryset_compras.aggregate(Sum('total'))['total__sum'] or Decimal('0.00')
+
+        # CORRECCIÓN: La rentabilidad ahora resta el costo de los productos vendidos Y los egresos del período
+        rentabilidad_bruta = total_ventas_periodo - total_costo_periodo - total_compras_periodo
+        margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
+
+        productos_mas_vendidos = detalles_activos.values(
+            'producto__nombre', 'producto__talle'
+        ).annotate(
+            cantidad_total=Sum('cantidad')
+        ).order_by('-cantidad_total')[:10]
+        
+        ventas_por_usuario = queryset_ventas.values('usuario__username').annotate(
+            total_vendido=Sum('total'),
+            cantidad_ventas=Count('id')
+        ).order_by('-total_vendido')
+
+        ventas_por_metodo_pago = queryset_ventas.values('metodo_pago').annotate(
+            total_vendido=Sum('total')
+        ).order_by('-total_vendido')
+
+        egresos_por_mes = queryset_compras.annotate(
+            year=ExtractYear('fecha_compra'),
+            mes=ExtractMonth('fecha_compra')
+        ).values('year', 'mes').annotate(
+            total_egresos=Sum('total')
+        ).order_by('year', 'mes')
+
+        data = {
+            'total_ventas_periodo': total_ventas_periodo,
+            'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
+            'total_costo_periodo': total_costo_periodo,
             'total_compras_periodo': total_compras_periodo,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
