@@ -1,12 +1,11 @@
 # mi_tienda_backend/urls.py
-
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
-    CustomTokenObtainPairView, MetricasAPIView
+    CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -28,4 +27,5 @@ urlpatterns = [
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
+    path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
 ]
