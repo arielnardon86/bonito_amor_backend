@@ -214,10 +214,11 @@ class CompraSerializer(serializers.ModelSerializer):
 
 class CompraCreateSerializer(serializers.ModelSerializer):
     tienda_slug = serializers.CharField(write_only=True)
+    fecha_compra = serializers.DateField(write_only=True)
 
     class Meta:
         model = Compra
-        fields = ['total', 'proveedor', 'tienda_slug']
+        fields = ['total', 'proveedor', 'tienda_slug', 'fecha_compra']
         extra_kwargs = {
             'total': {'required': True},
             'proveedor': {'required': False},
@@ -225,13 +226,15 @@ class CompraCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tienda_slug = validated_data.pop('tienda_slug')
+        fecha_compra_data = validated_data.pop('fecha_compra')  # Extrae la fecha del serializador
         tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
         
         compra_fields = {
             'total': validated_data.pop('total'),
             'proveedor': validated_data.pop('proveedor', None),
             'tienda': tienda_obj,
-            'usuario': self.context['request'].user
+            'usuario': self.context['request'].user,
+            'fecha_compra': fecha_compra_data # Pasa la fecha extraída al modelo
         }
         
         compra = Compra.objects.create(**compra_fields)

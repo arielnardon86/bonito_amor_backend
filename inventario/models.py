@@ -148,7 +148,7 @@ class DetalleVenta(models.Model):
 class Compra(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='compras_totales') 
-    fecha_compra = models.DateTimeField(auto_now_add=True)
+    fecha_compra = models.DateTimeField(default=timezone.now)
     total = models.DecimalField(max_digits=10, decimal_places=2)
     proveedor = models.CharField(max_length=255, blank=True, null=True)
     usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='compras_registradas')
