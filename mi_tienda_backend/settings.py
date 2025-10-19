@@ -98,7 +98,7 @@ if 'DATABASE_URL' in os.environ:
         # CAMBIO CRUCIAL: 
         # Cambiar a 0 para forzar el cierre de conexión después de cada solicitud
         # y evitar el error "server closed the connection unexpectedly".
-        conn_max_age=0, 
+        conn_max_age=60, 
         ssl_require=True
     )
     print("\n--- DEBUG DATABASE CONFIG ---")
