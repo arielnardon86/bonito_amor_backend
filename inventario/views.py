@@ -15,7 +15,7 @@ from django.db.models import DecimalField
 
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
-# CAMBIO 2: Importar ArancelMetodoTiendaSerializer (para el nuevo ViewSet)
+# CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
@@ -240,7 +240,7 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-# CAMBIO 9: NUEVO VIEWSET para aranceles
+# CAMBIO CRUCIAL: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ArancelMetodoTiendaSerializer
     permission_classes = [permissions.IsAuthenticated]
