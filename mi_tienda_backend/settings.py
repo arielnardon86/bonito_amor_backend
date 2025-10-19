@@ -95,7 +95,10 @@ DATABASES = {
 
 if 'DATABASE_URL' in os.environ:
     DATABASES['default'] = dj_database_url.config(
-        conn_max_age=600,
+        # CAMBIO CRUCIAL: 
+        # Cambiar a 0 para forzar el cierre de conexión después de cada solicitud
+        # y evitar el error "server closed the connection unexpectedly".
+        conn_max_age=0, 
         ssl_require=True
     )
     print("\n--- DEBUG DATABASE CONFIG ---")
