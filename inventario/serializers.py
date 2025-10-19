@@ -1,6 +1,5 @@
 # inventario/serializers.py
 from rest_framework import serializers
-# CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
 from decimal import Decimal 
 from django.utils import timezone
@@ -53,7 +52,7 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         model = MetodoPago
         fields = '__all__'
 
-# CAMBIO 2: NUEVO SERIALIZER: Arancel por Método y Tienda
+# NUEVO SERIALIZER: Arancel por Método y Tienda
 class ArancelMetodoTiendaSerializer(serializers.ModelSerializer):
     metodo_pago_nombre = serializers.CharField(source='metodo_pago.nombre', read_only=True)
     
@@ -75,7 +74,7 @@ class VentaSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True)
     metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
-    # CAMBIO 3: Campos de arancel para lectura
+    # Campos de arancel para lectura
     arancel_aplicado_nombre = serializers.CharField(source='arancel_aplicado.nombre_plan', read_only=True)
     arancel_aplicado_porcentaje = serializers.DecimalField(source='arancel_aplicado.arancel_porcentaje', max_digits=5, decimal_places=2, read_only=True)
 
@@ -85,7 +84,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 'descuento_monto',
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
-            'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total', # CAMPOS ARANCEL
+            'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'fecha_creacion', 'fecha_actualizacion'
         ]
 
@@ -95,7 +94,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         write_only=True 
     )
     tienda_slug = serializers.CharField(write_only=True)
-    # CAMBIO 4: Campo para recibir el ID del arancel de cuotas/método
     arancel_aplicado_id = serializers.PrimaryKeyRelatedField(
         queryset=ArancelMetodoTienda.objects.all(),
         required=False,
@@ -107,7 +105,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         model = Venta
         fields = [
             'descuento_porcentaje', 'descuento_monto', 'metodo_pago', 
-            'tienda_slug', 'detalles', 'arancel_aplicado_id' # AÑADIDO: arancel_aplicado_id
+            'tienda_slug', 'detalles', 'arancel_aplicado_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -165,7 +163,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         else:
             data['total'] = calculated_subtotal * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
         
-        # CAMBIO 5: Lógica de arancel
+        # Lógica de arancel
         data['arancel_total'] = Decimal('0.00')
         arancel_obj = data.pop('arancel_aplicado_id', None) 
 
@@ -193,7 +191,6 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
-        # CAMBIO 6: Extraer los nuevos campos
         arancel_aplicado = validated_data.pop('arancel_aplicado', None)
         arancel_total = validated_data.pop('arancel_total', Decimal('0.00'))
 
@@ -204,8 +201,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
             descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
-            arancel_aplicado=arancel_aplicado, # AÑADIDO
-            arancel_total=arancel_total,       # AÑADIDO
+            arancel_aplicado=arancel_aplicado, 
+            arancel_total=arancel_total,       
             fecha_venta=validated_data['fecha_venta'],
         )
         
@@ -231,8 +228,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         return venta
 
-# CAMBIO 7: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
-# Esto es CRUCIAL para resolver el ImportError en el servidor
+# CRUCIAL: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
+# Esto soluciona el error de importación.
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
