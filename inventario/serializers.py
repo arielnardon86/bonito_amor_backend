@@ -1,6 +1,6 @@
 # inventario/serializers.py
 from rest_framework import serializers
-# CAMBIO 1: Importar el nuevo modelo ArancelMetodoTienda
+# CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
 from decimal import Decimal 
 from django.utils import timezone
@@ -231,8 +231,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         return venta
 
-# CAMBIO 7: MOVEMOS LA DEFINICIÓN DE CustomTokenObtainPairSerializer AL FINAL
-# Esto resuelve el ImportError al ser una dependencia de mi_tienda_backend/urls.py
+# CAMBIO 7: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
+# Esto es CRUCIAL para resolver el ImportError en el servidor
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
@@ -273,7 +273,7 @@ class CompraCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tienda_slug = validated_data.pop('tienda_slug')
-        fecha_compra_data = validated_data.pop('fecha_compra')  # Extrae la fecha del serializador
+        fecha_compra_data = validated_data.pop('fecha_compra') 
         tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
         
         compra_fields = {
@@ -281,7 +281,7 @@ class CompraCreateSerializer(serializers.ModelSerializer):
             'proveedor': validated_data.pop('proveedor', None),
             'tienda': tienda_obj,
             'usuario': self.context['request'].user,
-            'fecha_compra': fecha_compra_data # Pasa la fecha extraída al modelo
+            'fecha_compra': fecha_compra_data 
         }
         
         compra = Compra.objects.create(**compra_fields)
