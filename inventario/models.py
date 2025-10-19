@@ -82,6 +82,8 @@ class MetodoPago(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     descripcion = models.TextField(blank=True, null=True) 
     activo = models.BooleanField(default=True) 
+    # CAMBIO CLAVE: Indica si este método permite aranceles/planes configurables
+    es_financiero = models.BooleanField(default=False, help_text="Marcar si este método implica un arancel (Tarjeta, QR, etc.).")
     fecha_creacion = models.DateTimeField(auto_now_add=True) 
     fecha_actualizacion = models.DateTimeField(auto_now=True) 
 
@@ -92,6 +94,38 @@ class MetodoPago(models.Model):
 
     def __str__(self):
         return self.nombre
+
+# --- NUEVO MODELO: ARANCEL POR MÉTODO Y TIENDA ---
+class ArancelMetodoTienda(models.Model):
+    PLAN_CHOICES = [
+        ('CONTADO', 'Contado / Pago Único'),
+        ('1', '1 Cuota'),
+        ('3', '3 Cuotas'),
+        ('6', '6 Cuotas'),
+        ('12', '12 Cuotas'),
+        ('Z', 'Z (Ahora 12 / Plan Especial)'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles')
+    metodo_pago = models.ForeignKey(MetodoPago, on_delete=models.CASCADE, related_name='aranceles_por_tienda')
+    
+    # Campo que define el plan (solo relevante para Tarjeta de Crédito, Débito y QR)
+    nombre_plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='CONTADO')
+    arancel_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Arancel en porcentaje (%) que la tienda paga al procesar este pago/plan.")
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Arancel por Método y Tienda"
+        verbose_name_plural = "Aranceles por Método y Tienda"
+        unique_together = ('tienda', 'metodo_pago', 'nombre_plan')
+        ordering = ['tienda', 'metodo_pago', 'nombre_plan']
+
+    def __str__(self):
+        return f"{self.tienda.nombre} - {self.metodo_pago.nombre} - {self.get_nombre_plan_display()} ({self.arancel_porcentaje}%)"
+# ------------------------------------------------
 
 # Modelo de Venta
 class Venta(models.Model):
@@ -109,6 +143,10 @@ class Venta(models.Model):
     anulada = models.BooleanField(default=False) 
     descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Porcentaje de descuento aplicado a la venta total.")
     descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de descuento aplicado a la venta total.")
+    
+    # NUEVOS CAMPOS: Referencia al arancel aplicado y el monto calculado
+    arancel_aplicado = models.ForeignKey(ArancelMetodoTienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_con_arancel')
+    arancel_total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto total del arancel calculado para esta venta.")
     
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

@@ -13,13 +13,14 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
 
-# IMPORTACIÓN CORREGIDA: Se ha añadido ProductoSerializer
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra 
+# CAMBIO 1: Importar el nuevo modelo ArancelMetodoTienda
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
+# CAMBIO 2: Importar el nuevo serializador ArancelMetodoTiendaSerializer
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer 
+    CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer 
 )
 from .filters import VentaFilter 
 
@@ -239,6 +240,29 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+# CAMBIO 6: NUEVO VIEWSET para aranceles
+class ArancelMetodoTiendaViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ArancelMetodoTiendaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        # Uso select_related para optimizar la consulta de tienda y método de pago
+        queryset = ArancelMetodoTienda.objects.all().select_related('tienda', 'metodo_pago')
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
+
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+            # Limitar la respuesta si es superusuario y pide todos los aranceles
+            return queryset.order_by('tienda__nombre', 'metodo_pago__nombre', 'nombre_plan')[:50] 
+        
+        elif user.tienda:
+            # Solo muestra los aranceles de su tienda
+            return queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
+        
+        return ArancelMetodoTienda.objects.none()
+
 
 class CompraViewSet(viewsets.ModelViewSet):
     serializer_class = CompraSerializer
@@ -287,7 +311,6 @@ class InventarioMetricsAPIView(APIView):
         total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(total_stock=Sum('stock'))['total_stock'] or 0
 
         # Métrica de monto total del stock (precio de venta)
-        # CORRECCIÓN: Se agrega output_field=DecimalField() para evitar el FieldError
         monto_total_stock_precio = Producto.objects.filter(tienda=tienda_obj).aggregate(
             total_monto_stock=Sum(F('stock') * Coalesce('precio', Value(0), output_field=DecimalField()))
         )['total_monto_stock'] or Decimal('0.00')
@@ -305,7 +328,7 @@ class InventarioMetricsAPIView(APIView):
 
         return Response(data)
 
-# --- VISTA PARA MÉTRICAS DE VENTAS ---
+# --- VISTA PARA MÉTRICAS DE VENTAS (ACTUALIZADA) ---
 class MetricasAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
@@ -350,14 +373,19 @@ class MetricasAPIView(APIView):
         detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
         total_productos_vendidos_periodo = detalles_activos.aggregate(total_productos_vendidos=Sum('cantidad'))['total_productos_vendidos'] or 0
         
-        # CORRECCIÓN: Agregamos el alias 'total_costo_vendido' para que la consulta sea válida.
-        # Y usamos Coalesce para que si costo_unitario es null, se trate como 0.
         total_costo_vendido = detalles_activos.aggregate(total_costo_vendido=Sum(F('cantidad') * Coalesce('costo_unitario', Value(0), output_field=DecimalField())))['total_costo_vendido'] or Decimal('0.00')
 
         total_compras_periodo = queryset_compras.aggregate(total_egresos=Sum('total'))['total_egresos'] or Decimal('0.00')
 
-        # CORRECCIÓN: La rentabilidad ahora resta el costo de los productos vendidos Y los egresos del período
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo
+        # CAMBIO 7: NUEVO CÁLCULO: Arancel Total de Ventas con Comisión
+        # Suma los aranceles totales guardados en el modelo Venta
+        total_arancel_ventas = queryset_ventas.aggregate(
+            total_arancel=Sum(F('arancel_total') * Value(1), output_field=DecimalField())
+        )['total_arancel'] or Decimal('0.00')
+
+
+        # CAMBIO 8: La rentabilidad ahora resta el costo de los productos, los egresos Y los aranceles
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         productos_mas_vendidos = detalles_activos.values(
@@ -387,6 +415,7 @@ class MetricasAPIView(APIView):
             'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
             'total_costo_vendido_periodo': total_costo_vendido,
             'total_compras_periodo': total_compras_periodo,
+            'total_arancel_ventas': total_arancel_ventas, # NUEVA MÉTRICA
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
             'productos_mas_vendidos': list(productos_mas_vendidos),
