@@ -13,9 +13,9 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
 
-# CAMBIO 1: Importar el nuevo modelo ArancelMetodoTienda
+# CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
-# CAMBIO 2: Importar el nuevo serializador ArancelMetodoTiendaSerializer
+# CAMBIO 2: Importar ArancelMetodoTiendaSerializer (para el nuevo ViewSet)
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
@@ -240,7 +240,7 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-# CAMBIO 6: NUEVO VIEWSET para aranceles
+# CAMBIO 9: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ArancelMetodoTiendaSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -377,14 +377,13 @@ class MetricasAPIView(APIView):
 
         total_compras_periodo = queryset_compras.aggregate(total_egresos=Sum('total'))['total_egresos'] or Decimal('0.00')
 
-        # CAMBIO 7: NUEVO CÁLCULO: Arancel Total de Ventas con Comisión
-        # Suma los aranceles totales guardados en el modelo Venta
+        # CAMBIO 10: NUEVO CÁLCULO: Arancel Total de Ventas con Comisión
         total_arancel_ventas = queryset_ventas.aggregate(
             total_arancel=Sum(F('arancel_total') * Value(1), output_field=DecimalField())
         )['total_arancel'] or Decimal('0.00')
 
 
-        # CAMBIO 8: La rentabilidad ahora resta el costo de los productos, los egresos Y los aranceles
+        # CAMBIO 11: La rentabilidad ahora resta el costo de los productos, los egresos Y los aranceles
         rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
