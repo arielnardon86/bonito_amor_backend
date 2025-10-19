@@ -12,6 +12,7 @@ from decimal import Decimal
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
+from django.db import close_old_connections # <-- AÑADIDO: Importación para el fix de conexión
 
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
@@ -97,6 +98,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
+    # SOLUCIÓN AL ERROR: server closed the connection unexpectedly
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
 class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
@@ -147,6 +153,10 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
+            # NOTA: La lógica de filtrado de "anulada" se mejoró en inventario/filters.py
+            # pero aquí se mantiene un filtro básico. Si está usando el DjangoFilterBackend
+            # en otra parte (no visible aquí), este código podría ser redundante.
+            # No obstante, se mantiene la lógica original del archivo por seguridad.
             queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset
@@ -204,6 +214,13 @@ class VentaViewSet(viewsets.ModelViewSet):
             else:
                 venta.total = total_subtotal * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
             
+            # Recalcular arancel sobre el nuevo total si aplica
+            if venta.arancel_aplicado:
+                arancel_porcentaje = venta.arancel_aplicado.arancel_porcentaje
+                venta.arancel_total = venta.total * (arancel_porcentaje / Decimal('100'))
+            else:
+                venta.arancel_total = Decimal('0.00') # Asegurar que es 0.00
+
             if not venta.detalles.filter(anulado_individualmente=False).exists():
                 venta.anulada = True
 
