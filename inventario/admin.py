@@ -1,13 +1,12 @@
 # BONITO_AMOR/backend/inventario/admin.py
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-# Asegúrate de importar todos los modelos que registras
 from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda 
 
 # Configuración para el modelo de Usuario personalizado
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    # Añadir 'tienda' a los campos que se muestran y se pueden editar
+    # [...] (Configuración de CustomUserAdmin sin cambios)
     fieldsets = UserAdmin.fieldsets + (
         (None, {'fields': ('tienda',)}),
     )
@@ -21,6 +20,7 @@ class CustomUserAdmin(UserAdmin):
 # Configuración para el modelo de Tienda
 @admin.register(Tienda)
 class TiendaAdmin(admin.ModelAdmin):
+    # [...] (Configuración de TiendaAdmin sin cambios)
     list_display = ('nombre', 'direccion', 'telefono', 'email', 'fecha_creacion')
     search_fields = ('nombre', 'direccion', 'telefono', 'email')
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
@@ -29,6 +29,7 @@ class TiendaAdmin(admin.ModelAdmin):
 # Configuración para el modelo de Categoría
 @admin.register(Categoria)
 class CategoriaAdmin(admin.ModelAdmin):
+    # [...] (Configuración de CategoriaAdmin sin cambios)
     list_display = ('nombre', 'descripcion', 'fecha_creacion')
     search_fields = ('nombre',)
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
@@ -37,6 +38,7 @@ class CategoriaAdmin(admin.ModelAdmin):
 # Configuración para el modelo de Producto
 @admin.register(Producto)
 class ProductoAdmin(admin.ModelAdmin):
+    # [...] (Configuración de ProductoAdmin sin cambios)
     list_display = ('nombre', 'talle', 'precio', 'stock', 'tienda', 'codigo_barras', 'fecha_creacion')
     list_filter = ('tienda', 'talle') 
     search_fields = ('nombre', 'codigo_barras', 'tienda__nombre') 
@@ -59,21 +61,29 @@ class ProductoAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-# Registro del modelo MetodoPago en el admin (ACTUALIZADO)
+# Registro del modelo MetodoPago en el admin (ACTUALIZADO para es_financiero)
 @admin.register(MetodoPago)
 class MetodoPagoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'activo', 'es_financiero', 'fecha_creacion') # AÑADIDO: es_financiero
+    # CAMBIO: Añadir 'es_financiero' para que se vea y se filtre
+    list_display = ('nombre', 'activo', 'es_financiero', 'fecha_creacion') 
     search_fields = ('nombre',)
-    list_filter = ('activo', 'es_financiero') # AÑADIDO: es_financiero
+    list_filter = ('activo', 'es_financiero') 
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion') 
 
-# Configuración para el modelo de ArancelMetodoTienda (NUEVO)
+# Configuración para el modelo de ArancelMetodoTienda (NUEVO REGISTRO)
 @admin.register(ArancelMetodoTienda)
 class ArancelMetodoTiendaAdmin(admin.ModelAdmin):
     list_display = ('tienda', 'metodo_pago', 'nombre_plan', 'arancel_porcentaje', 'fecha_creacion')
     list_filter = ('tienda', 'metodo_pago', 'nombre_plan')
     search_fields = ('tienda__nombre', 'metodo_pago__nombre', 'nombre_plan')
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
+    
+    # Restricción para que solo se muestren los aranceles de la tienda del usuario
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        return qs.filter(tienda=request.user.tienda)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "tienda" and not request.user.is_superuser:
@@ -84,7 +94,8 @@ class ArancelMetodoTiendaAdmin(admin.ModelAdmin):
             
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-# Configuración para el modelo de Venta (ACTUALIZADO)
+
+# Configuración para el modelo de Venta (ACTUALIZADO con campos de arancel)
 class DetalleVentaInline(admin.TabularInline):
     model = DetalleVenta
     extra = 0
@@ -93,13 +104,13 @@ class DetalleVentaInline(admin.TabularInline):
 
 @admin.register(Venta)
 class VentaAdmin(admin.ModelAdmin):
-    # AÑADIDO: arancel_aplicado y arancel_total
+    # CAMBIO: Añadir arancel_aplicado y arancel_total a list_display
     list_display = ('id', 'fecha_venta', 'total', 'metodo_pago', 'arancel_aplicado', 'arancel_total', 'tienda', 'anulada', 'fecha_creacion') 
-    # AÑADIDO: filtro por plan de cuotas
+    # CAMBIO: Añadir filtro por plan de cuotas
     list_filter = ('tienda', 'metodo_pago', 'anulada', 'arancel_aplicado__nombre_plan', 'fecha_venta') 
     search_fields = ('id__exact', 'tienda__nombre', 'metodo_pago') 
     inlines = [DetalleVentaInline]
-    # AÑADIDO: arancel_aplicado y arancel_total a readonly_fields
+    # CAMBIO: Añadir arancel_aplicado y arancel_total a readonly_fields
     readonly_fields = ('id', 'fecha_venta', 'total', 'anulada', 'arancel_aplicado', 'arancel_total', 'fecha_creacion', 'fecha_actualizacion') 
 
     def get_queryset(self, request):
