@@ -12,7 +12,7 @@ from decimal import Decimal
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
-from django.db import close_old_connections # <-- AÑADIDO: Importación para el fix de conexión
+from django.db import close_old_connections # <-- Importado para el fix de conexión
 
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
@@ -54,6 +54,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(tienda=self.request.user.tienda)
 
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
     @action(detail=False, methods=['get'])
     def productos_sin_codigo(self, request):
         productos = self.get_queryset().filter(codigo_barras__isnull=True)
@@ -87,6 +92,11 @@ class CategoriaViewSet(viewsets.ModelViewSet):
     serializer_class = CategoriaSerializer
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
@@ -98,7 +108,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
-    # SOLUCIÓN AL ERROR: server closed the connection unexpectedly
+    # FIX DE CONEXIÓN (Mantenido)
     def list(self, request, *args, **kwargs):
         close_old_connections()
         return super().list(request, *args, **kwargs)
@@ -122,6 +132,11 @@ class UserViewSet(viewsets.ModelViewSet):
         
         return User.objects.none()
 
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
 class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
@@ -129,6 +144,11 @@ class VentaViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return VentaCreateSerializer
         return VentaSerializer
+
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         user = self.request.user
@@ -153,10 +173,6 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
-            # NOTA: La lógica de filtrado de "anulada" se mejoró en inventario/filters.py
-            # pero aquí se mantiene un filtro básico. Si está usando el DjangoFilterBackend
-            # en otra parte (no visible aquí), este código podría ser redundante.
-            # No obstante, se mantiene la lógica original del archivo por seguridad.
             queryset = queryset.filter(anulada=anulada == 'true')
             
         return queryset
@@ -220,7 +236,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.arancel_total = venta.total * (arancel_porcentaje / Decimal('100'))
             else:
                 venta.arancel_total = Decimal('0.00') # Asegurar que es 0.00
-
+            
             if not venta.detalles.filter(anulado_individualmente=False).exists():
                 venta.anulada = True
 
@@ -252,10 +268,21 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
             return DetalleVenta.objects.filter(venta__tienda=user.tienda)
         return DetalleVenta.objects.none()
 
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
 class MetodoPagoViewSet(viewsets.ModelViewSet):
     queryset = MetodoPago.objects.all()
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
 
 # CAMBIO CRUCIAL: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ReadOnlyModelViewSet):
@@ -279,6 +306,11 @@ class ArancelMetodoTiendaViewSet(viewsets.ReadOnlyModelViewSet):
             return queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
         
         return ArancelMetodoTienda.objects.none()
+
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
 
 
 class CompraViewSet(viewsets.ModelViewSet):
@@ -305,6 +337,11 @@ class CompraViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save(usuario=self.request.user)
+
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
         
 
 class CustomTokenObtainPairView(TokenObtainPairView):
