@@ -65,8 +65,8 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True) 
     
     class Meta:
-        model = DetalleVenta
         fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
+        model = DetalleVenta
         read_only_fields = ['subtotal']
 
 class VentaSerializer(serializers.ModelSerializer):
@@ -104,6 +104,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Venta
         fields = [
+            # --- CORRECCIÓN CRÍTICA: Añadir id y fecha_venta para la respuesta POST ---
+            'id',
+            'fecha_venta',
+            # -------------------------------------------------------------------------
             'descuento_porcentaje', 'descuento_monto', 'metodo_pago', 
             'tienda_slug', 'detalles', 'arancel_aplicado_id'
         ]
