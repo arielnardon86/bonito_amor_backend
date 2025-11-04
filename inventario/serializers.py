@@ -1,4 +1,4 @@
-# inventario/serializers.py
+# inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
 from decimal import Decimal 
@@ -81,7 +81,9 @@ class VentaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Venta
         fields = [
-            'id', 'fecha_venta', 'total', 'anulada', 'descuento_porcentaje', 'descuento_monto',
+            'id', 'fecha_venta', 'total', 'anulada', 
+            'descuento_porcentaje', 'descuento_monto',
+            'recargo_porcentaje', 'recargo_monto',
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
@@ -104,16 +106,18 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Venta
         fields = [
-            # --- CORRECCIÓN CRÍTICA: Añadir id y fecha_venta para la respuesta POST ---
             'id',
             'fecha_venta',
-            # -------------------------------------------------------------------------
-            'descuento_porcentaje', 'descuento_monto', 'metodo_pago', 
+            'descuento_porcentaje', 'descuento_monto', 
+            'recargo_porcentaje', 'recargo_monto', 
+            'metodo_pago', 
             'tienda_slug', 'detalles', 'arancel_aplicado_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
             'descuento_monto': {'required': False},
+            'recargo_porcentaje': {'required': False}, 
+            'recargo_monto': {'required': False},      
         }
 
     def validate(self, data):
@@ -158,14 +162,26 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         descuento_porcentaje = data.get('descuento_porcentaje', Decimal('0.00'))
         descuento_monto = data.get('descuento_monto', Decimal('0.00'))
+        recargo_porcentaje = data.get('recargo_porcentaje', Decimal('0.00'))
+        recargo_monto = data.get('recargo_monto', Decimal('0.00'))
         
-        if descuento_monto > 0 and descuento_porcentaje > 0:
-            raise serializers.ValidationError({"descuentos": "No se pueden aplicar descuentos por monto y porcentaje al mismo tiempo."})
+        # Validación de exclusividad: Solo puede haber un tipo de ajuste
+        ajustes_aplicados = [a for a in [descuento_monto, descuento_porcentaje, recargo_monto, recargo_porcentaje] if a > Decimal('0.00')]
+
+        if len(ajustes_aplicados) > 1:
+            raise serializers.ValidationError({"ajustes": "Solo se puede aplicar un tipo de ajuste (desc. monto/porcentaje o recargo monto/porcentaje) a la vez."})
         
-        if descuento_monto > 0:
+        # CÁLCULO DEL TOTAL CON RECARGO/DESCUENTO
+        if recargo_monto > 0: 
+            data['total'] = calculated_subtotal + recargo_monto
+        elif recargo_porcentaje > 0:
+            data['total'] = calculated_subtotal * (Decimal('1') + (recargo_porcentaje / Decimal('100')))
+        elif descuento_monto > 0:
             data['total'] = max(Decimal('0.00'), calculated_subtotal - descuento_monto)
-        else:
+        elif descuento_porcentaje > 0:
             data['total'] = calculated_subtotal * (Decimal('1') - (descuento_porcentaje / Decimal('100')))
+        else:
+            data['total'] = calculated_subtotal
         
         # Lógica de arancel
         data['arancel_total'] = Decimal('0.00')
@@ -205,6 +221,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
             descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
+            recargo_porcentaje=validated_data.get('recargo_porcentaje', Decimal('0.00')),
+            recargo_monto=validated_data.get('recargo_monto', Decimal('0.00')),
             arancel_aplicado=arancel_aplicado, 
             arancel_total=arancel_total,       
             fecha_venta=validated_data['fecha_venta'],

@@ -1,3 +1,4 @@
+# inventario/views.py - CÓDIGO COMPLETO Y CORREGIDO
 # BONITO_AMOR/backend/inventario/views.py
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
@@ -225,11 +226,19 @@ class VentaViewSet(viewsets.ModelViewSet):
             venta = detalle.venta
             total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
-            if venta.descuento_monto > 0:
+            # --- LÓGICA DE RECALCULO DE TOTAL CON DESCUENTO/RECARGO ---
+            if venta.recargo_monto > 0:
+                venta.total = total_subtotal + venta.recargo_monto
+            elif venta.recargo_porcentaje > 0:
+                venta.total = total_subtotal * (Decimal('1') + (venta.recargo_porcentaje / Decimal('100')))
+            elif venta.descuento_monto > 0:
                 venta.total = max(Decimal('0.00'), total_subtotal - venta.descuento_monto)
-            else:
+            elif venta.descuento_porcentaje > 0:
                 venta.total = total_subtotal * (Decimal('1') - (venta.descuento_porcentaje / Decimal('100')))
-            
+            else:
+                venta.total = total_subtotal
+            # ---------------------------------------------------------
+
             # Recalcular arancel sobre el nuevo total si aplica
             if venta.arancel_aplicado:
                 arancel_porcentaje = venta.arancel_aplicado.arancel_porcentaje

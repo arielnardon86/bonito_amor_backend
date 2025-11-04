@@ -1,4 +1,4 @@
-# inventario/models.py
+# inventario/models.py - CÓDIGO COMPLETO Y CORREGIDO
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 import uuid 
@@ -103,7 +103,7 @@ class ArancelMetodoTienda(models.Model):
         ('3', '3 Cuotas'),
         ('6', '6 Cuotas'),
         ('12', '12 Cuotas'),
-        ('Z', 'Z (Ahora 12 / Plan Especial)'),
+        ('Z', 'Z (Plan Z)'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -143,6 +143,11 @@ class Venta(models.Model):
     anulada = models.BooleanField(default=False) 
     descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Porcentaje de descuento aplicado a la venta total.")
     descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de descuento aplicado a la venta total.")
+    
+    # --- NUEVOS CAMPOS: RECARGO ---
+    recargo_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Porcentaje de recargo aplicado a la venta total.")
+    recargo_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de recargo aplicado a la venta total.")
+    # -----------------------------
     
     # NUEVOS CAMPOS: Referencia al arancel aplicado y el monto calculado
     arancel_aplicado = models.ForeignKey(ArancelMetodoTienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_con_arancel')
