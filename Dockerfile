@@ -5,12 +5,13 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 # Instala dos2unix y otras dependencias del sistema necesarias
-# Incluyo las dependencias para psycopg2 y Pillow que tenías antes
+# Incluyo las dependencias para psycopg2, Pillow y git (necesario para pyafipws)
 RUN apt-get update && apt-get install -y \
     dos2unix \
     postgresql-client \
     build-essential \
     libjpeg-dev zlib1g-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copia el archivo de requisitos e instala las dependencias de Python
