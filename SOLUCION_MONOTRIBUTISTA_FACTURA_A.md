@@ -81,13 +81,15 @@ Después de configurar:
 
 ### Para Monotributistas (Emisor):
 
+**IMPORTANTE: Monotributistas SOLO pueden emitir Factura C (sin excepciones)**
+
 | Condición IVA Cliente | Tipo de Factura Emitida |
 |----------------------|------------------------|
-| Responsable Inscripto (RI) | **Factura B** (no A, porque el emisor no puede emitir A) |
-| Monotributista (MT) | **Factura B** |
-| Consumidor Final (CF) | **Factura B** |
+| Responsable Inscripto (RI) | **Factura C** |
+| Monotributista (MT) | **Factura C** |
+| Consumidor Final (CF) | **Factura C** |
 | Exento (EX) | **Factura C** |
-| No Responsable (NR) | **Factura B** |
+| No Responsable (NR) | **Factura C** |
 
 ### Para Responsables Inscriptos (Emisor):
 

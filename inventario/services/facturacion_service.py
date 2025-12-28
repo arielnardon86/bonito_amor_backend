@@ -996,9 +996,11 @@ class FacturacionService:
         AFIP: 1=Factura A, 6=Factura B, 11=Factura C
         
         Reglas:
-        - Factura A: Solo si el EMISOR es Responsable Inscripto Y el cliente es Responsable Inscripto
-        - Factura C: Cuando el cliente es Exento (EX)
-        - Factura B: En todos los demás casos (CF, MT, NR, o cuando el emisor no puede emitir A)
+        - Si el EMISOR es Monotributista: SOLO puede emitir Factura C (sin excepciones)
+        - Si el EMISOR es Responsable Inscripto:
+          - Factura A: Cliente Responsable Inscripto (RI)
+          - Factura B: Cliente Consumidor Final, Monotributista, No Responsable (CF, MT, NR)
+          - Factura C: Cliente Exento (EX)
         """
         condicion_iva_cliente = cliente_data.get('cliente_condicion_iva', 'CF')
         
@@ -1008,21 +1010,30 @@ class FacturacionService:
         
         logger.info(f"Condición IVA - Emisor: {condicion_iva_emisor}, Cliente: {condicion_iva_cliente}")
         
-        # Factura C: Cliente Exento (cualquier emisor puede emitir Factura C)
-        if condicion_iva_cliente == 'EX':
-            logger.info("Determinado: Factura C (Cliente Exento)")
+        # REGLA ESPECIAL: Monotributistas SOLO pueden emitir Factura C
+        if condicion_iva_emisor == 'MT':
+            logger.info("Determinado: Factura C (Emisor es Monotributista - solo puede emitir Factura C)")
             return 11  # Factura C
         
-        # Factura A: Solo si el EMISOR es Responsable Inscripto Y el cliente es Responsable Inscripto
-        if condicion_iva_emisor == 'RI' and condicion_iva_cliente == 'RI':
-            logger.info("Determinado: Factura A (Emisor RI y Cliente RI)")
-            return 1  # Factura A
+        # Si el emisor es Responsable Inscripto, puede emitir A, B o C según el cliente
+        if condicion_iva_emisor == 'RI':
+            # Factura C: Cliente Exento
+            if condicion_iva_cliente == 'EX':
+                logger.info("Determinado: Factura C (Cliente Exento)")
+                return 11  # Factura C
+            
+            # Factura A: Cliente Responsable Inscripto
+            if condicion_iva_cliente == 'RI':
+                logger.info("Determinado: Factura A (Emisor RI y Cliente RI)")
+                return 1  # Factura A
+            
+            # Factura B: Todos los demás casos (CF, MT, NR)
+            logger.info("Determinado: Factura B (Cliente CF/MT/NR)")
+            return 6  # Factura B
         
-        # Factura B: Todos los demás casos
-        # - Emisor no es RI (no puede emitir A)
-        # - Cliente no es RI
-        # - Cliente es CF, MT, NR
-        logger.info("Determinado: Factura B (caso por defecto)")
+        # Para otras condiciones del emisor (CF, EX, NR), usar Factura B por defecto
+        # (aunque estas condiciones rara vez emiten facturas electrónicas)
+        logger.info(f"Determinado: Factura B (Emisor {condicion_iva_emisor} - caso por defecto)")
         return 6  # Factura B
     
     def obtener_proximo_numero(self) -> Optional[int]:

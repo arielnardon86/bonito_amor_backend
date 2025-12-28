@@ -49,7 +49,7 @@ class Tienda(models.Model):
         max_length=2, 
         choices=CONDICION_IVA_CHOICES, 
         default='MT',
-        help_text="Condición frente al IVA del emisor (tienda). Importante: Solo Responsables Inscriptos pueden emitir Factura A."
+        help_text="Condición frente al IVA del emisor (tienda). IMPORTANTE: Monotributistas SOLO pueden emitir Factura C. Responsables Inscriptos pueden emitir Factura A, B o C según el cliente."
     )
     
     # Configuración AFIP
