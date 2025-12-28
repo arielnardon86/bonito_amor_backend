@@ -32,9 +32,18 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Paso 3: Aplicar Migraciones
+### Paso 3: Aplicar Migraciones (CRÍTICO)
+
+**⚠️ IMPORTANTE: Si ves el error "column inventario_tienda.cuit does not exist", ejecuta esto PRIMERO:**
 
 ```bash
+python manage.py migrate inventario --verbosity=2
+```
+
+Si hay algún problema con las migraciones, puedes forzar la aplicación:
+
+```bash
+python manage.py migrate inventario 0010 --fake-initial
 python manage.py migrate inventario
 ```
 
@@ -44,7 +53,12 @@ python manage.py migrate inventario
 python manage.py showmigrations inventario
 ```
 
-Debes ver todas con `[X]`, incluyendo la `0010`.
+Debes ver todas con `[X]`, incluyendo la `0010_tienda_api_key_arca_tienda_certificado_afip_and_more`.
+
+Si la migración `0010` muestra `[ ]` (sin X), significa que NO se aplicó. Ejecuta:
+```bash
+python manage.py migrate inventario 0010
+```
 
 ### Paso 5: Recolectar Archivos Estáticos (si aplica)
 

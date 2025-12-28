@@ -33,6 +33,30 @@ class TiendaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tienda
         fields = '__all__'
+    
+    def to_representation(self, instance):
+        """
+        Maneja campos que pueden no existir si las migraciones no están aplicadas.
+        """
+        data = super().to_representation(instance)
+        
+        # Campos que pueden no existir si la migración 0010 no está aplicada
+        campos_fiscales = ['cuit', 'punto_venta', 'tipo_facturacion', 'certificado_afip', 
+                          'clave_privada_afip', 'modo_test_afip', 'api_key_arca', 'url_arca']
+        
+        for campo in campos_fiscales:
+            if campo not in data:
+                # Si el campo no existe, usar valores por defecto
+                if campo == 'punto_venta':
+                    data[campo] = 1
+                elif campo == 'tipo_facturacion':
+                    data[campo] = 'NINGUNA'
+                elif campo == 'modo_test_afip':
+                    data[campo] = True
+                else:
+                    data[campo] = None
+        
+        return data
 
 class UserSerializer(serializers.ModelSerializer):
     tienda = serializers.SlugRelatedField(
