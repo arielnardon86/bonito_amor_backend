@@ -5,9 +5,21 @@ import dj_database_url
 from dotenv import load_dotenv
 from datetime import timedelta
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Determinar qué archivo .env cargar según el ambiente
+ENVIRONMENT = os.environ.get('DJANGO_ENVIRONMENT', 'development').lower()
+
+if ENVIRONMENT == 'staging':
+    env_file = BASE_DIR / '.env.staging'
+    if env_file.exists():
+        load_dotenv(env_file)
+    else:
+        load_dotenv()
+elif ENVIRONMENT == 'production':
+    load_dotenv()
+else:  # development
+    load_dotenv()
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-tu-clave-secreta-de-desarrollo-aqui')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() == 'true'
@@ -86,6 +98,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'mi_tienda_backend.wsgi.application' 
 
+# Configuración de base de datos según el ambiente
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -93,23 +106,69 @@ DATABASES = {
     }
 }
 
-if 'DATABASE_URL' in os.environ:
-    DATABASES['default'] = dj_database_url.config(
-        # CAMBIO CRUCIAL: 
-        # Cambiar a 0 para forzar el cierre de conexión después de cada solicitud
-        # y evitar el error "server closed the connection unexpectedly".
-        conn_max_age=60, 
-        ssl_require=True
-    )
-    print("\n--- DEBUG DATABASE CONFIG ---")
-    print("DATABASE_URL found in environment variables!")
-    print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']} (SSL: True)")
-    print("--- END DEBUG ---\n")
-else:
-    print("\n--- DEBUG DATABASE CONFIG ---")
-    print("WARNING: DATABASE_URL NOT found in environment variables. Falling back to SQLite.")
-    print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
-    print("--- END DEBUG ---\n")
+# Configuración para diferentes ambientes
+if ENVIRONMENT == 'staging':
+    # Ambiente de staging: PostgreSQL local sin SSL
+    if 'DATABASE_URL' in os.environ:
+        DATABASES['default'] = dj_database_url.config(
+            conn_max_age=60,
+            ssl_require=False  # Sin SSL para PostgreSQL local
+        )
+        print("\n--- STAGING DATABASE CONFIG ---")
+        print(f"Ambiente: STAGING")
+        print(f"Base de datos: {DATABASES['default']['ENGINE']}")
+        print(f"Nombre: {DATABASES['default'].get('NAME', 'N/A')}")
+        print("--- END CONFIG ---\n")
+    else:
+        # Fallback: PostgreSQL local con configuración manual
+        DATABASES['default'] = {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('STAGING_DB_NAME', 'bonito_amor_staging'),
+            'USER': os.environ.get('STAGING_DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('STAGING_DB_PASSWORD', 'postgres'),
+            'HOST': os.environ.get('STAGING_DB_HOST', 'localhost'),
+            'PORT': os.environ.get('STAGING_DB_PORT', '5432'),
+            'CONN_MAX_AGE': 60,
+        }
+        print("\n--- STAGING DATABASE CONFIG (manual) ---")
+        print(f"Ambiente: STAGING")
+        print(f"Base de datos: PostgreSQL local")
+        print(f"Nombre: {DATABASES['default']['NAME']}")
+        print("--- END CONFIG ---\n")
+
+elif ENVIRONMENT == 'production':
+    # Ambiente de producción: PostgreSQL en la nube con SSL
+    if 'DATABASE_URL' in os.environ:
+        DATABASES['default'] = dj_database_url.config(
+            conn_max_age=60,
+            ssl_require=True  # SSL requerido en producción
+        )
+        print("\n--- PRODUCTION DATABASE CONFIG ---")
+        print("DATABASE_URL found in environment variables!")
+        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']} (SSL: True)")
+        print("--- END CONFIG ---\n")
+    else:
+        print("\n--- PRODUCTION DATABASE CONFIG ---")
+        print("ERROR: DATABASE_URL NOT found in environment variables for production!")
+        print("Falling back to SQLite (NOT RECOMMENDED FOR PRODUCTION)")
+        print("--- END CONFIG ---\n")
+
+else:  # development
+    # Ambiente de desarrollo: SQLite por defecto
+    if 'DATABASE_URL' in os.environ:
+        DATABASES['default'] = dj_database_url.config(
+            conn_max_age=60,
+            ssl_require=False
+        )
+        print("\n--- DEVELOPMENT DATABASE CONFIG ---")
+        print("DATABASE_URL found, using it instead of SQLite")
+        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
+        print("--- END CONFIG ---\n")
+    else:
+        print("\n--- DEVELOPMENT DATABASE CONFIG ---")
+        print("Using SQLite for development")
+        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
+        print("--- END CONFIG ---\n")
 
 AUTH_PASSWORD_VALIDATORS = [
     {

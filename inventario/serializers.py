@@ -1,6 +1,6 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura 
 from decimal import Decimal 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -77,6 +77,15 @@ class VentaSerializer(serializers.ModelSerializer):
     # Campos de arancel para lectura
     arancel_aplicado_nombre = serializers.CharField(source='arancel_aplicado.nombre_plan', read_only=True)
     arancel_aplicado_porcentaje = serializers.DecimalField(source='arancel_aplicado.arancel_porcentaje', max_digits=5, decimal_places=2, read_only=True)
+    # Campo para saber si tiene factura asociada
+    tiene_factura = serializers.SerializerMethodField()
+
+    def get_tiene_factura(self, obj):
+        """Verifica si la venta tiene una factura asociada"""
+        try:
+            return obj.factura is not None
+        except:
+            return False
 
     class Meta:
         model = Venta
@@ -87,7 +96,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
-            'fecha_creacion', 'fecha_actualizacion'
+            'fecha_creacion', 'fecha_actualizacion', 'tiene_factura', 'facturada'
         ]
 
 class VentaCreateSerializer(serializers.ModelSerializer):
@@ -249,6 +258,45 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             producto_obj.save()
 
         return venta
+
+# Serializers para Facturación
+class FacturaSerializer(serializers.ModelSerializer):
+    venta_id = serializers.UUIDField(source='venta.id', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    numero_factura_completo = serializers.CharField(read_only=True)
+    
+    class Meta:
+        model = Factura
+        fields = [
+            'id', 'venta', 'venta_id', 'tienda', 'tienda_nombre',
+            'numero_comprobante', 'punto_venta', 'tipo_comprobante',
+            'numero_factura_completo',
+            'cliente_nombre', 'cliente_cuit', 'cliente_domicilio',
+            'cliente_tipo_documento', 'cliente_condicion_iva',
+            'subtotal', 'impuesto_iva', 'total',
+            'estado', 'sistema_facturacion',
+            'cae', 'fecha_vencimiento_cae', 'numero_comprobante_afip',
+            'error_mensaje', 'fecha_emision', 'fecha_actualizacion'
+        ]
+        read_only_fields = [
+            'id', 'numero_comprobante', 'cae', 'fecha_vencimiento_cae',
+            'numero_comprobante_afip', 'estado', 'error_mensaje',
+            'fecha_emision', 'fecha_actualizacion'
+        ]
+
+class EmitirFacturaSerializer(serializers.Serializer):
+    """Serializer para emitir una factura desde una venta"""
+    # venta_id es opcional porque el pk viene en la URL del endpoint
+    venta_id = serializers.UUIDField(required=False, allow_null=True)
+    cliente_nombre = serializers.CharField(required=True, max_length=255)
+    cliente_cuit = serializers.CharField(required=False, max_length=13, allow_blank=True, allow_null=True)
+    cliente_domicilio = serializers.CharField(required=False, max_length=255, allow_blank=True, allow_null=True)
+    cliente_tipo_documento = serializers.CharField(required=False, max_length=20, allow_blank=True, allow_null=True)
+    cliente_condicion_iva = serializers.ChoiceField(
+        choices=Factura.CONDICION_IVA_CHOICES,
+        default='CF',
+        required=False
+    )
 
 # CRUCIAL: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
 # Esto soluciona el error de importación.

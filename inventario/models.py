@@ -20,11 +20,47 @@ class User(AbstractUser):
 
 # Modelo de Tienda
 class Tienda(models.Model):
+    FACTURACION_CHOICES = [
+        ('AFIP', 'AFIP (Administración Federal de Ingresos Públicos)'),
+        ('ARCA', 'ARCA (Administración de Recursos de la Administración Nacional)'),
+        ('NINGUNA', 'Sin facturación electrónica'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     nombre = models.CharField(max_length=100, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
     telefono = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
+    
+    # Campos fiscales para facturación
+    cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")
+    punto_venta = models.IntegerField(default=1, help_text="Punto de venta AFIP/ARCA")
+    tipo_facturacion = models.CharField(max_length=10, choices=FACTURACION_CHOICES, default='NINGUNA', help_text="Sistema de facturación a utilizar")
+    
+    # Configuración AFIP
+    certificado_afip = models.TextField(
+        blank=True, null=True, 
+        help_text="⚠️ IMPORTANTE: Pega aquí el CONTENIDO COMPLETO del archivo .crt codificado en base64 (NO solo el nombre del archivo). Usa: python manage.py convertir_certificados_afip certificado.crt clave.key"
+    )
+    clave_privada_afip = models.TextField(
+        blank=True, null=True, 
+        help_text="⚠️ IMPORTANTE: Pega aquí el CONTENIDO COMPLETO del archivo .key codificado en base64 (NO solo el nombre del archivo). Usa: python manage.py convertir_certificados_afip certificado.crt clave.key"
+    )
+    modo_test_afip = models.BooleanField(
+        default=True, 
+        help_text="Marca esta casilla para usar el ambiente de testing/homologación de AFIP. Desmarca para producción."
+    )
+    
+    # Configuración ARCA (si aplica)
+    api_key_arca = models.CharField(
+        max_length=255, blank=True, null=True, 
+        help_text="API Key proporcionada por tu proveedor de servicios ARCA. Contacta a tu proveedor para obtenerla."
+    )
+    url_arca = models.URLField(
+        blank=True, null=True, 
+        help_text="URL del endpoint del servicio ARCA. Ejemplo: https://api.arca.com/v1/facturacion. Consulta la documentación de tu proveedor."
+    )
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -153,6 +189,15 @@ class Venta(models.Model):
     arancel_aplicado = models.ForeignKey(ArancelMetodoTienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_con_arancel')
     arancel_total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto total del arancel calculado para esta venta.")
     
+    # Campos para facturación
+    facturada = models.BooleanField(default=False, help_text="Indica si esta venta ha sido facturada")
+    
+    # Datos del cliente para facturación (opcional para consumidor final)
+    cliente_nombre = models.CharField(max_length=255, blank=True, null=True, help_text="Nombre o razón social del cliente")
+    cliente_cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT del cliente")
+    cliente_domicilio = models.CharField(max_length=255, blank=True, null=True, help_text="Domicilio del cliente")
+    cliente_tipo_documento = models.CharField(max_length=20, blank=True, null=True, help_text="Tipo de documento (DNI, CUIT, etc.)")
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -204,3 +249,85 @@ class Compra(models.Model):
 
     def __str__(self):
         return f"Compra Total {self.id} - ${self.total} de {self.proveedor or 'N/A'} - Tienda: {self.tienda.nombre}"
+
+# Modelo de Factura Electrónica
+class Factura(models.Model):
+    TIPO_FACTURA_CHOICES = [
+        ('A', 'Factura A (Responsable Inscripto)'),
+        ('B', 'Factura B (Consumidor Final)'),
+        ('C', 'Factura C (Exento)'),
+    ]
+    
+    CONDICION_IVA_CHOICES = [
+        ('RI', 'Responsable Inscripto'),
+        ('CF', 'Consumidor Final'),
+        ('EX', 'Exento'),
+        ('MT', 'Monotributo'),
+        ('NR', 'No Responsable'),
+    ]
+    
+    ESTADO_CHOICES = [
+        ('PENDIENTE', 'Pendiente'),
+        ('EMITIDA', 'Emitida'),
+        ('ANULADA', 'Anulada'),
+        ('ERROR', 'Error'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    venta = models.OneToOneField(Venta, on_delete=models.CASCADE, related_name='factura')
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='facturas')
+    
+    # Números de factura
+    numero_comprobante = models.IntegerField(blank=True, null=True, help_text="Número de comprobante asignado por AFIP/ARCA")
+    punto_venta = models.IntegerField(help_text="Punto de venta utilizado")
+    tipo_comprobante = models.CharField(max_length=1, choices=TIPO_FACTURA_CHOICES, default='B')
+    
+    # Datos del cliente
+    cliente_nombre = models.CharField(max_length=255)
+    cliente_cuit = models.CharField(max_length=13, blank=True, null=True)
+    cliente_domicilio = models.CharField(max_length=255, blank=True, null=True)
+    cliente_tipo_documento = models.CharField(max_length=20, blank=True, null=True)
+    cliente_condicion_iva = models.CharField(max_length=2, choices=CONDICION_IVA_CHOICES, default='CF')
+    
+    # Totales
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+    impuesto_iva = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    # Estado y respuesta de AFIP/ARCA
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
+    sistema_facturacion = models.CharField(max_length=10, choices=Tienda.FACTURACION_CHOICES)
+    
+    # Respuesta de AFIP/ARCA
+    cae = models.CharField(max_length=14, blank=True, null=True, help_text="CAE (Código de Autorización Electrónica) de AFIP")
+    fecha_vencimiento_cae = models.DateField(blank=True, null=True, help_text="Fecha de vencimiento del CAE")
+    numero_comprobante_afip = models.BigIntegerField(blank=True, null=True, help_text="Número de comprobante retornado por AFIP")
+    
+    # Datos adicionales de la respuesta
+    respuesta_bruta = models.TextField(blank=True, null=True, help_text="Respuesta completa del servicio de facturación (JSON)")
+    error_mensaje = models.TextField(blank=True, null=True, help_text="Mensaje de error si la facturación falló")
+    
+    # PDF generado (opcional, almacenar en storage)
+    pdf_factura = models.FileField(upload_to='facturas/', blank=True, null=True, help_text="PDF de la factura generada")
+    
+    fecha_emision = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Factura"
+        verbose_name_plural = "Facturas"
+        ordering = ['-fecha_emision']
+        indexes = [
+            models.Index(fields=['tienda', 'numero_comprobante', 'punto_venta']),
+            models.Index(fields=['cae']),
+        ]
+
+    def __str__(self):
+        return f"Factura {self.tipo_comprobante} {self.punto_venta}-{self.numero_comprobante or 'PEND'} - {self.tienda.nombre} - ${self.total}"
+    
+    @property
+    def numero_factura_completo(self):
+        """Retorna el número de factura en formato estándar: punto_venta-numero"""
+        if self.numero_comprobante:
+            return f"{self.punto_venta:04d}-{self.numero_comprobante:08d}"
+        return f"{self.punto_venta:04d}-PENDIENTE"

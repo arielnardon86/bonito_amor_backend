@@ -14,3 +14,10 @@ python-dotenv==1.1.1
 sqlparse==0.5.3
 typing_extensions==4.14.1
 whitenoise==6.6.0
+# pyafipws instalado desde GitHub (versión más reciente)
+# Instalar con: pip install git+https://github.com/reingart/pyafipws.git
+pyafipws @ git+https://github.com/reingart/pyafipws.git
+requests==2.31.0
+cryptography==41.0.7
+setuptools>=80.0.0  # Necesario para pyafipws en Python 3.12+
+reportlab==4.0.9  # Para generar PDFs de facturas

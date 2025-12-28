@@ -6,7 +6,7 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
-    ArancelMetodoTiendaViewSet # AÑADIDO
+    ArancelMetodoTiendaViewSet, FacturaViewSet # AÑADIDO
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -21,6 +21,7 @@ router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalles-venta
 router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
 router.register(r'compras', CompraViewSet, basename='compras')
 router.register(r'aranceles-tienda', ArancelMetodoTiendaViewSet, basename='aranceles-tienda') # NUEVA RUTA
+router.register(r'facturas', FacturaViewSet, basename='facturas') # NUEVA RUTA
 
 
 urlpatterns = [

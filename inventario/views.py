@@ -9,21 +9,36 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Count, F, Q, Value 
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime
-from decimal import Decimal 
+from decimal import Decimal, ROUND_HALF_UP 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
 from django.db import close_old_connections # <-- Importado para el fix de conexión
+from django.http import HttpResponse
+from io import BytesIO
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda 
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura 
 # CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer 
+    CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer,
+    FacturaSerializer, EmitirFacturaSerializer
 )
+# Importar modelos de facturación
+from .models import Factura
+from .services.facturacion_service import FacturacionService
 from .filters import VentaFilter 
 
 
@@ -263,6 +278,152 @@ class VentaViewSet(viewsets.ModelViewSet):
 
             return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'])
+    def emitir_factura(self, request, pk=None):
+        """Emitir una factura electrónica para una venta"""
+        venta = get_object_or_404(Venta, pk=pk)
+        
+        # Validaciones
+        if venta.anulada:
+            return Response(
+                {"error": "No se puede emitir factura para una venta anulada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if venta.facturada:
+            return Response(
+                {"error": "Esta venta ya tiene una factura emitida."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verificar que la tienda tenga facturación configurada
+        if venta.tienda.tipo_facturacion == 'NINGUNA':
+            return Response(
+                {"error": "La tienda no tiene configurado un sistema de facturación."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar permisos
+        user = request.user
+        if not user.is_superuser and user.tienda != venta.tienda:
+            return Response(
+                {"error": "No tienes permiso para emitir facturas de esta tienda."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validar datos del cliente
+        serializer = EmitirFacturaSerializer(data=request.data)
+        if not serializer.is_valid():
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Error de validación en emitir_factura: {serializer.errors}")
+            logger.error(f"Datos recibidos: {request.data}")
+            return Response(
+                {"error": "Error de validación", "detalles": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        cliente_data = serializer.validated_data
+        
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"=== Iniciando emisión de factura ===")
+            logger.info(f"Venta ID: {venta.id}")
+            logger.info(f"Tienda: {venta.tienda.nombre}")
+            logger.info(f"Tipo facturación: {venta.tienda.tipo_facturacion}")
+            logger.info(f"Datos del cliente: {cliente_data}")
+            
+            # Inicializar servicio de facturación
+            facturacion_service = FacturacionService(venta.tienda)
+            
+            # Emitir factura
+            logger.info(f"⚠️ Llamando a facturacion_service.emitir_factura...")
+            exito, datos_factura, error = facturacion_service.emitir_factura(venta, cliente_data)
+            logger.info(f"Resultado: exito={exito}, error={error}")
+            
+            if not exito:
+                # Crear registro de factura con error
+                factura = Factura.objects.create(
+                    venta=venta,
+                    tienda=venta.tienda,
+                    punto_venta=venta.tienda.punto_venta,
+                    tipo_comprobante='B',  # Por defecto Factura B
+                    cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                    subtotal=venta.total,
+                    impuesto_iva=Decimal('0.00'),
+                    total=venta.total,
+                    estado='ERROR',
+                    sistema_facturacion=venta.tienda.tipo_facturacion,
+                    error_mensaje=error,
+                )
+                
+                return Response(
+                    {
+                        "error": error,
+                        "factura_id": str(factura.id),
+                        "estado": "ERROR"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Crear registro de factura exitosa
+            factura = Factura.objects.create(
+                venta=venta,
+                tienda=venta.tienda,
+                numero_comprobante=datos_factura.get('numero_comprobante'),
+                punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
+                tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+                cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+                cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                subtotal=datos_factura.get('subtotal', venta.total),
+                impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+                total=datos_factura.get('total', venta.total),
+                estado='EMITIDA',
+                sistema_facturacion=venta.tienda.tipo_facturacion,
+                cae=datos_factura.get('cae'),
+                fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+                numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+                respuesta_bruta=datos_factura.get('respuesta_bruta'),
+            )
+            
+            # Marcar venta como facturada y actualizar datos del cliente
+            venta.facturada = True
+            venta.cliente_nombre = cliente_data.get('cliente_nombre', '')
+            venta.cliente_cuit = cliente_data.get('cliente_cuit', '')
+            venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
+            venta.cliente_tipo_documento = cliente_data.get('cliente_tipo_documento', '')
+            venta.save()
+            
+            # Serializar y retornar factura
+            factura_serializer = FacturaSerializer(factura)
+            
+            return Response(
+                {
+                    "message": "Factura emitida exitosamente",
+                    "factura": factura_serializer.data
+                },
+                status=status.HTTP_201_CREATED
+            )
+            
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Excepción no capturada en emitir_factura: {str(e)}")
+            logger.error(traceback.format_exc())
+            return Response(
+                {"error": f"Error al emitir factura: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DetalleVenta.objects.all()
@@ -487,3 +648,304 @@ class MetricasAPIView(APIView):
         }
 
         return Response(data)
+
+
+class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet para consultar facturas emitidas"""
+    serializer_class = FacturaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['numero_comprobante', 'cliente_nombre', 'cliente_cuit', 'cae']
+    ordering_fields = ['fecha_emision', 'numero_comprobante', 'total']
+    ordering = ['-fecha_emision']
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        queryset = Factura.objects.select_related('venta', 'tienda').all()
+        
+        # Filtrar por tienda si no es superusuario
+        if user.is_superuser:
+            tienda_id = self.request.query_params.get('tienda', None)
+            if tienda_id:
+                queryset = queryset.filter(tienda_id=tienda_id)
+        elif user.tienda:
+            queryset = queryset.filter(tienda=user.tienda)
+        else:
+            queryset = Factura.objects.none()
+        
+        # Filtros opcionales
+        estado = self.request.query_params.get('estado', None)
+        if estado:
+            queryset = queryset.filter(estado=estado)
+        
+        tipo_comprobante = self.request.query_params.get('tipo_comprobante', None)
+        if tipo_comprobante:
+            queryset = queryset.filter(tipo_comprobante=tipo_comprobante)
+        
+        # Filtrar por venta (UUID)
+        venta_id = self.request.query_params.get('venta', None)
+        if venta_id:
+            queryset = queryset.filter(venta_id=venta_id)
+        
+        return queryset
+    
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def generar_pdf(self, request, pk=None):
+        """
+        Genera y retorna el PDF de la factura
+        """
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        factura = self.get_object()
+        
+        # Verificar permisos
+        user = request.user
+        if not user.is_superuser and user.tienda != factura.tienda:
+            return Response(
+                {"error": "No tienes permiso para ver esta factura"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Asegurar que la relación tienda esté cargada correctamente
+        # Recargar desde la base de datos si es necesario
+        try:
+            factura.refresh_from_db()
+            # Forzar la carga de la relación tienda
+            tienda_obj = factura.tienda
+            if tienda_obj:
+                tienda_obj.refresh_from_db()
+        except Exception as e:
+            logger.warning(f"⚠️ Error al recargar factura o tienda: {e}")
+        
+        # Obtener detalles de la venta
+        venta = factura.venta
+        detalles = venta.detalles.all()
+        
+        # Obtener el nombre de la tienda con fallback
+        nombre_tienda = 'N/A'
+        try:
+            # Intentar obtener desde la relación
+            if factura.tienda_id:
+                # Recargar tienda desde DB
+                from inventario.models import Tienda
+                tienda_obj = Tienda.objects.get(id=factura.tienda_id)
+                nombre_tienda = tienda_obj.nombre or 'N/A'
+                logger.info(f"✅ Nombre de tienda obtenido desde DB: {nombre_tienda}")
+            elif factura.tienda:
+                nombre_tienda = factura.tienda.nombre or 'N/A'
+                logger.info(f"✅ Nombre de tienda obtenido desde relación: {nombre_tienda}")
+            else:
+                logger.warning(f"⚠️ La factura {factura.id} no tiene tienda asignada")
+        except Exception as e:
+            logger.warning(f"⚠️ Error al obtener nombre de tienda: {e}")
+            import traceback
+            logger.warning(traceback.format_exc())
+        
+        logger.info(f"📄 Generando PDF para factura {factura.id}, tienda: '{nombre_tienda}'")
+        
+        # Crear buffer para el PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm)
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=12,
+            alignment=1  # Centrado
+        )
+        normal_style = styles['Normal']
+        normal_style.fontSize = 10
+        normal_style.textColor = colors.HexColor('#000000')
+        
+        # Contenido del PDF
+        story = []
+        
+        # Título - Usar nombre de la tienda (ya obtenido arriba)
+        # Manejar tanto tipo_comprobante como letra (A, B, C) como número (1, 6, 11)
+        tipo_comprobante_para_texto = factura.tipo_comprobante
+        if isinstance(tipo_comprobante_para_texto, (int, str)) and str(tipo_comprobante_para_texto) in ['1', '6', '11']:
+            # Convertir número a letra
+            tipo_map = {'1': 'A', '6': 'B', '11': 'C'}
+            tipo_comprobante_para_texto = tipo_map.get(str(tipo_comprobante_para_texto), 'B')
+        
+        tipo_factura_text = dict(Factura.TIPO_FACTURA_CHOICES).get(tipo_comprobante_para_texto, tipo_comprobante_para_texto)
+        story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
+        story.append(Paragraph(f"FACTURA {tipo_factura_text}", ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=8,
+            alignment=1  # Centrado
+        )))
+        story.append(Spacer(1, 12))
+        
+        # Datos de la tienda
+        if factura.tienda.cuit:
+            story.append(Paragraph(f"<b>CUIT:</b> {factura.tienda.cuit}", normal_style))
+        if factura.tienda.direccion:
+            story.append(Paragraph(f"<b>Domicilio:</b> {factura.tienda.direccion}", normal_style))
+        story.append(Spacer(1, 12))
+        
+        # Datos de la factura (mover punto de venta y número más abajo, no justo después del nombre)
+        # Primero mostrar fecha
+        story.append(Paragraph(f"<b>Fecha de Emisión:</b> {factura.fecha_emision.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        # Mostrar punto de venta y número juntos en una línea más abajo
+        story.append(Paragraph(f"<b>Comprobante:</b> {factura.punto_venta:04d}-{factura.numero_comprobante:08d}", normal_style))
+        if factura.cae:
+            story.append(Paragraph(f"<b>CAE:</b> {factura.cae}", normal_style))
+        if factura.fecha_vencimiento_cae:
+            story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
+        story.append(Spacer(1, 12))
+        
+        # Datos del cliente
+        story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
+        story.append(Paragraph(f"<b>Nombre:</b> {factura.cliente_nombre}", normal_style))
+        if factura.cliente_cuit:
+            story.append(Paragraph(f"<b>CUIT/DNI:</b> {factura.cliente_cuit}", normal_style))
+        if factura.cliente_domicilio:
+            story.append(Paragraph(f"<b>Domicilio:</b> {factura.cliente_domicilio}", normal_style))
+        condicion_iva_text = dict(Factura.CONDICION_IVA_CHOICES).get(factura.cliente_condicion_iva, factura.cliente_condicion_iva)
+        story.append(Paragraph(f"<b>Condición IVA:</b> {condicion_iva_text}", normal_style))
+        story.append(Spacer(1, 12))
+        
+        # IMPORTANTE: Los precios de los productos ya tienen IVA incluido (21%)
+        # Necesitamos calcular el subtotal SIN IVA
+        # Si precio_con_iva = precio_sin_iva * 1.21, entonces precio_sin_iva = precio_con_iva / 1.21
+        
+        # Tabla de productos
+        data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
+        subtotal_sin_iva = Decimal('0.00')
+        total_iva_calculado = Decimal('0.00')
+        
+        for detalle in detalles:
+            if not detalle.anulado_individualmente:
+                producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
+                # El precio_unitario ya tiene IVA incluido
+                precio_con_iva = Decimal(str(detalle.precio_unitario))
+                # Calcular precio sin IVA: precio_con_iva / 1.21
+                precio_sin_iva = precio_con_iva / Decimal('1.21')
+                # Calcular subtotal sin IVA
+                subtotal_item_sin_iva = precio_sin_iva * Decimal(str(detalle.cantidad))
+                # Calcular IVA del item
+                iva_item = subtotal_item_sin_iva * Decimal('0.21')
+                
+                subtotal_sin_iva += subtotal_item_sin_iva
+                total_iva_calculado += iva_item
+                
+                # Mostrar precio con IVA (el precio original del producto)
+                data.append([
+                    str(detalle.cantidad),
+                    producto_nombre,
+                    f"${precio_con_iva:.2f}",
+                    f"${detalle.subtotal:.2f}"
+                ])
+        
+        # IMPORTANTE: El total de la venta YA tiene descuentos/recargos aplicados
+        # No debemos recalcular descuentos/recargos aquí, solo mostrar los valores correctos
+        # El total de la venta ya incluye IVA y descuentos/recargos aplicados sobre el total con IVA
+        
+        # Calcular el subtotal y IVA a partir del total final (que ya tiene descuentos aplicados)
+        total_final = Decimal(str(venta.total))
+        subtotal_final_sin_iva = (total_final / Decimal('1.21')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        iva_final = (total_final - subtotal_final_sin_iva).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        
+        # Calcular el descuento/recargo que se aplicó (para mostrarlo en el PDF)
+        # El descuento/recargo se aplicó sobre el total CON IVA
+        subtotal_inicial_con_iva = sum(
+            Decimal(str(d.precio_unitario)) * Decimal(str(d.cantidad))
+            for d in detalles if not d.anulado_individualmente
+        )
+        
+        descuento_monto_calc = Decimal('0.00')
+        recargo_monto_calc = Decimal('0.00')
+        
+        # Calcular descuento aplicado (sobre el total con IVA)
+        if venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
+            descuento_porc = venta.descuento_porcentaje / Decimal('100')
+            descuento_monto_calc = subtotal_inicial_con_iva * descuento_porc
+        elif venta.descuento_monto and venta.descuento_monto > 0:
+            descuento_monto_calc = venta.descuento_monto
+        
+        # Calcular recargo aplicado (sobre el total con IVA después del descuento)
+        if venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
+            recargo_base = subtotal_inicial_con_iva - descuento_monto_calc
+            recargo_porc = venta.recargo_porcentaje / Decimal('100')
+            recargo_monto_calc = recargo_base * recargo_porc
+        elif venta.recargo_monto and venta.recargo_monto > 0:
+            recargo_monto_calc = venta.recargo_monto
+        
+        # Agregar línea separadora antes de totales
+        data.append(['', '', '', ''])  # Línea vacía
+        
+        # Subtotal inicial con IVA (antes de descuentos/recargos)
+        subtotal_inicial_con_iva = sum(
+            Decimal(str(d.precio_unitario)) * Decimal(str(d.cantidad))
+            for d in detalles if not d.anulado_individualmente
+        )
+        data.append(['', '', '<b>Subtotal:</b>', f"${subtotal_inicial_con_iva:.2f}"])
+        
+        # Descuentos (mostrar sobre el total con IVA)
+        if descuento_monto_calc > 0:
+            descuento_label = f'<b>Descuento'
+            if venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
+                descuento_label += f' ({venta.descuento_porcentaje}%)'
+            descuento_label += ':</b>'
+            data.append(['', '', descuento_label, f"-${descuento_monto_calc:.2f}"])
+        
+        # Recargos (mostrar sobre el total con IVA)
+        if recargo_monto_calc > 0:
+            recargo_label = '<b>Recargo'
+            if venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
+                recargo_label += f' ({venta.recargo_porcentaje}%)'
+            recargo_label += ':</b>'
+            data.append(['', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
+        
+        # Subtotal sin IVA (después de descuentos/recargos)
+        data.append(['', '', '<b>Subtotal (sin IVA):</b>', f"${subtotal_final_sin_iva:.2f}"])
+        
+        # IVA
+        if iva_final > 0:
+            data.append(['', '', '<b>IVA 21%:</b>', f"${iva_final:.2f}"])
+        
+        # Total
+        data.append(['', '', '<b>TOTAL:</b>', f"<b>${total_final:.2f}</b>"])
+        
+        table = Table(data, colWidths=[20*mm, 100*mm, 30*mm, 30*mm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -4), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (2, -3), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (2, -3), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (2, -3), (-1, -1), 10),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 20))
+        
+        # Pie de página
+        story.append(Paragraph("<i>Gracias por su compra</i>", normal_style))
+        
+        # Construir PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        # Crear respuesta HTTP con el PDF
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="factura_{factura.punto_venta:04d}-{factura.numero_comprobante:08d}.pdf"'
+        
+        return response

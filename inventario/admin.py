@@ -2,7 +2,7 @@
 # BONITO_AMOR/backend/inventario/admin.py
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda 
+from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda, Factura 
 
 # Configuración para el modelo de Usuario personalizado
 @admin.register(User)
@@ -20,9 +20,42 @@ class CustomUserAdmin(UserAdmin):
 # Configuración para el modelo de Tienda
 @admin.register(Tienda)
 class TiendaAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'direccion', 'telefono', 'email', 'fecha_creacion')
-    search_fields = ('nombre', 'direccion', 'telefono', 'email')
+    list_display = ('nombre', 'direccion', 'telefono', 'email', 'tipo_facturacion', 'cuit', 'fecha_creacion')
+    search_fields = ('nombre', 'direccion', 'telefono', 'email', 'cuit')
+    list_filter = ('tipo_facturacion', 'modo_test_afip')
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
+    
+    fieldsets = (
+        ('Información Básica', {
+            'fields': ('nombre', 'direccion', 'telefono', 'email')
+        }),
+        ('Configuración Fiscal', {
+            'fields': (
+                'tipo_facturacion',
+                'cuit',
+                'punto_venta',
+            ),
+        }),
+        ('Configuración AFIP', {
+            'fields': (
+                'certificado_afip',
+                'clave_privada_afip',
+                'modo_test_afip',
+            ),
+            'classes': ('collapse',),
+        }),
+        ('Configuración ARCA', {
+            'fields': (
+                'api_key_arca',
+                'url_arca',
+            ),
+            'classes': ('collapse',),
+        }),
+        ('Información del Sistema', {
+            'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
+            'classes': ('collapse',)
+        }),
+    )
 
 
 # Configuración para el modelo de Categoría
@@ -136,3 +169,55 @@ class VentaAdmin(admin.ModelAdmin):
         if not request.user.is_superuser:
             obj.tienda = request.user.tienda
         super().save_model(request, obj, form, change)
+
+# Configuración para el modelo de Factura
+@admin.register(Factura)
+class FacturaAdmin(admin.ModelAdmin):
+    list_display = (
+        'numero_factura_completo', 'tipo_comprobante', 'tienda', 'cliente_nombre', 
+        'total', 'estado', 'cae', 'fecha_emision'
+    )
+    list_filter = ('estado', 'tipo_comprobante', 'sistema_facturacion', 'tienda', 'fecha_emision')
+    search_fields = ('numero_comprobante', 'cliente_nombre', 'cliente_cuit', 'cae', 'numero_comprobante_afip')
+    readonly_fields = (
+        'id', 'venta', 'numero_comprobante', 'cae', 'fecha_vencimiento_cae', 
+        'numero_comprobante_afip', 'estado', 'error_mensaje', 'respuesta_bruta',
+        'fecha_emision', 'fecha_actualizacion'
+    )
+    
+    fieldsets = (
+        ('Información de la Factura', {
+            'fields': (
+                'venta', 'tienda', 'numero_comprobante', 'punto_venta', 
+                'tipo_comprobante', 'numero_factura_completo', 'estado'
+            )
+        }),
+        ('Datos del Cliente', {
+            'fields': (
+                'cliente_nombre', 'cliente_cuit', 'cliente_domicilio',
+                'cliente_tipo_documento', 'cliente_condicion_iva'
+            )
+        }),
+        ('Totales', {
+            'fields': ('subtotal', 'impuesto_iva', 'total')
+        }),
+        ('Respuesta AFIP/ARCA', {
+            'fields': (
+                'sistema_facturacion', 'cae', 'fecha_vencimiento_cae',
+                'numero_comprobante_afip', 'error_mensaje'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Información del Sistema', {
+            'fields': ('id', 'fecha_emision', 'fecha_actualizacion', 'respuesta_bruta'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs.select_related('venta', 'tienda')
+        elif request.user.tienda:
+            return qs.filter(tienda=request.user.tienda).select_related('venta', 'tienda')
+        return qs.none()
