@@ -992,26 +992,38 @@ class FacturacionService:
     
     def _determinar_tipo_comprobante(self, cliente_data: Dict) -> int:
         """
-        Determina el tipo de comprobante según la condición IVA del cliente.
+        Determina el tipo de comprobante según la condición IVA del cliente y del emisor.
         AFIP: 1=Factura A, 6=Factura B, 11=Factura C
         
-        - Factura A: Para Responsables Inscriptos (RI)
-        - Factura B: Para Consumidores Finales (CF) y Monotributistas (MT)
-        - Factura C: Para Exentos (EX)
+        Reglas:
+        - Factura A: Solo si el EMISOR es Responsable Inscripto Y el cliente es Responsable Inscripto
+        - Factura C: Cuando el cliente es Exento (EX)
+        - Factura B: En todos los demás casos (CF, MT, NR, o cuando el emisor no puede emitir A)
         """
-        condicion_iva = cliente_data.get('cliente_condicion_iva', 'CF')
+        condicion_iva_cliente = cliente_data.get('cliente_condicion_iva', 'CF')
         
-        # Factura A: Responsable Inscripto
-        if condicion_iva == 'RI':
-            return 1  # Factura A
+        # Obtener condición IVA del emisor (tienda)
+        # Por defecto, si no está configurado, asumimos Monotributista (más común)
+        condicion_iva_emisor = getattr(self.tienda, 'condicion_iva_emisor', 'MT') or 'MT'
         
-        # Factura C: Exento
-        elif condicion_iva == 'EX':
+        logger.info(f"Condición IVA - Emisor: {condicion_iva_emisor}, Cliente: {condicion_iva_cliente}")
+        
+        # Factura C: Cliente Exento (cualquier emisor puede emitir Factura C)
+        if condicion_iva_cliente == 'EX':
+            logger.info("Determinado: Factura C (Cliente Exento)")
             return 11  # Factura C
         
-        # Factura B: Consumidor Final, Monotributo, No Responsable
-        else:  # CF, MT, NR
-            return 6  # Factura B
+        # Factura A: Solo si el EMISOR es Responsable Inscripto Y el cliente es Responsable Inscripto
+        if condicion_iva_emisor == 'RI' and condicion_iva_cliente == 'RI':
+            logger.info("Determinado: Factura A (Emisor RI y Cliente RI)")
+            return 1  # Factura A
+        
+        # Factura B: Todos los demás casos
+        # - Emisor no es RI (no puede emitir A)
+        # - Cliente no es RI
+        # - Cliente es CF, MT, NR
+        logger.info("Determinado: Factura B (caso por defecto)")
+        return 6  # Factura B
     
     def obtener_proximo_numero(self) -> Optional[int]:
         """Obtiene el próximo número de comprobante disponible"""

@@ -37,6 +37,21 @@ class Tienda(models.Model):
     punto_venta = models.IntegerField(default=1, help_text="Punto de venta AFIP/ARCA")
     tipo_facturacion = models.CharField(max_length=10, choices=FACTURACION_CHOICES, default='NINGUNA', help_text="Sistema de facturación a utilizar")
     
+    # Condición IVA del emisor (tienda)
+    CONDICION_IVA_CHOICES = [
+        ('RI', 'Responsable Inscripto'),
+        ('MT', 'Monotributista'),
+        ('CF', 'Consumidor Final'),
+        ('EX', 'Exento'),
+        ('NR', 'No Responsable'),
+    ]
+    condicion_iva_emisor = models.CharField(
+        max_length=2, 
+        choices=CONDICION_IVA_CHOICES, 
+        default='MT',
+        help_text="Condición frente al IVA del emisor (tienda). Importante: Solo Responsables Inscriptos pueden emitir Factura A."
+    )
+    
     # Configuración AFIP
     certificado_afip = models.TextField(
         blank=True, null=True, 

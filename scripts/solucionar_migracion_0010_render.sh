@@ -67,6 +67,53 @@ cursor.execute("""
 existe_factura = cursor.fetchone()[0]
 print(f"✅ Tabla inventario_factura: {'EXISTE' if existe_factura else 'NO EXISTE'}")
 
+# Crear tabla inventario_factura si no existe
+if not existe_factura:
+    print("\n🔧 Creando tabla inventario_factura...")
+    cursor.execute("""
+        CREATE TABLE inventario_factura (
+            id UUID NOT NULL PRIMARY KEY,
+            venta_id UUID NOT NULL UNIQUE,
+            tienda_id UUID NOT NULL,
+            numero_comprobante INTEGER NULL,
+            punto_venta INTEGER NOT NULL,
+            tipo_comprobante VARCHAR(1) NOT NULL DEFAULT 'B',
+            cliente_nombre VARCHAR(255) NOT NULL,
+            cliente_cuit VARCHAR(13) NULL,
+            cliente_domicilio VARCHAR(255) NULL,
+            cliente_tipo_documento VARCHAR(20) NULL,
+            cliente_condicion_iva VARCHAR(2) NOT NULL DEFAULT 'CF',
+            subtotal NUMERIC(10,2) NOT NULL,
+            impuesto_iva NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+            total NUMERIC(10,2) NOT NULL,
+            estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+            sistema_facturacion VARCHAR(10) NOT NULL,
+            cae VARCHAR(14) NULL,
+            fecha_vencimiento_cae DATE NULL,
+            numero_comprobante_afip BIGINT NULL,
+            respuesta_bruta TEXT NULL,
+            error_mensaje TEXT NULL,
+            pdf_factura VARCHAR(100) NULL,
+            fecha_emision TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            fecha_actualizacion TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_factura_venta FOREIGN KEY (venta_id) 
+                REFERENCES inventario_venta(id) ON DELETE CASCADE,
+            CONSTRAINT fk_factura_tienda FOREIGN KEY (tienda_id) 
+                REFERENCES inventario_tienda(id) ON DELETE CASCADE
+        );
+    """)
+    
+    # Crear índices
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS inventario__tienda__160d7b_idx 
+        ON inventario_factura(tienda_id, numero_comprobante, punto_venta);
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS inventario__cae_7a2e2a_idx 
+        ON inventario_factura(cae);
+    """)
+    print("  ✅ Tabla inventario_factura creada")
+
 # Agregar campos faltantes de tienda
 if faltantes_tienda:
     print("\n🔧 Agregando campos faltantes en inventario_tienda...")

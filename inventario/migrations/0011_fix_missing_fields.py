@@ -49,6 +49,55 @@ def check_and_add_fields(apps, schema_editor):
         print(f"📋 Campos de venta existentes: {campos_venta_existentes}")
         print(f"📋 Tabla factura existe: {tabla_factura_existe}")
         
+        # Crear tabla inventario_factura si no existe
+        if not tabla_factura_existe:
+            print("⚠️ Creando tabla inventario_factura...")
+            cursor.execute("""
+                CREATE TABLE inventario_factura (
+                    id UUID NOT NULL PRIMARY KEY,
+                    venta_id UUID NOT NULL UNIQUE,
+                    tienda_id UUID NOT NULL,
+                    numero_comprobante INTEGER NULL,
+                    punto_venta INTEGER NOT NULL,
+                    tipo_comprobante VARCHAR(1) NOT NULL DEFAULT 'B',
+                    cliente_nombre VARCHAR(255) NOT NULL,
+                    cliente_cuit VARCHAR(13) NULL,
+                    cliente_domicilio VARCHAR(255) NULL,
+                    cliente_tipo_documento VARCHAR(20) NULL,
+                    cliente_condicion_iva VARCHAR(2) NOT NULL DEFAULT 'CF',
+                    subtotal NUMERIC(10,2) NOT NULL,
+                    impuesto_iva NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    total NUMERIC(10,2) NOT NULL,
+                    estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+                    sistema_facturacion VARCHAR(10) NOT NULL,
+                    cae VARCHAR(14) NULL,
+                    fecha_vencimiento_cae DATE NULL,
+                    numero_comprobante_afip BIGINT NULL,
+                    respuesta_bruta TEXT NULL,
+                    error_mensaje TEXT NULL,
+                    pdf_factura VARCHAR(100) NULL,
+                    fecha_emision TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    fecha_actualizacion TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_factura_venta FOREIGN KEY (venta_id) 
+                        REFERENCES inventario_venta(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_factura_tienda FOREIGN KEY (tienda_id) 
+                        REFERENCES inventario_tienda(id) ON DELETE CASCADE
+                );
+            """)
+            
+            # Crear índices
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS inventario__tienda__160d7b_idx 
+                ON inventario_factura(tienda_id, numero_comprobante, punto_venta);
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS inventario__cae_7a2e2a_idx 
+                ON inventario_factura(cae);
+            """)
+            print("✅ Tabla inventario_factura creada")
+        else:
+            print("✅ Tabla inventario_factura ya existe")
+        
         # Agregar campos de tienda faltantes
         campos_tienda_faltantes = {
             'cuit', 'punto_venta', 'tipo_facturacion', 'certificado_afip',

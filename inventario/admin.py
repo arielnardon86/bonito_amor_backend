@@ -34,6 +34,7 @@ class TiendaAdmin(admin.ModelAdmin):
                 'tipo_facturacion',
                 'cuit',
                 'punto_venta',
+                'condicion_iva_emisor',
             ),
         }),
         ('Configuración AFIP', {
