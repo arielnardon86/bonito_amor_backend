@@ -653,15 +653,24 @@ class FacturacionService:
                 # El total de la venta ya tiene IVA incluido y descuentos/recargos aplicados
                 total_con_iva = venta.total
                 
-                # Calcular subtotal sin IVA: total_con_iva / 1.21
-                # IMPORTANTE: Redondear a 2 decimales porque AFIP solo acepta 2 decimales
-                subtotal = (total_con_iva / Decimal('1.21')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                # Calcular IVA: total_con_iva - subtotal
-                # IMPORTANTE: Redondear a 2 decimales porque AFIP solo acepta 2 decimales
-                impuesto_iva = (total_con_iva - subtotal).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                total = total_con_iva  # El total ya es correcto (incluye IVA y descuentos/recargos aplicados)
-                
-                logger.info(f"Cálculos de IVA (redondeados a 2 decimales): Subtotal={subtotal}, IVA={impuesto_iva}, Total={total}")
+                # REGLA ESPECIAL: Para Factura C (tipo_comprobante == 11), NO se calcula IVA
+                # AFIP requiere: ImpIVA = 0, ImpTotal = ImpNeto (sin IVA), y NO se informa objeto IVA
+                if tipo_comprobante == 11:  # Factura C
+                    # Para Factura C: El subtotal es igual al total (sin IVA)
+                    subtotal = total_con_iva.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    impuesto_iva = Decimal('0.00')  # Factura C siempre tiene IVA = 0
+                    total = total_con_iva.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    logger.info(f"Factura C detectada: Subtotal={subtotal}, IVA=0.00, Total={total} (sin IVA)")
+                else:
+                    # Para Factura A y B: Calcular IVA normalmente
+                    # Calcular subtotal sin IVA: total_con_iva / 1.21
+                    # IMPORTANTE: Redondear a 2 decimales porque AFIP solo acepta 2 decimales
+                    subtotal = (total_con_iva / Decimal('1.21')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    # Calcular IVA: total_con_iva - subtotal
+                    # IMPORTANTE: Redondear a 2 decimales porque AFIP solo acepta 2 decimales
+                    impuesto_iva = (total_con_iva - subtotal).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    total = total_con_iva  # El total ya es correcto (incluye IVA y descuentos/recargos aplicados)
+                    logger.info(f"Cálculos de IVA (redondeados a 2 decimales): Subtotal={subtotal}, IVA={impuesto_iva}, Total={total}")
                 
                 # Mapear condición de IVA a código AFIP
                 # Códigos AFIP: 1=RI, 4=EX, 5=CF, 6=MT, 0=NR
@@ -733,8 +742,10 @@ class FacturacionService:
                 # Crear la factura
                 wsfev1.CrearFactura(**factura_params)
                 
-                # Si hay importe neto mayor a 0, agregar el array de IVA (OBLIGATORIO)
-                if float(subtotal) > 0 and float(impuesto_iva) > 0:
+                # REGLA ESPECIAL: Para Factura C (tipo_comprobante == 11), NO se informa objeto IVA
+                # AFIP rechaza si se informa IVA en Factura C
+                # Si hay importe neto mayor a 0 Y NO es Factura C, agregar el array de IVA (OBLIGATORIO)
+                if tipo_comprobante != 11 and float(subtotal) > 0 and float(impuesto_iva) > 0:
                     # Los valores ya están redondeados, pero aseguramos el redondeo para el log
                     subtotal_redondeado_log = subtotal.quantize(Decimal('0.01'))
                     iva_redondeado_log = impuesto_iva.quantize(Decimal('0.01'))
