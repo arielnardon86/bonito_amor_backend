@@ -1,5 +1,6 @@
 # inventario/views.py - CÓDIGO COMPLETO Y CORREGIDO
 # BONITO_AMOR/backend/inventario/views.py
+import logging
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
@@ -16,6 +17,8 @@ from django.db.models import DecimalField
 from django.db import close_old_connections # <-- Importado para el fix de conexión
 from django.http import HttpResponse
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, A4
@@ -658,6 +661,80 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = ['numero_comprobante', 'cliente_nombre', 'cliente_cuit', 'cae']
     ordering_fields = ['fecha_emision', 'numero_comprobante', 'total']
     ordering = ['-fecha_emision']
+    
+    @action(detail=True, methods=['post'])
+    def anular(self, request, pk=None):
+        """Anula una factura electrónica emitida"""
+        factura = get_object_or_404(Factura, pk=pk)
+        
+        # Validar permisos
+        user = request.user
+        if not user.is_superuser and user.tienda != factura.tienda:
+            return Response(
+                {"error": "No tienes permiso para anular facturas de esta tienda."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validar que la factura pueda ser anulada
+        if factura.estado == 'ANULADA':
+            return Response(
+                {"error": "Esta factura ya está anulada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if factura.estado != 'EMITIDA':
+            return Response(
+                {"error": f"La factura no puede ser anulada. Estado actual: {factura.estado}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar que tenga los datos necesarios
+        if not factura.numero_comprobante or not factura.cae:
+            return Response(
+                {"error": "La factura no tiene los datos necesarios para anular (falta número de comprobante o CAE)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            logger.info(f"=== Iniciando anulación de factura ===")
+            logger.info(f"Factura ID: {factura.id}")
+            logger.info(f"Punto de venta: {factura.punto_venta}, Número: {factura.numero_comprobante}")
+            logger.info(f"CAE: {factura.cae}")
+            
+            # Inicializar servicio de facturación
+            facturacion_service = FacturacionService(factura.tienda)
+            
+            # Anular factura
+            exito, error = facturacion_service.anular_factura(factura)
+            
+            if not exito:
+                return Response(
+                    {"error": error or "Error al anular la factura"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Actualizar estado de la factura
+            factura.estado = 'ANULADA'
+            factura.save()
+            
+            logger.info(f"✅ Factura {factura.id} anulada exitosamente")
+            
+            return Response(
+                {
+                    "mensaje": "Factura anulada exitosamente",
+                    "factura_id": str(factura.id),
+                    "estado": "ANULADA"
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            error_msg = f"Error inesperado al anular factura: {str(e)}"
+            logger.error(f"❌ {error_msg}", exc_info=True)
+            return Response(
+                {"error": error_msg},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     def get_queryset(self):
         user = self.request.user
