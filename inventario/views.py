@@ -22,12 +22,19 @@ logger = logging.getLogger(__name__)
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
+
+try:
+    import barcode
+    from barcode.writer import ImageWriter
+    BARCODE_AVAILABLE = True
+except ImportError:
+    BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura 
@@ -193,6 +200,62 @@ class VentaViewSet(viewsets.ModelViewSet):
         anulada = self.request.query_params.get('anulada', None)
         if anulada is not None:
             queryset = queryset.filter(anulada=anulada == 'true')
+
+        # Buscar por ID de venta (puede venir con o sin guiones desde el código de barras)
+        # También puede venir como código EAN13 (13 dígitos) que debemos convertir de vuelta al UUID
+        venta_id = self.request.query_params.get('id', None)
+        if venta_id:
+            # Si es un código EAN13 (13 dígitos numéricos), buscar por los primeros caracteres del UUID
+            # El código EAN13 se genera a partir de los primeros 12 caracteres hex del UUID
+            # Conversión: a-f -> 0-5, 0-9 -> 0-9
+            if len(venta_id) == 13 and venta_id.isdigit():
+                # El código EAN13 tiene un dígito de control, así que usamos los primeros 12
+                codigo_base = venta_id[:12]
+                # Extraer el hash (los últimos 9 dígitos después del prefijo 779)
+                if codigo_base.startswith('779'):
+                    hash_9_digitos = codigo_base[3:]
+                    # Buscar todas las ventas y verificar cuál genera este hash
+                    # Como no podemos hacer búsqueda inversa fácil, iteramos sobre las ventas
+                    ventas_match = []
+                    for venta in queryset:
+                        # Calcular el hash de esta venta (mismo algoritmo que en el frontend)
+                        # Frontend usa: hash = (hash * 31 + char) % 1000000000
+                        venta_id_str = str(venta.id).replace('-', '')
+                        hash_calculado = 0
+                        for char in venta_id_str:
+                            hash_calculado = (hash_calculado * 31 + ord(char)) % 1000000000
+                        hash_absoluto = abs(hash_calculado)
+                        hash_str = str(hash_absoluto).zfill(9)[:9]  # zfill es como padStart en Python
+                        if hash_str == hash_9_digitos:
+                            ventas_match.append(venta.id)
+                    
+                    if ventas_match:
+                        queryset = queryset.filter(id__in=ventas_match)
+                    else:
+                        queryset = queryset.none()
+            else:
+                # Si el ID viene sin guiones (del código de barras), intentar agregarlos en las posiciones correctas
+                # Formato UUID: 8-4-4-4-12 caracteres
+                cleaned_id = venta_id.replace('-', '')
+                if len(cleaned_id) == 32:  # UUID sin guiones tiene 32 caracteres
+                    # Formatear como UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+                    formatted_id = f"{cleaned_id[:8]}-{cleaned_id[8:12]}-{cleaned_id[12:16]}-{cleaned_id[16:20]}-{cleaned_id[20:]}"
+                    try:
+                        import uuid
+                        # Validar que es un UUID válido
+                        uuid.UUID(formatted_id)
+                        queryset = queryset.filter(id=formatted_id)
+                    except (ValueError, TypeError):
+                        # Si no es un UUID válido, buscar por los primeros caracteres (para búsqueda parcial)
+                        if len(cleaned_id) >= 8:
+                            # Buscar ventas cuyo UUID empiece con estos caracteres
+                            from django.db.models import Q
+                            queryset = queryset.filter(Q(id__startswith=cleaned_id[:8]))
+                elif len(cleaned_id) >= 8:
+                    # Buscar por los primeros caracteres del UUID (viene del código de barras CODE128)
+                    from django.db.models import Q
+                    # Buscar ventas cuyo UUID (sin guiones) empiece con estos caracteres
+                    queryset = queryset.filter(Q(id__startswith=cleaned_id[:8]) | Q(id__icontains=cleaned_id[:8]))
             
         return queryset
 
@@ -426,6 +489,126 @@ class VentaViewSet(viewsets.ModelViewSet):
                 {"error": f"Error al emitir factura: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=True, methods=['get'])
+    def ticket_cambio(self, request, pk=None):
+        """
+        Genera y retorna el PDF del ticket de cambio para una venta
+        """
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        if not BARCODE_AVAILABLE:
+            return Response(
+                {"error": "python-barcode no está instalado. Instala con: pip install python-barcode"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        venta = get_object_or_404(Venta, pk=pk)
+        
+        # Verificar permisos
+        user = request.user
+        if not user.is_superuser and user.tienda != venta.tienda:
+            return Response(
+                {"error": "No tienes permiso para ver este ticket de cambio"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Obtener nombre de la tienda
+        nombre_tienda = venta.tienda.nombre if venta.tienda else 'N/A'
+        
+        # Crear buffer para el PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 120*mm), topMargin=10*mm, bottomMargin=10*mm, leftMargin=5*mm, rightMargin=5*mm)
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=14,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=8,
+            alignment=1  # Centrado
+        )
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=6,
+            alignment=1  # Centrado
+        )
+        normal_style = styles['Normal']
+        normal_style.fontSize = 10
+        normal_style.textColor = colors.HexColor('#000000')
+        
+        # Contenido del PDF
+        story = []
+        
+        # Nombre de la tienda
+        story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
+        story.append(Spacer(1, 8))
+        
+        # Leyenda "Ticket para cambio"
+        story.append(Paragraph("<b>TICKET PARA CAMBIO</b>", subtitle_style))
+        story.append(Spacer(1, 12))
+        
+        # Fecha de compra
+        fecha_str = venta.fecha_venta.strftime('%d/%m/%Y %H:%M')
+        story.append(Paragraph(f"<b>Fecha de compra:</b> {fecha_str}", normal_style))
+        story.append(Spacer(1, 12))
+        
+        # Generar código de barras
+        try:
+            # Crear código de barras Code128 con el ID de la venta
+            venta_id_str = str(venta.id).replace('-', '')  # Remover guiones del UUID
+            # Limitar a los primeros 40 caracteres (límite razonable para código de barras)
+            venta_id_str = venta_id_str[:40]
+            
+            code128 = barcode.get_barcode_class('code128')
+            barcode_instance = code128(venta_id_str, writer=ImageWriter())
+            
+            # Generar imagen del código de barras en memoria
+            barcode_buffer = BytesIO()
+            barcode_instance.write(barcode_buffer, options={
+                'module_width': 0.3,
+                'module_height': 15,
+                'quiet_zone': 2,
+                'font_size': 8,
+                'text_distance': 3
+            })
+            barcode_buffer.seek(0)
+            
+            # Crear imagen de ReportLab desde el buffer
+            barcode_image = Image(barcode_buffer, width=60*mm, height=15*mm)
+            story.append(barcode_image)
+            story.append(Spacer(1, 6))
+            
+            # ID de la venta debajo del código de barras
+            story.append(Paragraph(f"<b>ID: {str(venta.id)}</b>", ParagraphStyle(
+                'BarcodeText',
+                parent=normal_style,
+                fontSize=8,
+                alignment=1  # Centrado
+            )))
+            
+        except Exception as e:
+            logger.error(f"Error al generar código de barras: {e}")
+            # Si falla el código de barras, mostrar solo el ID
+            story.append(Paragraph(f"<b>ID de Venta:</b> {str(venta.id)}", normal_style))
+        
+        # Construir PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        # Crear respuesta HTTP con el PDF
+        response = HttpResponse(buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="ticket_cambio_{venta.id}.pdf"'
+        return response
 
 
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
@@ -661,81 +844,6 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = ['numero_comprobante', 'cliente_nombre', 'cliente_cuit', 'cae']
     ordering_fields = ['fecha_emision', 'numero_comprobante', 'total']
     ordering = ['-fecha_emision']
-    
-    @action(detail=True, methods=['post'])
-    def anular(self, request, pk=None):
-        """Anula una factura electrónica emitida"""
-        factura = get_object_or_404(Factura, pk=pk)
-        
-        # Validar permisos
-        user = request.user
-        if not user.is_superuser and user.tienda != factura.tienda:
-            return Response(
-                {"error": "No tienes permiso para anular facturas de esta tienda."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Validar que la factura pueda ser anulada
-        if factura.estado == 'ANULADA':
-            return Response(
-                {"error": "Esta factura ya está anulada."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if factura.estado != 'EMITIDA':
-            return Response(
-                {"error": f"La factura no puede ser anulada. Estado actual: {factura.estado}"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Validar que tenga los datos necesarios
-        if not factura.numero_comprobante or not factura.cae:
-            return Response(
-                {"error": "La factura no tiene los datos necesarios para anular (falta número de comprobante o CAE)."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            logger.info(f"=== Iniciando anulación de factura ===")
-            logger.info(f"Factura ID: {factura.id}")
-            logger.info(f"Punto de venta: {factura.punto_venta}, Número: {factura.numero_comprobante}")
-            logger.info(f"CAE: {factura.cae}")
-            
-            # Inicializar servicio de facturación
-            facturacion_service = FacturacionService(factura.tienda)
-            
-            # Anular factura
-            exito, error = facturacion_service.anular_factura(factura)
-            
-            if not exito:
-                return Response(
-                    {"error": error or "Error al anular la factura"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Actualizar estado de la factura
-            factura.estado = 'ANULADA'
-            factura.save()
-            
-            logger.info(f"✅ Factura {factura.id} anulada exitosamente")
-            
-            return Response(
-                {
-                    "mensaje": "Factura anulada exitosamente",
-                    "factura_id": str(factura.id),
-                    "estado": "ANULADA"
-                },
-                status=status.HTTP_200_OK
-            )
-            
-        except Exception as e:
-            error_msg = f"Error inesperado al anular factura: {str(e)}"
-            logger.error(f"❌ {error_msg}", exc_info=True)
-            return Response(
-                {"error": error_msg},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
     def get_queryset(self):
         user = self.request.user
         

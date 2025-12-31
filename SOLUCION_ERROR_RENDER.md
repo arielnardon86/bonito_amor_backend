@@ -48,3 +48,5 @@ Después del nuevo deployment, verifica que:
 
 - `backend/Dockerfile` - Agregado `git` a las dependencias
 
+
+

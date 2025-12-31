@@ -244,3 +244,5 @@ pip install reportlab==4.0.9
 - [ ] Verificar que los PDFs se generen correctamente
 - [ ] Verificar logs sin errores críticos
 
+
+

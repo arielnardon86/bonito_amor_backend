@@ -216,3 +216,5 @@ Una vez que todo funcione:
 5. Conecta el frontend para que los usuarios puedan facturar desde la UI
 
 
+
+

@@ -162,3 +162,5 @@ DJANGO_ENVIRONMENT=production python manage.py collectstatic --noinput
 - `CONFIGURAR_FACTURACION.md` - Cómo configurar AFIP/ARCA
 - `FACTURACION_ELECTRONICA.md` - Documentación técnica
 
+
+

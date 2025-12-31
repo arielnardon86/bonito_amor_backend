@@ -139,3 +139,5 @@ Después de habilitar el punto de venta:
 3. Intenta emitir una factura desde tu aplicación
 4. Si sigue fallando, verifica los logs de Django para más detalles del error
 
+
+

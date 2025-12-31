@@ -252,3 +252,5 @@ Si algo falla:
 3. Revisa `DEPLOY_PRODUCCION.md` para más detalles
 4. Si es necesario, revierte las migraciones: `python manage.py migrate inventario 0009`
 
+
+

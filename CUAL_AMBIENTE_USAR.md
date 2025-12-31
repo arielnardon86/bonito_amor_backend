@@ -130,3 +130,5 @@ rm db.sqlite3  # Elimina la base de datos SQLite
 - No necesitas PostgreSQL
 - No necesitas replicar datos de producción
 
+
+

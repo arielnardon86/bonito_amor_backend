@@ -156,3 +156,5 @@ Antes de volver a intentar emitir una factura, verifica:
 - **El trámite de habilitación** de puntos de venta puede tardar varios días hábiles
 - **No mezcles** certificados de homologación con producción o viceversa
 
+
+

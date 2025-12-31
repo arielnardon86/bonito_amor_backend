@@ -18,3 +18,5 @@ export DJANGO_ENVIRONMENT=development
 # Ejecutar comando Django
 python3 manage.py "$@"
 
+
+

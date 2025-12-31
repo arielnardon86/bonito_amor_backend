@@ -164,3 +164,5 @@ FROM information_schema.columns
 WHERE table_name = 'inventario_venta' 
 AND column_name IN ('facturada', 'cliente_nombre', 'cliente_cuit', 'recargo_porcentaje', 'recargo_monto');
 
+
+

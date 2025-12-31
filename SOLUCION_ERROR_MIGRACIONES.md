@@ -119,3 +119,5 @@ python manage.py migrate inventario && \
 python manage.py showmigrations inventario | tail -5
 ```
 
+
+

@@ -82,3 +82,5 @@ echo ""
 echo "🔄 Si faltaban migraciones, reinicia el servicio en Render Dashboard"
 echo "   (Render generalmente reinicia automáticamente después de migraciones)"
 
+
+
