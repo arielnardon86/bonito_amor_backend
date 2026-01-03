@@ -60,10 +60,10 @@ python manage.py showmigrations inventario | grep 0013
 
 Debe mostrar:
 ```
-[ ] 0013_cambiodevolucion_detallecambiodevolucion
+[X] 0013_cambiodevolucion_detallecambiodevolucion
 ```
 
-Si muestra `[X]` significa que ya está aplicada.
+Si muestra `[X]` significa que ya está aplicada correctamente. Si muestra `[ ]` significa que aún no se ha aplicado.
 
 ### 3. Verificar que el servicio se reinició correctamente
 
