@@ -934,7 +934,13 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
 # CAMBIO CRUCIAL: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    def get_permissions(self):
+        """Permitir lectura a usuarios staff, pero solo superusuarios pueden crear/editar/eliminar"""
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [permissions.IsAuthenticated]
+        else:
+            permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+        return [permission() for permission in permission_classes]
     
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
@@ -947,14 +953,25 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
         queryset = ArancelMetodoTienda.objects.all().select_related('tienda', 'metodo_pago')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
-        # Solo superusuarios pueden gestionar aranceles
-        if not user.is_superuser:
-            return ArancelMetodoTienda.objects.none()
-
-        if tienda_slug:
-            return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+        # Superusuarios pueden ver todos los aranceles
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+            return queryset.order_by('tienda__nombre', 'metodo_pago__nombre', 'nombre_plan')
         
-        return queryset.order_by('tienda__nombre', 'metodo_pago__nombre', 'nombre_plan')
+        # Usuarios staff solo pueden ver aranceles de su tienda
+        elif user.is_staff and user.tienda:
+            # Si viene tienda_slug, verificar que coincida con la tienda del usuario
+            if tienda_slug:
+                if user.tienda.nombre == tienda_slug:
+                    return queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
+                else:
+                    return ArancelMetodoTienda.objects.none()
+            # Si no viene tienda_slug, filtrar por la tienda del usuario
+            return queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
+        
+        # Si no es superuser ni staff, no puede ver aranceles
+        return ArancelMetodoTienda.objects.none()
 
     def perform_create(self, serializer):
         """Al crear, usar la tienda del slug"""
