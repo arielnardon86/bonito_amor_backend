@@ -1477,29 +1477,29 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             
             # Procesar cada detalle
             for detalle_data in detalles_data:
-                    accion = detalle_data['accion']
-                    cantidad = detalle_data['cantidad']
-                    detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
-                    producto_nuevo_id = detalle_data.get('producto_nuevo_id')
-                    precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
-                    
-                    detalle_venta_original = None
-                    producto_nuevo = None
-                    
-                    # Obtener detalle de venta original si aplica
-                    if detalle_venta_original_id:
-                        detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
-                    
-                    # Obtener producto nuevo si aplica
-                    if producto_nuevo_id:
-                        producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
-                    
-                    # Calcular precios y subtotales
-                    precio_unitario_devuelto = None
-                    subtotal_devuelto = Decimal('0.00')
-                    subtotal_nuevo = Decimal('0.00')
-                    
-                    if detalle_venta_original:
+                accion = detalle_data['accion']
+                cantidad = detalle_data['cantidad']
+                detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
+                producto_nuevo_id = detalle_data.get('producto_nuevo_id')
+                precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
+                
+                detalle_venta_original = None
+                producto_nuevo = None
+                
+                # Obtener detalle de venta original si aplica
+                if detalle_venta_original_id:
+                    detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
+                
+                # Obtener producto nuevo si aplica
+                if producto_nuevo_id:
+                    producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
+                
+                # Calcular precios y subtotales
+                precio_unitario_devuelto = None
+                subtotal_devuelto = Decimal('0.00')
+                subtotal_nuevo = Decimal('0.00')
+                
+                if detalle_venta_original:
                         # Calcular precio ajustado considerando descuentos/recargos de la venta original
                         precio_unitario_original = detalle_venta_original.precio_unitario
                         
