@@ -1482,8 +1482,13 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 try:
                     CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
                 except Exception as e:
-                    logger.error(f"Error obteniendo modelos en get_queryset: {e}")
-                    return CambioDevolucion.objects.none() if CambioDevolucion else type('obj', (object,), {'objects': type('obj', (object,), {'none': lambda: []})()})()
+                    logger.error(f"Error obteniendo modelos en get_queryset: {e}", exc_info=True)
+                    from django.core.exceptions import ImproperlyConfigured
+                    raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+            
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
             
             # Continuar con la lógica normal
             user = self.request.user
