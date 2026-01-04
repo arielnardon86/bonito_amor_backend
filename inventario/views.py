@@ -53,10 +53,16 @@ from .serializers import (
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
     CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer,
     FacturaSerializer, EmitirFacturaSerializer,
-    CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer
 )
+# Importación condicional de serializers de CambioDevolucion
+try:
+    from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
+except (ImportError, AttributeError):
+    CambioDevolucionSerializer = None
+    CambioDevolucionCreateSerializer = None
+    DetalleCambioDevolucionSerializer = None
 # Importar modelos de facturación
 from .models import Factura
 from .services.facturacion_service import FacturacionService
