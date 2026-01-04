@@ -410,9 +410,29 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         arancel_aplicado = validated_data.pop('arancel_aplicado', None)
         arancel_total = validated_data.pop('arancel_total', Decimal('0.00'))
 
+        # Obtener el usuario del request y asegurarse de que sea una instancia del modelo User correcto
+        user = self.context['request'].user
+        # Si el usuario no es una instancia del modelo User, intentar obtenerlo
+        # Esto puede pasar si request.user es un TokenUser o otro tipo de objeto
+        if user and not user.is_anonymous:
+            try:
+                from inventario.models import User as UserModel
+                # Si el usuario no es una instancia de UserModel, obtenerlo de la BD
+                if not isinstance(user, UserModel):
+                    try:
+                        user = UserModel.objects.get(pk=user.pk)
+                    except (AttributeError, UserModel.DoesNotExist, TypeError):
+                        # Si no se puede obtener, usar None (el campo permite null)
+                        user = None
+            except ImportError:
+                # Si no se puede importar UserModel, usar None
+                user = None
+        else:
+            user = None
+        
         venta = Venta.objects.create(
             total=validated_data['total'],
-            usuario=self.context['request'].user, 
+            usuario=user,
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
