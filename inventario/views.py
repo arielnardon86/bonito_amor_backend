@@ -57,12 +57,23 @@ from .serializers import (
     ArancelMetodoTiendaCreateSerializer
 )
 # Importación condicional de serializers de CambioDevolucion
+# Nota: Si los modelos existen, forzar reimportación para obtener los serializers reales
+CambioDevolucionSerializer = None
+CambioDevolucionCreateSerializer = None
+DetalleCambioDevolucionSerializer = None
 try:
-    from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
+    # Si los modelos existen, intentar importar los serializers
+    if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+        # Forzar reimportación del módulo serializers para obtener los serializers reales
+        import importlib
+        import inventario.serializers as serializers_module
+        importlib.reload(serializers_module)
+        from inventario.serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
+    else:
+        # Si los modelos no existen, intentar importar (puede que sean dummy)
+        from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
 except (ImportError, AttributeError):
-    CambioDevolucionSerializer = None
-    CambioDevolucionCreateSerializer = None
-    DetalleCambioDevolucionSerializer = None
+    pass  # Ya inicializados como None
 # Importar modelos de facturación
 from .models import Factura
 from .services.facturacion_service import FacturacionService
