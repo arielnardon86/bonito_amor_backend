@@ -1357,48 +1357,53 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
 # Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
-    # Verificar que los serializers reales estén disponibles (no los dummy)
-    # Los serializers dummy son serializers.Serializer (sin Meta.model), mientras que los reales son ModelSerializer
-    from rest_framework import serializers as drf_serializers
-    _serializers_available = False
-    try:
-        if (CambioDevolucionSerializer is not None and
-            CambioDevolucionCreateSerializer is not None):
-            # Verificar que son ModelSerializer, no Serializer dummy
-            is_model_serializer = issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer)
-            is_create_model_serializer = issubclass(CambioDevolucionCreateSerializer, drf_serializers.ModelSerializer)
+    class CambioDevolucionViewSet(viewsets.ModelViewSet):
+        """ViewSet para gestionar cambios y devoluciones"""
+        permission_classes = [permissions.IsAuthenticated]
+        # Definir un serializer temporal para evitar AssertionError
+        # get_serializer_class() lo reemplazará con el correcto
+        serializer_class = None
+        
+        def get_serializer_class(self):
+            # Intentar obtener los serializers reales, reimportando si es necesario
+            from rest_framework import serializers as drf_serializers
             
-            logger.info(f"CambioDevolucionSerializer es ModelSerializer: {is_model_serializer}")
-            logger.info(f"CambioDevolucionCreateSerializer es ModelSerializer: {is_create_model_serializer}")
+            # Obtener referencias locales a los serializers
+            serializer = CambioDevolucionSerializer
+            create_serializer = CambioDevolucionCreateSerializer
             
-            if is_model_serializer and is_create_model_serializer:
-                # Verificar que tienen Meta.model correcto
-                has_meta = hasattr(CambioDevolucionSerializer, 'Meta')
-                has_model = has_meta and hasattr(CambioDevolucionSerializer.Meta, 'model')
-                model_match = has_model and CambioDevolucionSerializer.Meta.model == CambioDevolucion
-                
-                logger.info(f"CambioDevolucionSerializer tiene Meta: {has_meta}, tiene model: {has_model}, modelo coincide: {model_match}")
-                
-                if model_match:
-                    _serializers_available = True
-                    logger.info("✅ Serializers de CambioDevolucion disponibles correctamente")
-    except (TypeError, AttributeError) as e:
-        # Si hay algún error en la verificación, asumir que no están disponibles
-        logger.error(f"❌ Error verificando serializers de CambioDevolucion: {e}", exc_info=True)
-        _serializers_available = False
-    
-    logger.info(f"_serializers_available: {_serializers_available}")
-    
-    if _serializers_available:
-        class CambioDevolucionViewSet(viewsets.ModelViewSet):
-            """ViewSet para gestionar cambios y devoluciones"""
-            permission_classes = [permissions.IsAuthenticated]
-            serializer_class = CambioDevolucionSerializer  # Serializer por defecto
+            # Si los serializers son dummy, intentar reimportar
+            try:
+                if (serializer is not None and 
+                    not issubclass(serializer, drf_serializers.ModelSerializer)):
+                    logger.warning("Serializers son dummy, intentando reimportar...")
+                    import importlib
+                    import inventario.serializers as serializers_module
+                    importlib.reload(serializers_module)
+                    from inventario.serializers import CambioDevolucionSerializer as NewSerializer, CambioDevolucionCreateSerializer as NewCreateSerializer
+                    serializer = NewSerializer
+                    create_serializer = NewCreateSerializer
+            except Exception as e:
+                logger.error(f"Error al reimportar serializers: {e}")
             
-            def get_serializer_class(self):
-                if self.action == 'create':
-                    return CambioDevolucionCreateSerializer
-                return CambioDevolucionSerializer
+            # Verificar que los serializers son válidos
+            try:
+                if (serializer is not None and
+                    create_serializer is not None and
+                    issubclass(serializer, drf_serializers.ModelSerializer) and
+                    issubclass(create_serializer, drf_serializers.ModelSerializer) and
+                    hasattr(serializer, 'Meta') and
+                    hasattr(serializer.Meta, 'model') and
+                    serializer.Meta.model == CambioDevolucion):
+                    
+                    if self.action == 'create':
+                        return create_serializer
+                    return serializer
+            except (TypeError, AttributeError) as e:
+                logger.error(f"Error verificando serializers: {e}")
+            
+            # Si llegamos aquí, los serializers no están disponibles
+            raise ImportError("CambioDevolucion serializers not available. Please restart the server after running migrations.")
             
             def get_queryset(self):
                 user = self.request.user
