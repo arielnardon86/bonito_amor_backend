@@ -1813,12 +1813,35 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 close_old_connections()
                 return super().list(request, *args, **kwargs)
 else:
-    # Si los modelos no existen, crear un ViewSet dummy
+    # Si los modelos no existen en tiempo de definición, crear un ViewSet que intente obtenerlos dinámicamente
     class CambioDevolucionViewSet(viewsets.ViewSet):
         permission_classes = [permissions.IsAuthenticated]
+        
+        def _check_models(self):
+            """Intenta obtener los modelos dinámicamente"""
+            global CambioDevolucion, DetalleCambioDevolucion
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                try:
+                    CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
+                    if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+                        logger.info("✅ Modelos CambioDevolucion obtenidos dinámicamente en ViewSet dummy")
+                        return True
+                except Exception as e:
+                    logger.error(f"❌ Error obteniendo modelos en ViewSet dummy: {e}", exc_info=True)
+            return CambioDevolucion is not None and DetalleCambioDevolucion is not None
+        
         def list(self, request):
             from django.core.exceptions import ImproperlyConfigured
-            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
+            if not self._check_models():
+                raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+            # Si los modelos están disponibles, redirigir al método real
+            # Por ahora, simplemente retornar error ya que necesitamos el ViewSet completo
+            raise ImproperlyConfigured("CambioDevolucion models are now available but ViewSet needs to be reloaded. Please restart the server.")
+        
         def create(self, request):
             from django.core.exceptions import ImproperlyConfigured
-            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
+            if not self._check_models():
+                raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+            # Si los modelos están disponibles, redirigir al método real
+            # Por ahora, simplemente retornar error ya que necesitamos el ViewSet completo
+            raise ImproperlyConfigured("CambioDevolucion models are now available but ViewSet needs to be reloaded. Please restart the server.")
