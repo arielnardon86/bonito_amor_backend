@@ -1696,6 +1696,16 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             def list(self, request, *args, **kwargs):
                 close_old_connections()
                 return super().list(request, *args, **kwargs)
+    else:
+        # Si los serializers no están disponibles, crear un ViewSet que lanza error claro
+        class CambioDevolucionViewSet(viewsets.ViewSet):
+            permission_classes = [permissions.IsAuthenticated]
+            def list(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please restart the server after running migrations.")
+            def create(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please restart the server after running migrations.")
 else:
     # Si los modelos no existen, crear un ViewSet dummy
     class CambioDevolucionViewSet(viewsets.ViewSet):
