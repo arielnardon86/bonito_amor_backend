@@ -1346,17 +1346,29 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         if (CambioDevolucionSerializer is not None and
             CambioDevolucionCreateSerializer is not None):
             # Verificar que son ModelSerializer, no Serializer dummy
-            if (issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer) and
-                issubclass(CambioDevolucionCreateSerializer, drf_serializers.ModelSerializer)):
+            is_model_serializer = issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer)
+            is_create_model_serializer = issubclass(CambioDevolucionCreateSerializer, drf_serializers.ModelSerializer)
+            
+            logger.info(f"CambioDevolucionSerializer es ModelSerializer: {is_model_serializer}")
+            logger.info(f"CambioDevolucionCreateSerializer es ModelSerializer: {is_create_model_serializer}")
+            
+            if is_model_serializer and is_create_model_serializer:
                 # Verificar que tienen Meta.model correcto
-                if (hasattr(CambioDevolucionSerializer, 'Meta') and
-                    hasattr(CambioDevolucionSerializer.Meta, 'model') and
-                    CambioDevolucionSerializer.Meta.model == CambioDevolucion):
+                has_meta = hasattr(CambioDevolucionSerializer, 'Meta')
+                has_model = has_meta and hasattr(CambioDevolucionSerializer.Meta, 'model')
+                model_match = has_model and CambioDevolucionSerializer.Meta.model == CambioDevolucion
+                
+                logger.info(f"CambioDevolucionSerializer tiene Meta: {has_meta}, tiene model: {has_model}, modelo coincide: {model_match}")
+                
+                if model_match:
                     _serializers_available = True
+                    logger.info("✅ Serializers de CambioDevolucion disponibles correctamente")
     except (TypeError, AttributeError) as e:
         # Si hay algún error en la verificación, asumir que no están disponibles
-        logger.warning(f"Error verificando serializers de CambioDevolucion: {e}")
+        logger.error(f"❌ Error verificando serializers de CambioDevolucion: {e}", exc_info=True)
         _serializers_available = False
+    
+    logger.info(f"_serializers_available: {_serializers_available}")
     
     if _serializers_available:
         class CambioDevolucionViewSet(viewsets.ModelViewSet):
