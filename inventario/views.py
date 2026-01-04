@@ -1510,6 +1510,20 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         
         def create(self, request, *args, **kwargs):
                 """Sobrescribir create para devolver el objeto con el serializer completo"""
+                # Asegurarse de que los modelos estén disponibles
+                global CambioDevolucion, DetalleCambioDevolucion
+                if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                    try:
+                        CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
+                    except Exception as e:
+                        logger.error(f"❌ Error obteniendo modelos en create: {e}", exc_info=True)
+                        from django.core.exceptions import ImproperlyConfigured
+                        raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+                
+                if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                    from django.core.exceptions import ImproperlyConfigured
+                    raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+                
                 serializer = self.get_serializer(data=request.data)
                 serializer.is_valid(raise_exception=True)
                 
