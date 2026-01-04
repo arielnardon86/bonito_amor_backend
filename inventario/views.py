@@ -1728,10 +1728,23 @@ else:
         def list(self, request, *args, **kwargs):
             close_old_connections()
             return super().list(request, *args, **kwargs)
+    else:
+        # Si los serializers no están disponibles, crear un ViewSet dummy
+        class CambioDevolucionViewSet(viewsets.ViewSet):
+            permission_classes = [permissions.IsAuthenticated]
+            def list(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
+            def create(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
 else:
-    # Si los modelos no existen, crear una clase dummy para evitar errores de importación
-    class CambioDevolucionViewSet(viewsets.ModelViewSet):
+    # Si los modelos no existen, crear un ViewSet dummy
+    class CambioDevolucionViewSet(viewsets.ViewSet):
         permission_classes = [permissions.IsAuthenticated]
-        def get_queryset(self):
-            from django.http import Http404
-            raise Http404("CambioDevolucion models not available. Please run migrations.")
+        def list(self, request):
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
+        def create(self, request):
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
