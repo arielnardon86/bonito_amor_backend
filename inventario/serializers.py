@@ -1,7 +1,13 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura 
-from decimal import Decimal 
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
+# Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
+try:
+    from .models import CambioDevolucion, DetalleCambioDevolucion
+except ImportError:
+    CambioDevolucion = None
+    DetalleCambioDevolucion = None 
+from decimal import Decimal, InvalidOperation 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer # Importación necesaria aquí
@@ -71,6 +77,57 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
         read_only_fields = ['is_staff', 'is_superuser']
 
+class UserCreateSerializer(serializers.ModelSerializer):
+    """Serializer para crear nuevos usuarios"""
+    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    password2 = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'}, label='Confirmar contraseña')
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=False, 
+        allow_null=True 
+    )
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'password', 'password2', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError({"password": "Las contraseñas no coinciden."})
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('password2')
+        password = validated_data.pop('password')
+        user = User.objects.create(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para actualizar usuarios (sin contraseña)"""
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=False, 
+        allow_null=True 
+    )
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer para cambiar contraseña"""
+    new_password = serializers.CharField(required=True, write_only=True, style={'input_type': 'password'})
+    new_password2 = serializers.CharField(required=True, write_only=True, style={'input_type': 'password'}, label='Confirmar nueva contraseña')
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password2']:
+            raise serializers.ValidationError({"new_password": "Las contraseñas no coinciden."})
+        return attrs
+
 class MetodoPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = MetodoPago
@@ -79,14 +136,40 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
 # NUEVO SERIALIZER: Arancel por Método y Tienda
 class ArancelMetodoTiendaSerializer(serializers.ModelSerializer):
     metodo_pago_nombre = serializers.CharField(source='metodo_pago.nombre', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
     
     class Meta:
         model = ArancelMetodoTienda
-        fields = ['id', 'metodo_pago', 'metodo_pago_nombre', 'nombre_plan', 'arancel_porcentaje']
+        fields = ['id', 'tienda', 'tienda_nombre', 'metodo_pago', 'metodo_pago_nombre', 'nombre_plan', 'arancel_porcentaje']
+        
+    def validate_arancel_porcentaje(self, value):
+        """Validar que el arancel esté entre 0 y 100"""
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
+        return value
+
+class ArancelMetodoTiendaCreateSerializer(serializers.ModelSerializer):
+    """Serializer para crear/actualizar aranceles"""
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=True,
+        write_only=True
+    )
+    
+    class Meta:
+        model = ArancelMetodoTienda
+        fields = ['id', 'tienda', 'metodo_pago', 'nombre_plan', 'arancel_porcentaje']
+        
+    def validate_arancel_porcentaje(self, value):
+        """Validar que el arancel esté entre 0 y 100"""
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
+        return value
 # ------------------------------------------------
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
-    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True) 
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True, allow_null=True) 
     
     class Meta:
         fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
@@ -103,11 +186,76 @@ class VentaSerializer(serializers.ModelSerializer):
     arancel_aplicado_porcentaje = serializers.DecimalField(source='arancel_aplicado.arancel_porcentaje', max_digits=5, decimal_places=2, read_only=True)
     # Campo para saber si tiene factura asociada
     tiene_factura = serializers.SerializerMethodField()
+    
+    # Campos relacionados con cambios/devoluciones
+    cambio_devolucion_nota_credito = serializers.SerializerMethodField()
+    cambio_devolucion_diferencia = serializers.SerializerMethodField()
+    es_nota_credito = serializers.SerializerMethodField()
+    es_diferencia_pendiente = serializers.SerializerMethodField()
 
     def get_tiene_factura(self, obj):
         """Verifica si la venta tiene una factura asociada"""
         try:
             return obj.factura is not None
+        except:
+            return False
+    
+    def get_cambio_devolucion_nota_credito(self, obj):
+        """Obtiene el cambio/devolución que generó esta nota de crédito"""
+        try:
+            cambio = obj.nota_credito_origen.first()
+            if cambio:
+                # Obtener información de productos devueltos para mostrar
+                productos_devueltos = []
+                for detalle in cambio.detalles.filter(accion__in=['DEVOLVER', 'CAMBIAR']):
+                    if detalle.detalle_venta_original and detalle.detalle_venta_original.producto:
+                        productos_devueltos.append({
+                            'nombre': detalle.detalle_venta_original.producto.nombre,
+                            'cantidad': detalle.cantidad
+                        })
+                
+                return {
+                    'id': str(cambio.id),
+                    'venta_original_id': str(cambio.venta_original_id),
+                    'fecha_creacion': cambio.fecha_creacion,
+                    'tipo': cambio.tipo,
+                    'saldo_a_favor': str(cambio.saldo_a_favor),
+                    'productos_devueltos': productos_devueltos
+                }
+        except:
+            pass
+        return None
+    
+    def get_cambio_devolucion_diferencia(self, obj):
+        """Obtiene el cambio/devolución que generó esta venta de diferencia"""
+        try:
+            cambio = obj.cambio_devolucion_diferencia.first()
+            if cambio:
+                return {
+                    'id': str(cambio.id),
+                    'venta_original_id': str(cambio.venta_original_id),
+                    'fecha_creacion': cambio.fecha_creacion,
+                    'tipo': cambio.tipo,
+                    'monto_diferencia': str(cambio.monto_diferencia),
+                    'monto_devolucion': str(cambio.monto_devolucion),
+                    'monto_nuevo': str(cambio.monto_nuevo),
+                    'saldo_a_favor': str(cambio.saldo_a_favor)
+                }
+        except:
+            pass
+        return None
+    
+    def get_es_nota_credito(self, obj):
+        """Indica si esta venta es una nota de crédito"""
+        try:
+            return obj.nota_credito_origen.exists()
+        except:
+            return False
+    
+    def get_es_diferencia_pendiente(self, obj):
+        """Indica si esta venta es una diferencia pendiente de un cambio/devolución"""
+        try:
+            return obj.cambio_devolucion_diferencia.exists()
         except:
             return False
 
@@ -120,7 +268,9 @@ class VentaSerializer(serializers.ModelSerializer):
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
-            'fecha_creacion', 'fecha_actualizacion', 'tiene_factura', 'facturada'
+            'fecha_creacion', 'fecha_actualizacion', 'tiene_factura', 'facturada',
+            'cambio_devolucion_nota_credito', 'cambio_devolucion_diferencia',
+            'es_nota_credito', 'es_diferencia_pendiente'
         ]
 
 class VentaCreateSerializer(serializers.ModelSerializer):
@@ -135,6 +285,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=True
     )
+    cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
     
     class Meta:
         model = Venta
@@ -144,7 +295,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 
-            'tienda_slug', 'detalles', 'arancel_aplicado_id'
+            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'cambio_devolucion_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -183,7 +334,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             except Producto.DoesNotExist:
                 raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado en la tienda {tienda_slug}."})
             
-            if producto_obj.stock < cantidad:
+            # Si la venta viene de un cambio/devolución, el stock ya se validó y restó,
+            # así que no validamos stock aquí para evitar errores
+            cambio_devolucion_id = data.get('cambio_devolucion_id')
+            if not cambio_devolucion_id and producto_obj.stock < cantidad:
                 raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_obj.nombre}. Stock disponible: {producto_obj.stock}, solicitado: {cantidad}."})
             
             if precio_unitario < 0:
@@ -243,6 +397,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
+        cambio_devolucion_id = validated_data.pop('cambio_devolucion_id', None)
         
         arancel_aplicado = validated_data.pop('arancel_aplicado', None)
         arancel_total = validated_data.pop('arancel_total', Decimal('0.00'))
@@ -261,6 +416,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             fecha_venta=validated_data['fecha_venta'],
         )
         
+        # Si viene de un cambio/devolución, relacionar la venta con el cambio/devolución
+        if cambio_devolucion_id:
+            try:
+                from .models import CambioDevolucion
+                cambio_devolucion = CambioDevolucion.objects.get(id=cambio_devolucion_id)
+                # Actualizar el cambio/devolución para que apunte a esta venta en lugar de la pendiente
+                cambio_devolucion.venta_diferencia_pendiente = venta
+                cambio_devolucion.save()
+            except CambioDevolucion.DoesNotExist:
+                pass  # Si no existe, continuar sin relacionar
+        
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
             cantidad = detalle_data['cantidad']
@@ -278,8 +444,11 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 costo_unitario=costo_unitario
             )
 
-            producto_obj.stock -= cantidad
-            producto_obj.save()
+            # NO restar stock si la venta viene de un cambio/devolución
+            # porque el stock ya se restó cuando se procesó el cambio/devolución
+            if not cambio_devolucion_id:
+                producto_obj.stock -= cantidad
+                producto_obj.save()
 
         return venta
 
@@ -377,3 +546,150 @@ class CompraCreateSerializer(serializers.ModelSerializer):
         
         compra = Compra.objects.create(**compra_fields)
         return compra
+
+# Serializers para Cambio/Devolución (solo si los modelos existen)
+if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+    class DetalleCambioDevolucionSerializer(serializers.ModelSerializer):
+    producto_original_nombre = serializers.CharField(source='detalle_venta_original.producto.nombre', read_only=True)
+    producto_nuevo_nombre = serializers.CharField(source='producto_nuevo.nombre', read_only=True)
+    
+    class Meta:
+        model = DetalleCambioDevolucion
+        fields = [
+            'id', 'accion', 'cantidad',
+            'detalle_venta_original', 'producto_original_nombre',
+            'producto_nuevo', 'producto_nuevo_nombre',
+            'precio_unitario_devuelto', 'precio_unitario_nuevo',
+            'subtotal_devuelto', 'subtotal_nuevo',
+            'fecha_creacion', 'fecha_actualizacion'
+        ]
+        read_only_fields = ['subtotal_devuelto', 'subtotal_nuevo']
+
+class CambioDevolucionSerializer(serializers.ModelSerializer):
+    detalles = DetalleCambioDevolucionSerializer(many=True, read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    venta_original_id = serializers.UUIDField(source='venta_original.id', read_only=True)
+    venta_nota_credito_id = serializers.SerializerMethodField()
+    venta_diferencia_pendiente_id = serializers.SerializerMethodField()
+    
+    def get_venta_nota_credito_id(self, obj):
+        """Obtiene el ID de la venta de nota de crédito si existe"""
+        if obj.venta_nota_credito:
+            return str(obj.venta_nota_credito.id)
+        return None
+    
+    def get_venta_diferencia_pendiente_id(self, obj):
+        """Obtiene el ID de la venta de diferencia pendiente si existe"""
+        if obj.venta_diferencia_pendiente:
+            return str(obj.venta_diferencia_pendiente.id)
+        return None
+    
+    class Meta:
+        model = CambioDevolucion
+        fields = [
+            'id', 'venta_original', 'venta_original_id', 'tienda', 'tienda_nombre',
+            'usuario', 'usuario_nombre', 'tipo', 'estado', 'motivo',
+            'monto_devolucion', 'monto_nuevo', 'monto_diferencia',
+            'saldo_a_favor', 'saldo_utilizado',
+            'nota_credito_generada', 'venta_nota_credito', 'venta_nota_credito_id',
+            'diferencia_pendiente', 'venta_diferencia_pendiente', 'venta_diferencia_pendiente_id',
+            'detalles', 'fecha_creacion', 'fecha_actualizacion'
+        ]
+        read_only_fields = [
+            'monto_devolucion', 'monto_nuevo', 'monto_diferencia', 
+            'saldo_a_favor', 'saldo_utilizado', 
+            'nota_credito_generada', 'diferencia_pendiente'
+        ]
+
+class CambioDevolucionCreateSerializer(serializers.ModelSerializer):
+    detalles = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        help_text="Lista de detalles del cambio/devolución. Cada detalle debe tener: detalle_venta_original_id, accion, cantidad, producto_nuevo_id (opcional), precio_unitario_nuevo (opcional)"
+    )
+    tipo = serializers.CharField(required=False, allow_blank=True, default='CAMBIO')
+    motivo = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    
+    class Meta:
+        model = CambioDevolucion
+        fields = [
+            'venta_original', 'tipo', 'motivo', 'detalles'
+        ]
+    
+    def validate(self, data):
+        venta_original = data.get('venta_original')
+        detalles = data.get('detalles', [])
+        tipo = data.get('tipo', 'CAMBIO')
+        motivo = data.get('motivo', '') or None
+        
+        if not venta_original:
+            raise serializers.ValidationError({"venta_original": "La venta original es obligatoria."})
+        
+        if venta_original.anulada:
+            raise serializers.ValidationError({"venta_original": "No se puede realizar un cambio/devolución sobre una venta anulada."})
+        
+        if not detalles:
+            raise serializers.ValidationError({"detalles": "Debe especificar al menos un detalle para el cambio/devolución."})
+        
+        # Asegurar valores por defecto
+        if not tipo:
+            data['tipo'] = 'CAMBIO'
+        if motivo == '':
+            data['motivo'] = None
+        
+        # Validar cada detalle
+        for detalle_data in detalles:
+            accion = detalle_data.get('accion')
+            detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
+            cantidad = detalle_data.get('cantidad')
+            
+            if not accion:
+                raise serializers.ValidationError({"detalles": "Cada detalle debe tener una 'accion' (DEVOLVER, CAMBIAR, AGREGAR)."})
+            
+            if accion not in ['DEVOLVER', 'CAMBIAR', 'AGREGAR']:
+                raise serializers.ValidationError({"detalles": f"Acción inválida: {accion}. Debe ser DEVOLVER, CAMBIAR o AGREGAR."})
+            
+            if accion in ['DEVOLVER', 'CAMBIAR']:
+                if not detalle_venta_original_id:
+                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'detalle_venta_original_id'."})
+                
+                try:
+                    detalle_venta = DetalleVenta.objects.get(id=detalle_venta_original_id, venta=venta_original)
+                    if detalle_venta.anulado_individualmente:
+                        raise serializers.ValidationError({"detalles": f"El detalle de venta {detalle_venta_original_id} ya fue anulado."})
+                    
+                    if cantidad > detalle_venta.cantidad:
+                        raise serializers.ValidationError({"detalles": f"La cantidad a devolver ({cantidad}) no puede ser mayor que la cantidad vendida ({detalle_venta.cantidad})."})
+                except DetalleVenta.DoesNotExist:
+                    raise serializers.ValidationError({"detalles": f"Detalle de venta {detalle_venta_original_id} no encontrado."})
+            
+            if accion in ['CAMBIAR', 'AGREGAR']:
+                producto_nuevo_id = detalle_data.get('producto_nuevo_id')
+                precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
+                
+                # Validar que producto_nuevo_id no sea null o vacío
+                if not producto_nuevo_id:
+                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'producto_nuevo_id' y no puede ser nulo."})
+                
+                try:
+                    producto_nuevo = Producto.objects.get(id=producto_nuevo_id, tienda=venta_original.tienda)
+                    # Para CAMBIAR también verificar stock ya que se agrega un producto nuevo
+                    if accion in ['CAMBIAR', 'AGREGAR'] and producto_nuevo.stock < cantidad:
+                        raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_nuevo.nombre}. Stock disponible: {producto_nuevo.stock}, solicitado: {cantidad}."})
+                except Producto.DoesNotExist:
+                    raise serializers.ValidationError({"detalles": f"Producto {producto_nuevo_id} no encontrado en la tienda."})
+                
+                # Validar que precio_unitario_nuevo no sea None ni cadena vacía
+                if precio_unitario_nuevo is None or precio_unitario_nuevo == '':
+                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'precio_unitario_nuevo' y no puede ser nulo o vacío."})
+                
+                # Convertir a Decimal si es string
+                try:
+                    precio_decimal = Decimal(str(precio_unitario_nuevo))
+                    if precio_decimal < 0:
+                        raise serializers.ValidationError({"detalles": f"El precio unitario no puede ser negativo."})
+                except (ValueError, InvalidOperation):
+                    raise serializers.ValidationError({"detalles": f"El precio_unitario_nuevo debe ser un número válido."})
+        
+        return data
