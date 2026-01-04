@@ -550,59 +550,59 @@ class CompraCreateSerializer(serializers.ModelSerializer):
 # Serializers para Cambio/Devolución (solo si los modelos existen)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
     class DetalleCambioDevolucionSerializer(serializers.ModelSerializer):
-    producto_original_nombre = serializers.CharField(source='detalle_venta_original.producto.nombre', read_only=True)
-    producto_nuevo_nombre = serializers.CharField(source='producto_nuevo.nombre', read_only=True)
-    
-    class Meta:
-        model = DetalleCambioDevolucion
-        fields = [
-            'id', 'accion', 'cantidad',
-            'detalle_venta_original', 'producto_original_nombre',
-            'producto_nuevo', 'producto_nuevo_nombre',
-            'precio_unitario_devuelto', 'precio_unitario_nuevo',
-            'subtotal_devuelto', 'subtotal_nuevo',
-            'fecha_creacion', 'fecha_actualizacion'
-        ]
-        read_only_fields = ['subtotal_devuelto', 'subtotal_nuevo']
+        producto_original_nombre = serializers.CharField(source='detalle_venta_original.producto.nombre', read_only=True)
+        producto_nuevo_nombre = serializers.CharField(source='producto_nuevo.nombre', read_only=True)
+        
+        class Meta:
+            model = DetalleCambioDevolucion
+            fields = [
+                'id', 'accion', 'cantidad',
+                'detalle_venta_original', 'producto_original_nombre',
+                'producto_nuevo', 'producto_nuevo_nombre',
+                'precio_unitario_devuelto', 'precio_unitario_nuevo',
+                'subtotal_devuelto', 'subtotal_nuevo',
+                'fecha_creacion', 'fecha_actualizacion'
+            ]
+            read_only_fields = ['subtotal_devuelto', 'subtotal_nuevo']
 
-class CambioDevolucionSerializer(serializers.ModelSerializer):
-    detalles = DetalleCambioDevolucionSerializer(many=True, read_only=True)
-    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
-    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
-    venta_original_id = serializers.UUIDField(source='venta_original.id', read_only=True)
-    venta_nota_credito_id = serializers.SerializerMethodField()
-    venta_diferencia_pendiente_id = serializers.SerializerMethodField()
-    
-    def get_venta_nota_credito_id(self, obj):
-        """Obtiene el ID de la venta de nota de crédito si existe"""
-        if obj.venta_nota_credito:
-            return str(obj.venta_nota_credito.id)
-        return None
-    
-    def get_venta_diferencia_pendiente_id(self, obj):
-        """Obtiene el ID de la venta de diferencia pendiente si existe"""
-        if obj.venta_diferencia_pendiente:
-            return str(obj.venta_diferencia_pendiente.id)
-        return None
-    
-    class Meta:
-        model = CambioDevolucion
-        fields = [
-            'id', 'venta_original', 'venta_original_id', 'tienda', 'tienda_nombre',
-            'usuario', 'usuario_nombre', 'tipo', 'estado', 'motivo',
-            'monto_devolucion', 'monto_nuevo', 'monto_diferencia',
-            'saldo_a_favor', 'saldo_utilizado',
-            'nota_credito_generada', 'venta_nota_credito', 'venta_nota_credito_id',
-            'diferencia_pendiente', 'venta_diferencia_pendiente', 'venta_diferencia_pendiente_id',
-            'detalles', 'fecha_creacion', 'fecha_actualizacion'
-        ]
-        read_only_fields = [
-            'monto_devolucion', 'monto_nuevo', 'monto_diferencia', 
-            'saldo_a_favor', 'saldo_utilizado', 
-            'nota_credito_generada', 'diferencia_pendiente'
-        ]
+    class CambioDevolucionSerializer(serializers.ModelSerializer):
+        detalles = DetalleCambioDevolucionSerializer(many=True, read_only=True)
+        usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+        tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+        venta_original_id = serializers.UUIDField(source='venta_original.id', read_only=True)
+        venta_nota_credito_id = serializers.SerializerMethodField()
+        venta_diferencia_pendiente_id = serializers.SerializerMethodField()
+        
+        def get_venta_nota_credito_id(self, obj):
+            """Obtiene el ID de la venta de nota de crédito si existe"""
+            if obj.venta_nota_credito:
+                return str(obj.venta_nota_credito.id)
+            return None
+        
+        def get_venta_diferencia_pendiente_id(self, obj):
+            """Obtiene el ID de la venta de diferencia pendiente si existe"""
+            if obj.venta_diferencia_pendiente:
+                return str(obj.venta_diferencia_pendiente.id)
+            return None
+        
+        class Meta:
+            model = CambioDevolucion
+            fields = [
+                'id', 'venta_original', 'venta_original_id', 'tienda', 'tienda_nombre',
+                'usuario', 'usuario_nombre', 'tipo', 'estado', 'motivo',
+                'monto_devolucion', 'monto_nuevo', 'monto_diferencia',
+                'saldo_a_favor', 'saldo_utilizado',
+                'nota_credito_generada', 'venta_nota_credito', 'venta_nota_credito_id',
+                'diferencia_pendiente', 'venta_diferencia_pendiente', 'venta_diferencia_pendiente_id',
+                'detalles', 'fecha_creacion', 'fecha_actualizacion'
+            ]
+            read_only_fields = [
+                'monto_devolucion', 'monto_nuevo', 'monto_diferencia', 
+                'saldo_a_favor', 'saldo_utilizado', 
+                'nota_credito_generada', 'diferencia_pendiente'
+            ]
 
-class CambioDevolucionCreateSerializer(serializers.ModelSerializer):
+    class CambioDevolucionCreateSerializer(serializers.ModelSerializer):
     detalles = serializers.ListField(
         child=serializers.DictField(),
         write_only=True,
@@ -617,79 +617,87 @@ class CambioDevolucionCreateSerializer(serializers.ModelSerializer):
             'venta_original', 'tipo', 'motivo', 'detalles'
         ]
     
-    def validate(self, data):
-        venta_original = data.get('venta_original')
-        detalles = data.get('detalles', [])
-        tipo = data.get('tipo', 'CAMBIO')
-        motivo = data.get('motivo', '') or None
-        
-        if not venta_original:
-            raise serializers.ValidationError({"venta_original": "La venta original es obligatoria."})
-        
-        if venta_original.anulada:
-            raise serializers.ValidationError({"venta_original": "No se puede realizar un cambio/devolución sobre una venta anulada."})
-        
-        if not detalles:
-            raise serializers.ValidationError({"detalles": "Debe especificar al menos un detalle para el cambio/devolución."})
-        
-        # Asegurar valores por defecto
-        if not tipo:
-            data['tipo'] = 'CAMBIO'
-        if motivo == '':
-            data['motivo'] = None
-        
-        # Validar cada detalle
-        for detalle_data in detalles:
-            accion = detalle_data.get('accion')
-            detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
-            cantidad = detalle_data.get('cantidad')
+        def validate(self, data):
+            venta_original = data.get('venta_original')
+            detalles = data.get('detalles', [])
+            tipo = data.get('tipo', 'CAMBIO')
+            motivo = data.get('motivo', '') or None
             
-            if not accion:
-                raise serializers.ValidationError({"detalles": "Cada detalle debe tener una 'accion' (DEVOLVER, CAMBIAR, AGREGAR)."})
+            if not venta_original:
+                raise serializers.ValidationError({"venta_original": "La venta original es obligatoria."})
             
-            if accion not in ['DEVOLVER', 'CAMBIAR', 'AGREGAR']:
-                raise serializers.ValidationError({"detalles": f"Acción inválida: {accion}. Debe ser DEVOLVER, CAMBIAR o AGREGAR."})
+            if venta_original.anulada:
+                raise serializers.ValidationError({"venta_original": "No se puede realizar un cambio/devolución sobre una venta anulada."})
             
-            if accion in ['DEVOLVER', 'CAMBIAR']:
-                if not detalle_venta_original_id:
-                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'detalle_venta_original_id'."})
+            if not detalles:
+                raise serializers.ValidationError({"detalles": "Debe especificar al menos un detalle para el cambio/devolución."})
+            
+            # Asegurar valores por defecto
+            if not tipo:
+                data['tipo'] = 'CAMBIO'
+            if motivo == '':
+                data['motivo'] = None
+            
+            # Validar cada detalle
+            for detalle_data in detalles:
+                accion = detalle_data.get('accion')
+                detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
+                cantidad = detalle_data.get('cantidad')
                 
-                try:
-                    detalle_venta = DetalleVenta.objects.get(id=detalle_venta_original_id, venta=venta_original)
-                    if detalle_venta.anulado_individualmente:
-                        raise serializers.ValidationError({"detalles": f"El detalle de venta {detalle_venta_original_id} ya fue anulado."})
+                if not accion:
+                    raise serializers.ValidationError({"detalles": "Cada detalle debe tener una 'accion' (DEVOLVER, CAMBIAR, AGREGAR)."})
+                
+                if accion not in ['DEVOLVER', 'CAMBIAR', 'AGREGAR']:
+                    raise serializers.ValidationError({"detalles": f"Acción inválida: {accion}. Debe ser DEVOLVER, CAMBIAR o AGREGAR."})
+                
+                if accion in ['DEVOLVER', 'CAMBIAR']:
+                    if not detalle_venta_original_id:
+                        raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'detalle_venta_original_id'."})
                     
-                    if cantidad > detalle_venta.cantidad:
-                        raise serializers.ValidationError({"detalles": f"La cantidad a devolver ({cantidad}) no puede ser mayor que la cantidad vendida ({detalle_venta.cantidad})."})
-                except DetalleVenta.DoesNotExist:
-                    raise serializers.ValidationError({"detalles": f"Detalle de venta {detalle_venta_original_id} no encontrado."})
+                    try:
+                        detalle_venta = DetalleVenta.objects.get(id=detalle_venta_original_id, venta=venta_original)
+                        if detalle_venta.anulado_individualmente:
+                            raise serializers.ValidationError({"detalles": f"El detalle de venta {detalle_venta_original_id} ya fue anulado."})
+                        
+                        if cantidad > detalle_venta.cantidad:
+                            raise serializers.ValidationError({"detalles": f"La cantidad a devolver ({cantidad}) no puede ser mayor que la cantidad vendida ({detalle_venta.cantidad})."})
+                    except DetalleVenta.DoesNotExist:
+                        raise serializers.ValidationError({"detalles": f"Detalle de venta {detalle_venta_original_id} no encontrado."})
+                
+                if accion in ['CAMBIAR', 'AGREGAR']:
+                    producto_nuevo_id = detalle_data.get('producto_nuevo_id')
+                    precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
+                    
+                    # Validar que producto_nuevo_id no sea null o vacío
+                    if not producto_nuevo_id:
+                        raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'producto_nuevo_id' y no puede ser nulo."})
+                    
+                    try:
+                        producto_nuevo = Producto.objects.get(id=producto_nuevo_id, tienda=venta_original.tienda)
+                        # Para CAMBIAR también verificar stock ya que se agrega un producto nuevo
+                        if accion in ['CAMBIAR', 'AGREGAR'] and producto_nuevo.stock < cantidad:
+                            raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_nuevo.nombre}. Stock disponible: {producto_nuevo.stock}, solicitado: {cantidad}."})
+                    except Producto.DoesNotExist:
+                        raise serializers.ValidationError({"detalles": f"Producto {producto_nuevo_id} no encontrado en la tienda."})
+                    
+                    # Validar que precio_unitario_nuevo no sea None ni cadena vacía
+                    if precio_unitario_nuevo is None or precio_unitario_nuevo == '':
+                        raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'precio_unitario_nuevo' y no puede ser nulo o vacío."})
+                    
+                    # Convertir a Decimal si es string
+                    try:
+                        precio_decimal = Decimal(str(precio_unitario_nuevo))
+                        if precio_decimal < 0:
+                            raise serializers.ValidationError({"detalles": f"El precio unitario no puede ser negativo."})
+                    except (ValueError, InvalidOperation):
+                        raise serializers.ValidationError({"detalles": f"El precio_unitario_nuevo debe ser un número válido."})
             
-            if accion in ['CAMBIAR', 'AGREGAR']:
-                producto_nuevo_id = detalle_data.get('producto_nuevo_id')
-                precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
-                
-                # Validar que producto_nuevo_id no sea null o vacío
-                if not producto_nuevo_id:
-                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'producto_nuevo_id' y no puede ser nulo."})
-                
-                try:
-                    producto_nuevo = Producto.objects.get(id=producto_nuevo_id, tienda=venta_original.tienda)
-                    # Para CAMBIAR también verificar stock ya que se agrega un producto nuevo
-                    if accion in ['CAMBIAR', 'AGREGAR'] and producto_nuevo.stock < cantidad:
-                        raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_nuevo.nombre}. Stock disponible: {producto_nuevo.stock}, solicitado: {cantidad}."})
-                except Producto.DoesNotExist:
-                    raise serializers.ValidationError({"detalles": f"Producto {producto_nuevo_id} no encontrado en la tienda."})
-                
-                # Validar que precio_unitario_nuevo no sea None ni cadena vacía
-                if precio_unitario_nuevo is None or precio_unitario_nuevo == '':
-                    raise serializers.ValidationError({"detalles": f"Para la acción {accion}, se requiere 'precio_unitario_nuevo' y no puede ser nulo o vacío."})
-                
-                # Convertir a Decimal si es string
-                try:
-                    precio_decimal = Decimal(str(precio_unitario_nuevo))
-                    if precio_decimal < 0:
-                        raise serializers.ValidationError({"detalles": f"El precio unitario no puede ser negativo."})
-                except (ValueError, InvalidOperation):
-                    raise serializers.ValidationError({"detalles": f"El precio_unitario_nuevo debe ser un número válido."})
-        
-        return data
+            return data
+else:
+    # Si los modelos no existen, crear serializers dummy para evitar errores de importación
+    class DetalleCambioDevolucionSerializer(serializers.Serializer):
+        pass
+    class CambioDevolucionSerializer(serializers.Serializer):
+        pass
+    class CambioDevolucionCreateSerializer(serializers.Serializer):
+        pass
