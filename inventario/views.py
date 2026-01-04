@@ -1563,43 +1563,43 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 
                 # Manejar stock
                 if accion == 'DEVOLVER':
-                # Devolver stock del producto original
-                if detalle_venta_original and detalle_venta_original.producto:
-                producto = detalle_venta_original.producto
-                producto.stock += cantidad
-                producto.save()
-                
-                # Anular el detalle de venta si se devuelve todo
-                if cantidad >= detalle_venta_original.cantidad:
-                detalle_venta_original.anulado_individualmente = True
-                detalle_venta_original.save()
+                    # Devolver stock del producto original
+                    if detalle_venta_original and detalle_venta_original.producto:
+                        producto = detalle_venta_original.producto
+                        producto.stock += cantidad
+                        producto.save()
+                        
+                        # Anular el detalle de venta si se devuelve todo
+                        if cantidad >= detalle_venta_original.cantidad:
+                            detalle_venta_original.anulado_individualmente = True
+                            detalle_venta_original.save()
                 
                 elif accion == 'CAMBIAR':
-                # Devolver stock del producto original
-                if detalle_venta_original and detalle_venta_original.producto:
-                producto = detalle_venta_original.producto
-                producto.stock += cantidad
-                producto.save()
-                
-                # Anular el detalle de venta si se cambia todo
-                if cantidad >= detalle_venta_original.cantidad:
-                detalle_venta_original.anulado_individualmente = True
-                detalle_venta_original.save()
-                
-                # Reducir stock del producto nuevo
-                if producto_nuevo:
-                if producto_nuevo.stock < cantidad:
-                raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                producto_nuevo.stock -= cantidad
-                producto_nuevo.save()
+                    # Devolver stock del producto original
+                    if detalle_venta_original and detalle_venta_original.producto:
+                        producto = detalle_venta_original.producto
+                        producto.stock += cantidad
+                        producto.save()
+                        
+                        # Anular el detalle de venta si se cambia todo
+                        if cantidad >= detalle_venta_original.cantidad:
+                            detalle_venta_original.anulado_individualmente = True
+                            detalle_venta_original.save()
+                    
+                    # Reducir stock del producto nuevo
+                    if producto_nuevo:
+                        if producto_nuevo.stock < cantidad:
+                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                        producto_nuevo.stock -= cantidad
+                        producto_nuevo.save()
                 
                 elif accion == 'AGREGAR':
-                # Reducir stock del producto nuevo
-                if producto_nuevo:
-                if producto_nuevo.stock < cantidad:
-                raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                producto_nuevo.stock -= cantidad
-                producto_nuevo.save()
+                    # Reducir stock del producto nuevo
+                    if producto_nuevo:
+                        if producto_nuevo.stock < cantidad:
+                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                        producto_nuevo.stock -= cantidad
+                        producto_nuevo.save()
                 
                 # Calcular monto de diferencia
                 monto_diferencia = monto_nuevo - monto_devolucion
