@@ -1426,6 +1426,15 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         serializer_class = _TempSerializer
         
         def get_serializer_class(self):
+            # Obtener los modelos dinámicamente si aún no están disponibles
+            global CambioDevolucion, DetalleCambioDevolucion
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                try:
+                    CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
+                except Exception as e:
+                    logger.error(f"Error obteniendo modelos en get_serializer_class: {e}")
+                    raise ImportError("CambioDevolucion models not available. Please restart the server after running migrations.")
+            
             # Intentar obtener los serializers reales, reimportando si es necesario
             from rest_framework import serializers as drf_serializers
             
@@ -1467,6 +1476,16 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             raise ImportError("CambioDevolucion serializers not available. Please restart the server after running migrations.")
         
         def get_queryset(self):
+            # Obtener los modelos dinámicamente si aún no están disponibles
+            global CambioDevolucion, DetalleCambioDevolucion
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                try:
+                    CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
+                except Exception as e:
+                    logger.error(f"Error obteniendo modelos en get_queryset: {e}")
+                    return CambioDevolucion.objects.none() if CambioDevolucion else type('obj', (object,), {'objects': type('obj', (object,), {'none': lambda: []})()})()
+            
+            # Continuar con la lógica normal
             user = self.request.user
             queryset = CambioDevolucion.objects.all().select_related(
                 'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
