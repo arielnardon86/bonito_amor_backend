@@ -56,21 +56,22 @@ def _get_cambio_devolucion_models():
     """
     global CambioDevolucion, DetalleCambioDevolucion
     
+    # Si ya están importados, retornarlos
     if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         return CambioDevolucion, DetalleCambioDevolucion
     
+    # Intentar obtener usando apps.get_model() (la forma más segura)
     try:
         from django.apps import apps
-        
-        # Primero intentar obtener con apps.get_model()
+        CambioDevolucion = apps.get_model('inventario', 'CambioDevolucion')
+        DetalleCambioDevolucion = apps.get_model('inventario', 'DetalleCambioDevolucion')
+        logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion obtenidos con apps.get_model()")
+        return CambioDevolucion, DetalleCambioDevolucion
+    except LookupError:
+        logger.warning("⚠️ apps.get_model() falló - los modelos no están registrados en Django")
+        # Si apps.get_model falla, los modelos no están registrados
+        # Verificar si las tablas existen para dar un mensaje más útil
         try:
-            CambioDevolucion = apps.get_model('inventario', 'CambioDevolucion')
-            DetalleCambioDevolucion = apps.get_model('inventario', 'DetalleCambioDevolucion')
-            logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion obtenidos con apps.get_model()")
-            return CambioDevolucion, DetalleCambioDevolucion
-        except LookupError as le:
-            logger.warning(f"⚠️ apps.get_model() falló: {le}")
-            # Si apps.get_model falla, verificar que las tablas existen y luego intentar importar directamente
             from django.db import connection
             with connection.cursor() as cursor:
                 if connection.vendor == 'postgresql':
@@ -86,15 +87,11 @@ def _get_cambio_devolucion_models():
                     tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
                 
                 if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
-                    logger.info("✅ Tablas encontradas en BD, pero modelos no están disponibles en Django")
-                    logger.warning("⚠️ Las tablas existen pero los modelos no se pueden importar. Esto puede indicar que los modelos no están definidos en models.py o hay un error de sintaxis.")
-                    # No intentar importar los modelos aquí porque causaría warnings de registro múltiple
-                    # Los modelos no están disponibles, pero las tablas existen
-                    # El código seguirá funcionando sin estos modelos
+                    logger.error("❌ CRÍTICO: Las tablas existen pero los modelos no están registrados en Django. Esto indica que los modelos no están siendo definidos correctamente en models.py o hay un error de sintaxis que impide su registro.")
                 else:
-                    logger.warning(f"⚠️ Tablas no encontradas en BD. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
-    except Exception as e:
-        logger.error(f"❌ Error obteniendo modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
+                    logger.warning(f"⚠️ Tablas no encontradas. Ejecuta: python manage.py migrate inventario 0013")
+        except Exception as e:
+            logger.error(f"❌ Error verificando tablas: {e}", exc_info=True)
     
     return None, None
 from django.core.exceptions import ObjectDoesNotExist 
