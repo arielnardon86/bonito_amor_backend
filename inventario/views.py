@@ -1372,18 +1372,23 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             data.append(['', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
         
         # Si es una venta de diferencia de cambio/devolución, mostrar el monto devuelto
+        monto_devuelto_mostrar = Decimal('0.00')
         if CambioDevolucion is not None:
             try:
                 cambio_diferencia = venta.cambio_devolucion_diferencia.first()
                 if cambio_diferencia:
                     # Mostrar el monto devuelto (productos devueltos)
-                    monto_devuelto = cambio_diferencia.monto_devolucion
-                    if monto_devuelto > 0:
-                        data.append(['', '', '<b>Monto devuelto (cambio/devolución):</b>', f"-${monto_devuelto:.2f}"])
+                    monto_devuelto_mostrar = cambio_diferencia.monto_devolucion
+                    if monto_devuelto_mostrar > 0:
+                        data.append(['', '', '<b>Monto devuelto (cambio/devolución):</b>', f"-${monto_devuelto_mostrar:.2f}"])
+                        # Ajustar el subtotal y total para reflejar el monto devuelto
+                        subtotal_final_sin_iva = subtotal_final_sin_iva - (monto_devuelto_mostrar / Decimal('1.21'))
+                        total_final = total_final - monto_devuelto_mostrar
+                        iva_final = subtotal_final_sin_iva * Decimal('0.21')
             except Exception as e:
                 logger.warning(f"⚠️ Error al obtener cambio_devolucion para mostrar monto devuelto: {e}")
         
-        # Subtotal sin IVA (después de descuentos/recargos)
+        # Subtotal sin IVA (después de descuentos/recargos y monto devuelto)
         data.append(['', '', '<b>Subtotal (sin IVA):</b>', f"${subtotal_final_sin_iva:.2f}"])
         
         # IVA
