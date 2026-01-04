@@ -346,3 +346,134 @@ class Factura(models.Model):
         if self.numero_comprobante:
             return f"{self.punto_venta:04d}-{self.numero_comprobante:08d}"
         return f"{self.punto_venta:04d}-PENDIENTE"
+
+# Modelo de Cambio/Devolución
+class CambioDevolucion(models.Model):
+    TIPO_CHOICES = [
+        ('DEVOLUCION', 'Devolución Total'),
+        ('CAMBIO', 'Cambio de Producto'),
+        ('DEVOLUCION_PARCIAL', 'Devolución Parcial'),
+    ]
+    
+    ESTADO_CHOICES = [
+        ('PENDIENTE', 'Pendiente'),
+        ('PROCESADO', 'Procesado'),
+        ('CANCELADO', 'Cancelado'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    venta_original = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='cambios_devoluciones', help_text="Venta original de la que se realiza el cambio/devolución")
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='cambios_devoluciones')
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='cambios_devoluciones_procesados',
+        help_text="Usuario que procesó el cambio/devolución"
+    )
+    
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default='CAMBIO', help_text="Tipo de cambio/devolución")
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PROCESADO')
+    
+    # Motivo del cambio/devolución
+    motivo = models.TextField(blank=True, null=True, help_text="Motivo del cambio o devolución")
+    
+    # Totales del cambio/devolución
+    monto_devolucion = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto a devolver al cliente (productos devueltos)")
+    monto_nuevo = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de productos nuevos recibidos en el cambio")
+    monto_diferencia = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Diferencia: positivo = cliente debe pagar, negativo = saldo a favor del cliente")
+    
+    # Saldo a favor del cliente (si monto_diferencia es negativo)
+    saldo_a_favor = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Saldo a favor del cliente que queda pendiente")
+    saldo_utilizado = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Saldo a favor que fue utilizado en compras posteriores")
+    
+    # Nota de crédito (recibo generado por saldo a favor)
+    nota_credito_generada = models.BooleanField(default=False, help_text="Indica si se generó un recibo/nota de crédito por el saldo a favor")
+    venta_nota_credito = models.ForeignKey(
+        Venta,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='nota_credito_origen',
+        help_text="Venta/Recibo generado como nota de crédito (saldo a favor)"
+    )
+    
+    # Diferencia a pagar - crear venta pendiente que se completa desde el flujo normal
+    diferencia_pendiente = models.BooleanField(default=False, help_text="Indica si hay una diferencia a pagar pendiente")
+    venta_diferencia_pendiente = models.ForeignKey(
+        Venta,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cambio_devolucion_diferencia',
+        help_text="Venta creada para la diferencia a pagar (se completa desde el flujo normal de ventas)"
+    )
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Cambio/Devolución"
+        verbose_name_plural = "Cambios/Devoluciones"
+        ordering = ['-fecha_creacion']
+    
+    def __str__(self):
+        return f"Cambio/Devolución {self.id} - Venta {self.venta_original.id} - {self.get_tipo_display()}"
+
+# Modelo de Detalle de Cambio/Devolución
+class DetalleCambioDevolucion(models.Model):
+    ACCION_CHOICES = [
+        ('DEVOLVER', 'Devolver Producto'),
+        ('CAMBIAR', 'Cambiar Producto'),
+        ('AGREGAR', 'Agregar Producto Nuevo'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cambio_devolucion = models.ForeignKey(CambioDevolucion, on_delete=models.CASCADE, related_name='detalles')
+    
+    # Producto original de la venta (si se devuelve o cambia)
+    detalle_venta_original = models.ForeignKey(
+        DetalleVenta, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='cambios_devoluciones',
+        help_text="Detalle de venta original que se devuelve o cambia"
+    )
+    
+    # Producto nuevo (si se cambia por otro)
+    producto_nuevo = models.ForeignKey(
+        Producto, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='cambios_recibidos',
+        help_text="Producto nuevo que se recibe en el cambio"
+    )
+    
+    accion = models.CharField(max_length=20, choices=ACCION_CHOICES, help_text="Acción realizada sobre el producto")
+    cantidad = models.IntegerField(default=1, help_text="Cantidad de productos afectados")
+    
+    # Precios
+    precio_unitario_devuelto = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Precio unitario del producto devuelto")
+    precio_unitario_nuevo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Precio unitario del producto nuevo")
+    subtotal_devuelto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Subtotal del producto devuelto")
+    subtotal_nuevo = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Subtotal del producto nuevo")
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Detalle de Cambio/Devolución"
+        verbose_name_plural = "Detalles de Cambios/Devoluciones"
+        ordering = ['fecha_creacion']
+    
+    def __str__(self):
+        return f"Detalle {self.id} - {self.get_accion_display()} - Cantidad: {self.cantidad}"
+
+# Asegurar que los modelos estén disponibles para importación
+__all__ = [
+    'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago', 
+    'ArancelMetodoTienda', 'Venta', 'DetalleVenta', 'Compra', 
+    'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion'
+]
