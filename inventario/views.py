@@ -38,7 +38,13 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura, CambioDevolucion, DetalleCambioDevolucion
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
+# Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
+try:
+    from .models import CambioDevolucion, DetalleCambioDevolucion
+except ImportError:
+    CambioDevolucion = None
+    DetalleCambioDevolucion = None
 from django.core.exceptions import ObjectDoesNotExist 
 # CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
@@ -1309,14 +1315,16 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         
         return response
 
-class CambioDevolucionViewSet(viewsets.ModelViewSet):
-    """ViewSet para gestionar cambios y devoluciones"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return CambioDevolucionCreateSerializer
-        return CambioDevolucionSerializer
+# Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
+if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+    class CambioDevolucionViewSet(viewsets.ModelViewSet):
+        """ViewSet para gestionar cambios y devoluciones"""
+        permission_classes = [permissions.IsAuthenticated]
+        
+        def get_serializer_class(self):
+            if self.action == 'create':
+                return CambioDevolucionCreateSerializer
+            return CambioDevolucionSerializer
     
     def get_queryset(self):
         user = self.request.user

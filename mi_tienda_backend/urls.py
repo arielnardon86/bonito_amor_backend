@@ -6,8 +6,13 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
-    ArancelMetodoTiendaViewSet, FacturaViewSet # AÑADIDO
+    ArancelMetodoTiendaViewSet, FacturaViewSet
 )
+# Importación condicional de CambioDevolucionViewSet
+try:
+    from inventario.views import CambioDevolucionViewSet
+except (ImportError, AttributeError):
+    CambioDevolucionViewSet = None
 from rest_framework_simplejwt.views import TokenRefreshView
 
 
@@ -22,6 +27,9 @@ router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
 router.register(r'compras', CompraViewSet, basename='compras')
 router.register(r'aranceles-tienda', ArancelMetodoTiendaViewSet, basename='aranceles-tienda') # NUEVA RUTA
 router.register(r'facturas', FacturaViewSet, basename='facturas') # NUEVA RUTA
+# Registrar CambioDevolucionViewSet solo si existe (migración aplicada)
+if CambioDevolucionViewSet is not None:
+    router.register(r'cambios-devoluciones', CambioDevolucionViewSet, basename='cambios-devoluciones') # NUEVA RUTA
 
 
 urlpatterns = [
