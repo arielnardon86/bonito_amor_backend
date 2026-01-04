@@ -313,52 +313,42 @@ class VentaViewSet(viewsets.ModelViewSet):
         pk = kwargs.get('pk')
         user = request.user
         
+        # Intentar obtener directamente por ID primero (sin filtros de queryset)
         try:
-            # Intentar obtener el objeto usando el método estándar primero
-            instance = self.get_object()
+            instance = Venta.objects.get(pk=pk)
+        except Venta.DoesNotExist:
+            return Response(
+                {'detail': 'No encontrado.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
-            # Si falla, puede ser porque el queryset está filtrado por tienda
-            # Intentar obtener directamente por ID si es una nota de crédito o diferencia pendiente
-            try:
-                instance = Venta.objects.get(pk=pk)
-                
-                # Verificar permisos: solo permitir si es superusuario o si la venta pertenece a su tienda
-                if not user.is_superuser:
-                    if not user.tienda or instance.tienda != user.tienda:
-                        return Response(
-                            {'detail': 'No encontrado.'},
-                            status=status.HTTP_404_NOT_FOUND
-                        )
-                
+            logger.error(f"Error al obtener venta en retrieve: {str(e)}", exc_info=True)
+            return Response(
+                {'detail': 'Error al obtener la venta.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Verificar permisos básicos
+        if not user.is_superuser:
+            if not user.tienda or instance.tienda != user.tienda:
                 # Si es una nota de crédito o diferencia pendiente relacionada con cambio/devolución, permitir acceso
                 if instance.metodo_pago in ['Nota de Crédito', 'Pendiente']:
-                    # Verificar si está relacionada con un cambio/devolución
                     cambio_nota_credito = instance.nota_credito_origen.first()
                     cambio_diferencia = instance.cambio_devolucion_diferencia.first()
                     
+                    # Si está relacionada con cambio/devolución, permitir acceso aunque sea de otra tienda
+                    # (esto es necesario porque el cambio puede haberse procesado desde otra tienda)
                     if cambio_nota_credito or cambio_diferencia:
                         serializer = self.get_serializer(instance)
                         return Response(serializer.data)
-                    else:
-                        # Si no está relacionada con cambio/devolución, verificar permisos normales
-                        if not user.is_superuser and (not user.tienda or instance.tienda != user.tienda):
-                            return Response(
-                                {'detail': 'No encontrado.'},
-                                status=status.HTTP_404_NOT_FOUND
-                            )
-            except Venta.DoesNotExist:
+                
+                # Si no es nota de crédito relacionada o no tiene permisos, negar acceso
                 return Response(
                     {'detail': 'No encontrado.'},
                     status=status.HTTP_404_NOT_FOUND
                 )
-            except Exception as ex:
-                logger.error(f"Error en retrieve de VentaViewSet: {str(ex)}", exc_info=True)
-                return Response(
-                    {'detail': 'Error al obtener la venta.'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
         
-        # Para otras ventas, usar el comportamiento estándar
+        # Para otras ventas o usuarios con permisos, usar el comportamiento estándar
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
