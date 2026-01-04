@@ -56,37 +56,54 @@ def _get_cambio_devolucion_models():
     
     try:
         from django.apps import apps
-        # Verificar que las tablas existen
-        from django.db import connection
-        with connection.cursor() as cursor:
-            if connection.vendor == 'postgresql':
-                cursor.execute("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name IN ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')
-                """)
-                tables = [row[0] for row in cursor.fetchall()]
-            else:
-                table_names = connection.introspection.table_names()
-                tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
-            
-            if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
-                try:
-                    CambioDevolucion = apps.get_model('inventario', 'CambioDevolucion')
-                    DetalleCambioDevolucion = apps.get_model('inventario', 'DetalleCambioDevolucion')
-                    logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion obtenidos dinámicamente")
-                    return CambioDevolucion, DetalleCambioDevolucion
-                except LookupError:
-                    # Si apps.get_model falla, intentar importar directamente
+        
+        # Primero intentar obtener con apps.get_model()
+        try:
+            CambioDevolucion = apps.get_model('inventario', 'CambioDevolucion')
+            DetalleCambioDevolucion = apps.get_model('inventario', 'DetalleCambioDevolucion')
+            logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion obtenidos con apps.get_model()")
+            return CambioDevolucion, DetalleCambioDevolucion
+        except LookupError as le:
+            logger.warning(f"⚠️ apps.get_model() falló: {le}")
+            # Si apps.get_model falla, verificar que las tablas existen y luego intentar importar directamente
+            from django.db import connection
+            with connection.cursor() as cursor:
+                if connection.vendor == 'postgresql':
+                    cursor.execute("""
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name IN ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')
+                    """)
+                    tables = [row[0] for row in cursor.fetchall()]
+                else:
+                    table_names = connection.introspection.table_names()
+                    tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
+                
+                if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
+                    logger.info("✅ Tablas encontradas en BD, intentando importar directamente desde models.py")
+                    # Intentar importar directamente desde models.py
                     try:
-                        from .models import CambioDevolucion, DetalleCambioDevolucion
-                        logger.info("✅ Modelos importados directamente como fallback")
+                        import importlib
+                        import inventario.models as models_module
+                        # Forzar recarga del módulo models si es necesario
+                        importlib.reload(models_module)
+                        from inventario.models import CambioDevolucion, DetalleCambioDevolucion
+                        logger.info("✅ Modelos importados directamente desde models.py")
                         return CambioDevolucion, DetalleCambioDevolucion
                     except ImportError as ie:
-                        logger.warning(f"⚠️ No se pudieron importar los modelos: {ie}")
-            else:
-                logger.warning(f"⚠️ Tablas no encontradas. Ejecuta: python manage.py migrate inventario 0013")
+                        logger.error(f"❌ Error importando modelos desde models.py: {ie}", exc_info=True)
+                        # Verificar si los modelos están definidos en el módulo
+                        if hasattr(models_module, 'CambioDevolucion'):
+                            CambioDevolucion = getattr(models_module, 'CambioDevolucion')
+                            logger.info("✅ CambioDevolucion encontrado como atributo del módulo")
+                        if hasattr(models_module, 'DetalleCambioDevolucion'):
+                            DetalleCambioDevolucion = getattr(models_module, 'DetalleCambioDevolucion')
+                            logger.info("✅ DetalleCambioDevolucion encontrado como atributo del módulo")
+                        if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+                            return CambioDevolucion, DetalleCambioDevolucion
+                else:
+                    logger.warning(f"⚠️ Tablas no encontradas en BD. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
     except Exception as e:
         logger.error(f"❌ Error obteniendo modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
     
