@@ -1357,12 +1357,16 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
 # Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+    # Crear un serializer temporal para evitar AssertionError de DRF
+    from rest_framework import serializers as drf_serializers
+    class _TempSerializer(drf_serializers.Serializer):
+        pass
+    
     class CambioDevolucionViewSet(viewsets.ModelViewSet):
         """ViewSet para gestionar cambios y devoluciones"""
         permission_classes = [permissions.IsAuthenticated]
-        # Definir un serializer temporal para evitar AssertionError
-        # get_serializer_class() lo reemplazará con el correcto
-        serializer_class = None
+        # Usar un serializer temporal, get_serializer_class() lo reemplazará con el correcto
+        serializer_class = _TempSerializer
         
         def get_serializer_class(self):
             # Intentar obtener los serializers reales, reimportando si es necesario
