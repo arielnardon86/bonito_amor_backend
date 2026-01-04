@@ -1499,54 +1499,54 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 subtotal_devuelto = Decimal('0.00')
                 subtotal_nuevo = Decimal('0.00')
                 
-                if detalle_venta_original:
-                # Calcular precio ajustado considerando descuentos/recargos de la venta original
-                precio_unitario_original = detalle_venta_original.precio_unitario
+                    if detalle_venta_original:
+                    # Calcular precio ajustado considerando descuentos/recargos de la venta original
+                    precio_unitario_original = detalle_venta_original.precio_unitario
                 
                 # Calcular factor de ajuste si hay descuento/recargo porcentual
-                adjustment_factor = Decimal('1.0')
-                venta_original_obj = venta_original
+                    adjustment_factor = Decimal('1.0')
+                    venta_original_obj = venta_original
                 
-                if venta_original_obj.descuento_porcentaje and venta_original_obj.descuento_porcentaje > 0:
-                adjustment_factor = Decimal('1.0') - (venta_original_obj.descuento_porcentaje / Decimal('100'))
-                elif venta_original_obj.recargo_porcentaje and venta_original_obj.recargo_porcentaje > 0:
-                adjustment_factor = Decimal('1.0') + (venta_original_obj.recargo_porcentaje / Decimal('100'))
+                    if venta_original_obj.descuento_porcentaje and venta_original_obj.descuento_porcentaje > 0:
+                    adjustment_factor = Decimal('1.0') - (venta_original_obj.descuento_porcentaje / Decimal('100'))
+                    elif venta_original_obj.recargo_porcentaje and venta_original_obj.recargo_porcentaje > 0:
+                    adjustment_factor = Decimal('1.0') + (venta_original_obj.recargo_porcentaje / Decimal('100'))
                 
                 # Si el ajuste es por monto, calcular proporcionalmente
-                is_amount_adjustment = (venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0) or \
+                    is_amount_adjustment = (venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0) or \
                 (venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0)
                 
-                if is_amount_adjustment:
+                    if is_amount_adjustment:
                 # Calcular el subtotal original de la venta (suma de todos los detalles no anulados)
-                subtotal_original_venta = sum(
+                    subtotal_original_venta = sum(
                 det.precio_unitario * det.cantidad 
-                for det in venta_original_obj.detalles.all() 
-                if not det.anulado_individualmente
+                    for det in venta_original_obj.detalles.all() 
+                    if not det.anulado_individualmente
                 )
                 
                 # Calcular el total ajustado
-                total_ajustado = subtotal_original_venta
-                if venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0:
-                total_ajustado = subtotal_original_venta - venta_original_obj.descuento_monto
-                elif venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0:
-                total_ajustado = subtotal_original_venta + venta_original_obj.recargo_monto
+                    total_ajustado = subtotal_original_venta
+                    if venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0:
+                    total_ajustado = subtotal_original_venta - venta_original_obj.descuento_monto
+                    elif venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0:
+                    total_ajustado = subtotal_original_venta + venta_original_obj.recargo_monto
                 
                 # Calcular el factor de proporción
-                if subtotal_original_venta > 0:
-                factor_proporcion = total_ajustado / subtotal_original_venta
-                precio_unitario_devuelto = precio_unitario_original * factor_proporcion
+                    if subtotal_original_venta > 0:
+                    factor_proporcion = total_ajustado / subtotal_original_venta
+                    precio_unitario_devuelto = precio_unitario_original * factor_proporcion
                 else:
-                precio_unitario_devuelto = precio_unitario_original
+                    precio_unitario_devuelto = precio_unitario_original
                 else:
                 # Si es porcentual, aplicar el factor directamente
-                precio_unitario_devuelto = precio_unitario_original * adjustment_factor
+                    precio_unitario_devuelto = precio_unitario_original * adjustment_factor
                 
-                subtotal_devuelto = precio_unitario_devuelto * cantidad
-                monto_devolucion += subtotal_devuelto
+                    subtotal_devuelto = precio_unitario_devuelto * cantidad
+                    monto_devolucion += subtotal_devuelto
                 
-                if producto_nuevo and precio_unitario_nuevo:
-                subtotal_nuevo = precio_unitario_nuevo * cantidad
-                monto_nuevo += subtotal_nuevo
+                    if producto_nuevo and precio_unitario_nuevo:
+                    subtotal_nuevo = precio_unitario_nuevo * cantidad
+                    monto_nuevo += subtotal_nuevo
                 
                 # Crear detalle del cambio/devolución
                 DetalleCambioDevolucion.objects.create(
