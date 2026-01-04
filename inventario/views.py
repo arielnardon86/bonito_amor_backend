@@ -40,9 +40,14 @@ except ImportError:
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
 # Importación condicional para CambioDevolucion
-# Definir como None por ahora, se obtendrán dinámicamente cuando se necesiten
-CambioDevolucion = None
-DetalleCambioDevolucion = None
+# Intentar importar directamente - si falla, los modelos no están disponibles
+try:
+    from .models import CambioDevolucion, DetalleCambioDevolucion
+    logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion importados directamente")
+except ImportError as e:
+    logger.warning(f"⚠️ No se pudieron importar CambioDevolucion y DetalleCambioDevolucion: {e}")
+    CambioDevolucion = None
+    DetalleCambioDevolucion = None
 
 def _get_cambio_devolucion_models():
     """
