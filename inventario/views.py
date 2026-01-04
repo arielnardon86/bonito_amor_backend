@@ -1341,18 +1341,21 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
     # Verificar que los serializers reales estén disponibles (no los dummy)
     # Los serializers dummy son serializers.Serializer (sin Meta.model), mientras que los reales son ModelSerializer
     from rest_framework import serializers as drf_serializers
+    _serializers_available = False
     try:
-        _serializers_available = (
-            CambioDevolucionSerializer is not None and
-            CambioDevolucionCreateSerializer is not None and
-            issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer) and
-            issubclass(CambioDevolucionCreateSerializer, drf_serializers.ModelSerializer) and
-            hasattr(CambioDevolucionSerializer, 'Meta') and
-            hasattr(CambioDevolucionSerializer.Meta, 'model') and
-            CambioDevolucionSerializer.Meta.model == CambioDevolucion
-        )
-    except (TypeError, AttributeError):
+        if (CambioDevolucionSerializer is not None and
+            CambioDevolucionCreateSerializer is not None):
+            # Verificar que son ModelSerializer, no Serializer dummy
+            if (issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer) and
+                issubclass(CambioDevolucionCreateSerializer, drf_serializers.ModelSerializer)):
+                # Verificar que tienen Meta.model correcto
+                if (hasattr(CambioDevolucionSerializer, 'Meta') and
+                    hasattr(CambioDevolucionSerializer.Meta, 'model') and
+                    CambioDevolucionSerializer.Meta.model == CambioDevolucion):
+                    _serializers_available = True
+    except (TypeError, AttributeError) as e:
         # Si hay algún error en la verificación, asumir que no están disponibles
+        logger.warning(f"Error verificando serializers de CambioDevolucion: {e}")
         _serializers_available = False
     
     if _serializers_available:
