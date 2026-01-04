@@ -57,12 +57,31 @@ from .serializers import (
     ArancelMetodoTiendaCreateSerializer
 )
 # Importación condicional de serializers de CambioDevolucion
+# Primero importar normalmente
 try:
     from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
 except (ImportError, AttributeError):
     CambioDevolucionSerializer = None
     CambioDevolucionCreateSerializer = None
     DetalleCambioDevolucionSerializer = None
+
+# Si los modelos existen después de la importación, verificar y potencialmente forzar reimportación
+if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+    from rest_framework import serializers as drf_serializers
+    try:
+        # Verificar si los serializers son dummy (Serializer) en lugar de reales (ModelSerializer)
+        if (CambioDevolucionSerializer is not None and
+            not issubclass(CambioDevolucionSerializer, drf_serializers.ModelSerializer)):
+            # Los serializers son dummy, necesitamos forzar reimportación
+            logger.warning("Serializers de CambioDevolucion son dummy, forzando reimportación...")
+            import importlib
+            import inventario.serializers as serializers_module
+            importlib.reload(serializers_module)
+            # Reimportar después del reload
+            from inventario.serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
+            logger.info("✅ Serializers de CambioDevolucion reimportados correctamente")
+    except (TypeError, AttributeError, ImportError) as e:
+        logger.warning(f"Error al verificar/reimportar serializers: {e}")
 # Importar modelos de facturación
 from .models import Factura
 from .services.facturacion_service import FacturacionService
