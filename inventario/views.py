@@ -57,23 +57,12 @@ from .serializers import (
     ArancelMetodoTiendaCreateSerializer
 )
 # Importación condicional de serializers de CambioDevolucion
-# Nota: Si los modelos existen, forzar reimportación para obtener los serializers reales
-CambioDevolucionSerializer = None
-CambioDevolucionCreateSerializer = None
-DetalleCambioDevolucionSerializer = None
 try:
-    # Si los modelos existen, intentar importar los serializers
-    if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
-        # Forzar reimportación del módulo serializers para obtener los serializers reales
-        import importlib
-        import inventario.serializers as serializers_module
-        importlib.reload(serializers_module)
-        from inventario.serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
-    else:
-        # Si los modelos no existen, intentar importar (puede que sean dummy)
-        from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
+    from .serializers import CambioDevolucionSerializer, CambioDevolucionCreateSerializer, DetalleCambioDevolucionSerializer
 except (ImportError, AttributeError):
-    pass  # Ya inicializados como None
+    CambioDevolucionSerializer = None
+    CambioDevolucionCreateSerializer = None
+    DetalleCambioDevolucionSerializer = None
 # Importar modelos de facturación
 from .models import Factura
 from .services.facturacion_service import FacturacionService
@@ -1707,16 +1696,6 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             def list(self, request, *args, **kwargs):
                 close_old_connections()
                 return super().list(request, *args, **kwargs)
-    else:
-        # Si los serializers no están disponibles, crear un ViewSet dummy
-        class CambioDevolucionViewSet(viewsets.ViewSet):
-            permission_classes = [permissions.IsAuthenticated]
-            def list(self, request):
-                from django.core.exceptions import ImproperlyConfigured
-                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
-            def create(self, request):
-                from django.core.exceptions import ImproperlyConfigured
-                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
 else:
     # Si los modelos no existen, crear un ViewSet dummy
     class CambioDevolucionViewSet(viewsets.ViewSet):
