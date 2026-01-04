@@ -1408,8 +1408,8 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             
             # Si llegamos aquí, los serializers no están disponibles
             raise ImportError("CambioDevolucion serializers not available. Please restart the server after running migrations.")
-            
-            def get_queryset(self):
+        
+        def get_queryset(self):
                 user = self.request.user
                 queryset = CambioDevolucion.objects.all().select_related(
                     'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
