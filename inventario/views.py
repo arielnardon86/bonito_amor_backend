@@ -1341,6 +1341,8 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
     class CambioDevolucionViewSet(viewsets.ModelViewSet):
         """ViewSet para gestionar cambios y devoluciones"""
         permission_classes = [permissions.IsAuthenticated]
+        # Definir serializer_class por defecto para evitar el error de AssertionError
+        serializer_class = CambioDevolucionSerializer if CambioDevolucionSerializer is not None else None
         
         def get_serializer_class(self):
             # Verificar que los serializers estén disponibles y sean ModelSerializer (no dummy)
