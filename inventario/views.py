@@ -1618,7 +1618,7 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             
             # Retornar el objeto creado para que el método create() pueda usarlo
             return cambio_devolucion
-    
+        
         @action(detail=True, methods=['get'])
         def obtener_venta_diferencia(self, request, pk=None):
             """
