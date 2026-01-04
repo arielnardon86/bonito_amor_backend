@@ -1339,12 +1339,13 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 # Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
     # Verificar que los serializers reales estén disponibles (no los dummy)
+    # Los serializers dummy son serializers.Serializer, mientras que los reales son ModelSerializer
     _serializers_available = (
         CambioDevolucionSerializer is not None and
         CambioDevolucionCreateSerializer is not None and
         hasattr(CambioDevolucionSerializer, 'Meta') and
         hasattr(CambioDevolucionSerializer.Meta, 'model') and
-        CambioDevolucionSerializer.Meta.model is not None
+        CambioDevolucionSerializer.Meta.model == CambioDevolucion
     )
     
     if _serializers_available:
