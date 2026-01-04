@@ -40,11 +40,24 @@ except ImportError:
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
+# Verificar si los modelos están disponibles verificando si las tablas existen en la base de datos
+CambioDevolucion = None
+DetalleCambioDevolucion = None
 try:
-    from .models import CambioDevolucion, DetalleCambioDevolucion
-except ImportError:
-    CambioDevolucion = None
-    DetalleCambioDevolucion = None
+    from .models import CambioDevolucion as CambioDevolucionModel, DetalleCambioDevolucion as DetalleCambioDevolucionModel
+    # Verificar que los modelos realmente tienen tablas en la base de datos
+    from django.db import connection
+    table_names = connection.introspection.table_names()
+    if 'inventario_cambiodevolucion' in table_names and 'inventario_detallecambiodevolucion' in table_names:
+        CambioDevolucion = CambioDevolucionModel
+        DetalleCambioDevolucion = DetalleCambioDevolucionModel
+        logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion disponibles (tablas existen)")
+    else:
+        logger.warning("⚠️ Modelos CambioDevolucion/DetalleCambioDevolucion encontrados pero las tablas no existen en la BD. Ejecuta: python manage.py migrate inventario 0013")
+except ImportError as e:
+    logger.warning(f"⚠️ No se pudieron importar los modelos CambioDevolucion/DetalleCambioDevolucion: {e}")
+except Exception as e:
+    logger.error(f"❌ Error verificando modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
 from django.core.exceptions import ObjectDoesNotExist 
 # CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
