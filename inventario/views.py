@@ -1488,11 +1488,11 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 
                 # Obtener detalle de venta original si aplica
                 if detalle_venta_original_id:
-                detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
+                    detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
                 
                 # Obtener producto nuevo si aplica
                 if producto_nuevo_id:
-                producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
+                    producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
                 
                 # Calcular precios y subtotales
                 precio_unitario_devuelto = None
