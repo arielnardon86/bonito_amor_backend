@@ -1395,7 +1395,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # Datos de la factura (mover punto de venta y número más abajo, no justo después del nombre)
         # Primero mostrar fecha
         story.append(Paragraph(f"<b>Fecha de Emisión:</b> {factura.fecha_emision.strftime('%d/%m/%Y %H:%M')}", normal_style))
-        # Generar código de barras de 13 dígitos desde el UUID de la venta (mismo algoritmo que frontend)
+        # Generar código numérico de 13 dígitos desde el UUID de la venta (mismo que lee el código de barras)
         venta_id_sin_guiones = str(venta.id).replace('-', '')
         hash_num = 0
         for char in venta_id_sin_guiones:
@@ -1405,9 +1405,9 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # Calcular dígito de control para EAN13
         suma = sum(int(codigo_base[i]) * (1 if i % 2 == 0 else 3) for i in range(12))
         checksum = (10 - (suma % 10)) % 10
-        codigo_barras = codigo_base + str(checksum)
-        # Mostrar código de barras de 13 dígitos debajo de la fecha
-        story.append(Paragraph(f"<b>ID de Venta:</b> {codigo_barras}", normal_style))
+        codigo_numerico = codigo_base + str(checksum)
+        # Mostrar código numérico de 13 dígitos debajo de la fecha (mismo que lee el código de barras)
+        story.append(Paragraph(f"<b>ID de Venta:</b> {codigo_numerico}", normal_style))
         # Mostrar punto de venta y número juntos en una línea más abajo
         story.append(Paragraph(f"<b>Comprobante:</b> {factura.punto_venta:04d}-{factura.numero_comprobante:08d}", normal_style))
         if factura.cae:
