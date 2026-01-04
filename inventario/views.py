@@ -1367,325 +1367,325 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             return queryset
         
         def create(self, request, *args, **kwargs):
-        """Sobrescribir create para devolver el objeto con el serializer completo"""
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        # Llamar a perform_create que retorna el objeto creado
-        cambio_devolucion = self.perform_create(serializer)
-        
-        # Refrescar para asegurar que todas las relaciones estén cargadas
-        cambio_devolucion.refresh_from_db()
-        
-        # Usar el serializer completo para la respuesta
-        response_serializer = CambioDevolucionSerializer(cambio_devolucion)
-        headers = self.get_success_headers(response_serializer.data)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-    
-    def perform_create(self, serializer):
-        """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
-        validated_data = serializer.validated_data
-        venta_original = validated_data['venta_original']
-        detalles_data = validated_data['detalles']
-        tipo = validated_data.get('tipo', 'CAMBIO')
-        motivo = validated_data.get('motivo', '')
-        
-        # Verificar permisos
-        user = self.request.user
-        if not user.is_superuser and user.tienda != venta_original.tienda:
-            raise serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
-        
-        # Calcular montos
-        monto_devolucion = Decimal('0.00')
-        monto_nuevo = Decimal('0.00')
-        
-        # Crear el cambio/devolución
-        cambio_devolucion = CambioDevolucion.objects.create(
-            venta_original=venta_original,
-            tienda=venta_original.tienda,
-            usuario=user,
-            tipo=tipo,
-            motivo=motivo,
-            estado='PROCESADO'
-        )
-        
-        # Procesar cada detalle
-        for detalle_data in detalles_data:
-            accion = detalle_data['accion']
-            cantidad = detalle_data['cantidad']
-            detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
-            producto_nuevo_id = detalle_data.get('producto_nuevo_id')
-            precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
+            """Sobrescribir create para devolver el objeto con el serializer completo"""
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
             
-            detalle_venta_original = None
-            producto_nuevo = None
+            # Llamar a perform_create que retorna el objeto creado
+            cambio_devolucion = self.perform_create(serializer)
             
-            # Obtener detalle de venta original si aplica
-            if detalle_venta_original_id:
-                detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
+            # Refrescar para asegurar que todas las relaciones estén cargadas
+            cambio_devolucion.refresh_from_db()
             
-            # Obtener producto nuevo si aplica
-            if producto_nuevo_id:
-                producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
+            # Usar el serializer completo para la respuesta
+            response_serializer = CambioDevolucionSerializer(cambio_devolucion)
+            headers = self.get_success_headers(response_serializer.data)
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        
+        def perform_create(self, serializer):
+            """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
+            validated_data = serializer.validated_data
+            venta_original = validated_data['venta_original']
+            detalles_data = validated_data['detalles']
+            tipo = validated_data.get('tipo', 'CAMBIO')
+            motivo = validated_data.get('motivo', '')
             
-            # Calcular precios y subtotales
-            precio_unitario_devuelto = None
-            subtotal_devuelto = Decimal('0.00')
-            subtotal_nuevo = Decimal('0.00')
+            # Verificar permisos
+            user = self.request.user
+            if not user.is_superuser and user.tienda != venta_original.tienda:
+                raise serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
             
-            if detalle_venta_original:
-                # Calcular precio ajustado considerando descuentos/recargos de la venta original
-                precio_unitario_original = detalle_venta_original.precio_unitario
+            # Calcular montos
+            monto_devolucion = Decimal('0.00')
+            monto_nuevo = Decimal('0.00')
+            
+            # Crear el cambio/devolución
+            cambio_devolucion = CambioDevolucion.objects.create(
+                venta_original=venta_original,
+                tienda=venta_original.tienda,
+                usuario=user,
+                tipo=tipo,
+                motivo=motivo,
+                estado='PROCESADO'
+            )
+            
+            # Procesar cada detalle
+            for detalle_data in detalles_data:
+                accion = detalle_data['accion']
+                cantidad = detalle_data['cantidad']
+                detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
+                producto_nuevo_id = detalle_data.get('producto_nuevo_id')
+                precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
                 
-                # Calcular factor de ajuste si hay descuento/recargo porcentual
-                adjustment_factor = Decimal('1.0')
-                venta_original_obj = venta_original
+                detalle_venta_original = None
+                producto_nuevo = None
                 
-                if venta_original_obj.descuento_porcentaje and venta_original_obj.descuento_porcentaje > 0:
-                    adjustment_factor = Decimal('1.0') - (venta_original_obj.descuento_porcentaje / Decimal('100'))
-                elif venta_original_obj.recargo_porcentaje and venta_original_obj.recargo_porcentaje > 0:
-                    adjustment_factor = Decimal('1.0') + (venta_original_obj.recargo_porcentaje / Decimal('100'))
+                # Obtener detalle de venta original si aplica
+                if detalle_venta_original_id:
+                    detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
                 
-                # Si el ajuste es por monto, calcular proporcionalmente
-                is_amount_adjustment = (venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0) or \
-                                       (venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0)
+                # Obtener producto nuevo si aplica
+                if producto_nuevo_id:
+                    producto_nuevo = Producto.objects.get(id=producto_nuevo_id)
                 
-                if is_amount_adjustment:
-                    # Calcular el subtotal original de la venta (suma de todos los detalles no anulados)
-                    subtotal_original_venta = sum(
-                        det.precio_unitario * det.cantidad 
-                        for det in venta_original_obj.detalles.all() 
-                        if not det.anulado_individualmente
-                    )
+                # Calcular precios y subtotales
+                precio_unitario_devuelto = None
+                subtotal_devuelto = Decimal('0.00')
+                subtotal_nuevo = Decimal('0.00')
+                
+                if detalle_venta_original:
+                    # Calcular precio ajustado considerando descuentos/recargos de la venta original
+                    precio_unitario_original = detalle_venta_original.precio_unitario
                     
-                    # Calcular el total ajustado
-                    total_ajustado = subtotal_original_venta
-                    if venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0:
-                        total_ajustado = subtotal_original_venta - venta_original_obj.descuento_monto
-                    elif venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0:
-                        total_ajustado = subtotal_original_venta + venta_original_obj.recargo_monto
+                    # Calcular factor de ajuste si hay descuento/recargo porcentual
+                    adjustment_factor = Decimal('1.0')
+                    venta_original_obj = venta_original
                     
-                    # Calcular el factor de proporción
-                    if subtotal_original_venta > 0:
-                        factor_proporcion = total_ajustado / subtotal_original_venta
-                        precio_unitario_devuelto = precio_unitario_original * factor_proporcion
+                    if venta_original_obj.descuento_porcentaje and venta_original_obj.descuento_porcentaje > 0:
+                        adjustment_factor = Decimal('1.0') - (venta_original_obj.descuento_porcentaje / Decimal('100'))
+                    elif venta_original_obj.recargo_porcentaje and venta_original_obj.recargo_porcentaje > 0:
+                        adjustment_factor = Decimal('1.0') + (venta_original_obj.recargo_porcentaje / Decimal('100'))
+                    
+                    # Si el ajuste es por monto, calcular proporcionalmente
+                    is_amount_adjustment = (venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0) or \
+                                           (venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0)
+                    
+                    if is_amount_adjustment:
+                        # Calcular el subtotal original de la venta (suma de todos los detalles no anulados)
+                        subtotal_original_venta = sum(
+                            det.precio_unitario * det.cantidad 
+                            for det in venta_original_obj.detalles.all() 
+                            if not det.anulado_individualmente
+                        )
+                        
+                        # Calcular el total ajustado
+                        total_ajustado = subtotal_original_venta
+                        if venta_original_obj.descuento_monto and venta_original_obj.descuento_monto > 0:
+                            total_ajustado = subtotal_original_venta - venta_original_obj.descuento_monto
+                        elif venta_original_obj.recargo_monto and venta_original_obj.recargo_monto > 0:
+                            total_ajustado = subtotal_original_venta + venta_original_obj.recargo_monto
+                        
+                        # Calcular el factor de proporción
+                        if subtotal_original_venta > 0:
+                            factor_proporcion = total_ajustado / subtotal_original_venta
+                            precio_unitario_devuelto = precio_unitario_original * factor_proporcion
+                        else:
+                            precio_unitario_devuelto = precio_unitario_original
                     else:
-                        precio_unitario_devuelto = precio_unitario_original
-                else:
-                    # Si es porcentual, aplicar el factor directamente
-                    precio_unitario_devuelto = precio_unitario_original * adjustment_factor
-                
-                subtotal_devuelto = precio_unitario_devuelto * cantidad
-                monto_devolucion += subtotal_devuelto
-            
-            if producto_nuevo and precio_unitario_nuevo:
-                subtotal_nuevo = precio_unitario_nuevo * cantidad
-                monto_nuevo += subtotal_nuevo
-            
-            # Crear detalle del cambio/devolución
-            DetalleCambioDevolucion.objects.create(
-                cambio_devolucion=cambio_devolucion,
-                detalle_venta_original=detalle_venta_original,
-                producto_nuevo=producto_nuevo,
-                accion=accion,
-                cantidad=cantidad,
-                precio_unitario_devuelto=precio_unitario_devuelto,
-                precio_unitario_nuevo=precio_unitario_nuevo,
-                subtotal_devuelto=subtotal_devuelto,
-                subtotal_nuevo=subtotal_nuevo
-            )
-            
-            # Manejar stock
-            if accion == 'DEVOLVER':
-                # Devolver stock del producto original
-                if detalle_venta_original and detalle_venta_original.producto:
-                    producto = detalle_venta_original.producto
-                    producto.stock += cantidad
-                    producto.save()
+                        # Si es porcentual, aplicar el factor directamente
+                        precio_unitario_devuelto = precio_unitario_original * adjustment_factor
                     
-                    # Anular el detalle de venta si se devuelve todo
-                    if cantidad >= detalle_venta_original.cantidad:
-                        detalle_venta_original.anulado_individualmente = True
-                        detalle_venta_original.save()
-                    else:
-                        # Reducir la cantidad del detalle (se podría crear un nuevo detalle con cantidad negativa, pero por ahora solo anulamos)
-                        # En el futuro, se podría implementar una lógica más sofisticada
-                        pass
-            
-            elif accion == 'CAMBIAR':
-                # Devolver stock del producto original
-                if detalle_venta_original and detalle_venta_original.producto:
-                    producto = detalle_venta_original.producto
-                    producto.stock += cantidad
-                    producto.save()
-                    
-                    # Anular el detalle de venta si se cambia todo
-                    if cantidad >= detalle_venta_original.cantidad:
-                        detalle_venta_original.anulado_individualmente = True
-                        detalle_venta_original.save()
+                    subtotal_devuelto = precio_unitario_devuelto * cantidad
+                    monto_devolucion += subtotal_devuelto
                 
-                # Reducir stock del producto nuevo
-                if producto_nuevo:
-                    if producto_nuevo.stock < cantidad:
-                        raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                    producto_nuevo.stock -= cantidad
-                    producto_nuevo.save()
-            
-            elif accion == 'AGREGAR':
-                # Reducir stock del producto nuevo
-                if producto_nuevo:
-                    if producto_nuevo.stock < cantidad:
-                        raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                    producto_nuevo.stock -= cantidad
-                    producto_nuevo.save()
-        
-        # Calcular monto de diferencia
-        monto_diferencia = monto_nuevo - monto_devolucion
-        
-        # Calcular saldo a favor (si monto_devolucion > monto_nuevo)
-        saldo_a_favor = Decimal('0.00')
-        if monto_diferencia < 0:
-            saldo_a_favor = abs(monto_diferencia)
-        
-        cambio_devolucion.monto_devolucion = monto_devolucion
-        cambio_devolucion.monto_nuevo = monto_nuevo
-        cambio_devolucion.monto_diferencia = monto_diferencia
-        cambio_devolucion.saldo_a_favor = saldo_a_favor
-        
-        # Guardar primero el cambio_devolucion para tener el ID
-        cambio_devolucion.save()
-        
-        # Si hay saldo a favor, generar automáticamente recibo/nota de crédito
-        if saldo_a_favor > 0:
-            try:
-                venta_nota_credito = Venta.objects.create(
-                    total=saldo_a_favor,
-                    tienda=venta_original.tienda,
-                    usuario=user,
-                    metodo_pago='Nota de Crédito',
-                    fecha_venta=timezone.now(),
-                    facturada=False,
-                    descuento_monto=saldo_a_favor,  # Se registra como descuento (saldo a favor)
-                    descuento_porcentaje=Decimal('0.00'),
-                    recargo_monto=Decimal('0.00'),
-                    recargo_porcentaje=Decimal('0.00'),
+                if producto_nuevo and precio_unitario_nuevo:
+                    subtotal_nuevo = precio_unitario_nuevo * cantidad
+                    monto_nuevo += subtotal_nuevo
+                
+                # Crear detalle del cambio/devolución
+                DetalleCambioDevolucion.objects.create(
+                    cambio_devolucion=cambio_devolucion,
+                    detalle_venta_original=detalle_venta_original,
+                    producto_nuevo=producto_nuevo,
+                    accion=accion,
+                    cantidad=cantidad,
+                    precio_unitario_devuelto=precio_unitario_devuelto,
+                    precio_unitario_nuevo=precio_unitario_nuevo,
+                    subtotal_devuelto=subtotal_devuelto,
+                    subtotal_nuevo=subtotal_nuevo
                 )
                 
-                # Crear un detalle que indique que es una nota de crédito
-                # Nota: producto=None está permitido porque el modelo tiene null=True, blank=True
-                DetalleVenta.objects.create(
-                    venta=venta_nota_credito,
-                    producto=None,  # No hay producto específico para notas de crédito
-                    cantidad=1,
-                    precio_unitario=saldo_a_favor,
-                    subtotal=saldo_a_favor,
-                    costo_unitario=Decimal('0.00'),
-                )
-                
-                cambio_devolucion.nota_credito_generada = True
-                cambio_devolucion.venta_nota_credito = venta_nota_credito
-                cambio_devolucion.save()  # Guardar la relación con la nota de crédito
-                logger.info(f"✅ Nota de crédito generada automáticamente: {venta_nota_credito.id} por ${saldo_a_favor}")
-            except Exception as e:
-                logger.error(f"Error al generar nota de crédito automática: {str(e)}", exc_info=True)
-                # Re-lanzar la excepción para que el frontend pueda manejarla
-                raise serializers.ValidationError({
-                    "error": f"No se pudo generar la nota de crédito: {str(e)}. Detalles: {repr(e)}"
-                })
-        
-        # Si hay diferencia a pagar, crear venta pendiente para completar desde el flujo normal
-        if monto_diferencia > 0:
-            try:
-                venta_diferencia = Venta.objects.create(
-                    total=monto_diferencia,
-                    tienda=venta_original.tienda,
-                    usuario=user,
-                    metodo_pago='Pendiente',
-                    fecha_venta=timezone.now(),
-                    facturada=False,
-                )
-                
-                cambio_devolucion.diferencia_pendiente = True
-                cambio_devolucion.venta_diferencia_pendiente = venta_diferencia
-                cambio_devolucion.save()  # Guardar la relación con la venta de diferencia
-                logger.info(f"✅ Venta pendiente creada para diferencia: {venta_diferencia.id} por ${monto_diferencia}")
-            except Exception as e:
-                logger.error(f"Error al crear venta pendiente para diferencia: {str(e)}", exc_info=True)
-                # Re-lanzar la excepción para que el frontend pueda manejarla
-                raise serializers.ValidationError({
-                    "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
-                })
-        
-        # Retornar el objeto creado para que el método create() pueda usarlo
-        return cambio_devolucion
-    
-    @action(detail=True, methods=['get'])
-    def obtener_venta_diferencia(self, request, pk=None):
-        """
-        Obtiene la venta pendiente creada para la diferencia a pagar.
-        Esta venta puede ser completada desde el flujo normal de ventas (PuntoVenta.js)
-        """
-        cambio_devolucion = get_object_or_404(CambioDevolucion, pk=pk)
-        
-        if not cambio_devolucion.diferencia_pendiente or not cambio_devolucion.venta_diferencia_pendiente:
-            return Response(
-                {"error": "No hay venta pendiente para la diferencia."},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        venta_serializer = VentaSerializer(cambio_devolucion.venta_diferencia_pendiente)
-        return Response({
-            "venta": venta_serializer.data,
-            "monto_diferencia": cambio_devolucion.monto_diferencia,
-            "message": "Esta venta puede ser completada desde el flujo normal de ventas. Actualiza el método de pago y completa la venta normalmente."
-        })
-    
-    def update(self, request, *args, **kwargs):
-        """Permite actualizar el estado del cambio/devolución (ej: cancelar)"""
-        cambio_devolucion = self.get_object()
-        
-        # Solo permitir actualizar el estado si está en estado PROCESADO
-        if cambio_devolucion.estado == 'CANCELADO':
-            return Response(
-                {"error": "Este cambio/devolución ya está cancelado."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Si se intenta cancelar, revertir cambios de stock
-        nuevo_estado = request.data.get('estado')
-        if nuevo_estado == 'CANCELADO':
-            # Revertir cambios de stock
-            for detalle in cambio_devolucion.detalles.all():
-                if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
-                    # Revertir devolución de stock (restar stock que se había sumado)
-                    if detalle.detalle_venta_original.producto:
-                        producto = detalle.detalle_venta_original.producto
-                        producto.stock -= detalle.cantidad
+                # Manejar stock
+                if accion == 'DEVOLVER':
+                    # Devolver stock del producto original
+                    if detalle_venta_original and detalle_venta_original.producto:
+                        producto = detalle_venta_original.producto
+                        producto.stock += cantidad
                         producto.save()
                         
-                        # Revertir anulación del detalle
-                        if detalle.detalle_venta_original.anulado_individualmente:
-                            detalle.detalle_venta_original.anulado_individualmente = False
-                            detalle.detalle_venta_original.cantidad += detalle.cantidad
-                            detalle.detalle_venta_original.subtotal = detalle.detalle_venta_original.precio_unitario * detalle.detalle_venta_original.cantidad
-                            detalle.detalle_venta_original.save()
+                        # Anular el detalle de venta si se devuelve todo
+                        if cantidad >= detalle_venta_original.cantidad:
+                            detalle_venta_original.anulado_individualmente = True
+                            detalle_venta_original.save()
+                        else:
+                            # Reducir la cantidad del detalle (se podría crear un nuevo detalle con cantidad negativa, pero por ahora solo anulamos)
+                            # En el futuro, se podría implementar una lógica más sofisticada
+                            pass
                 
-                if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
-                    # Revertir reducción de stock (sumar stock que se había restado)
-                    producto = detalle.producto_nuevo
-                    producto.stock += detalle.cantidad
-                    producto.save()
+                elif accion == 'CAMBIAR':
+                    # Devolver stock del producto original
+                    if detalle_venta_original and detalle_venta_original.producto:
+                        producto = detalle_venta_original.producto
+                        producto.stock += cantidad
+                        producto.save()
+                        
+                        # Anular el detalle de venta si se cambia todo
+                        if cantidad >= detalle_venta_original.cantidad:
+                            detalle_venta_original.anulado_individualmente = True
+                            detalle_venta_original.save()
+                    
+                    # Reducir stock del producto nuevo
+                    if producto_nuevo:
+                        if producto_nuevo.stock < cantidad:
+                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                        producto_nuevo.stock -= cantidad
+                        producto_nuevo.save()
+                
+                elif accion == 'AGREGAR':
+                    # Reducir stock del producto nuevo
+                    if producto_nuevo:
+                        if producto_nuevo.stock < cantidad:
+                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                        producto_nuevo.stock -= cantidad
+                        producto_nuevo.save()
             
-            cambio_devolucion.estado = 'CANCELADO'
+            # Calcular monto de diferencia
+            monto_diferencia = monto_nuevo - monto_devolucion
+            
+            # Calcular saldo a favor (si monto_devolucion > monto_nuevo)
+            saldo_a_favor = Decimal('0.00')
+            if monto_diferencia < 0:
+                saldo_a_favor = abs(monto_diferencia)
+            
+            cambio_devolucion.monto_devolucion = monto_devolucion
+            cambio_devolucion.monto_nuevo = monto_nuevo
+            cambio_devolucion.monto_diferencia = monto_diferencia
+            cambio_devolucion.saldo_a_favor = saldo_a_favor
+            
+            # Guardar primero el cambio_devolucion para tener el ID
             cambio_devolucion.save()
             
-            logger.info(f"✅ Cambio/Devolución {cambio_devolucion.id} cancelado. Stock revertido.")
+            # Si hay saldo a favor, generar automáticamente recibo/nota de crédito
+            if saldo_a_favor > 0:
+                try:
+                    venta_nota_credito = Venta.objects.create(
+                        total=saldo_a_favor,
+                        tienda=venta_original.tienda,
+                        usuario=user,
+                        metodo_pago='Nota de Crédito',
+                        fecha_venta=timezone.now(),
+                        facturada=False,
+                        descuento_monto=saldo_a_favor,  # Se registra como descuento (saldo a favor)
+                        descuento_porcentaje=Decimal('0.00'),
+                        recargo_monto=Decimal('0.00'),
+                        recargo_porcentaje=Decimal('0.00'),
+                    )
+                    
+                    # Crear un detalle que indique que es una nota de crédito
+                    # Nota: producto=None está permitido porque el modelo tiene null=True, blank=True
+                    DetalleVenta.objects.create(
+                        venta=venta_nota_credito,
+                        producto=None,  # No hay producto específico para notas de crédito
+                        cantidad=1,
+                        precio_unitario=saldo_a_favor,
+                        subtotal=saldo_a_favor,
+                        costo_unitario=Decimal('0.00'),
+                    )
+                    
+                    cambio_devolucion.nota_credito_generada = True
+                    cambio_devolucion.venta_nota_credito = venta_nota_credito
+                    cambio_devolucion.save()  # Guardar la relación con la nota de crédito
+                    logger.info(f"✅ Nota de crédito generada automáticamente: {venta_nota_credito.id} por ${saldo_a_favor}")
+                except Exception as e:
+                    logger.error(f"Error al generar nota de crédito automática: {str(e)}", exc_info=True)
+                    # Re-lanzar la excepción para que el frontend pueda manejarla
+                    raise serializers.ValidationError({
+                        "error": f"No se pudo generar la nota de crédito: {str(e)}. Detalles: {repr(e)}"
+                    })
             
+            # Si hay diferencia a pagar, crear venta pendiente para completar desde el flujo normal
+            if monto_diferencia > 0:
+                try:
+                    venta_diferencia = Venta.objects.create(
+                        total=monto_diferencia,
+                        tienda=venta_original.tienda,
+                        usuario=user,
+                        metodo_pago='Pendiente',
+                        fecha_venta=timezone.now(),
+                        facturada=False,
+                    )
+                    
+                    cambio_devolucion.diferencia_pendiente = True
+                    cambio_devolucion.venta_diferencia_pendiente = venta_diferencia
+                    cambio_devolucion.save()  # Guardar la relación con la venta de diferencia
+                    logger.info(f"✅ Venta pendiente creada para diferencia: {venta_diferencia.id} por ${monto_diferencia}")
+                except Exception as e:
+                    logger.error(f"Error al crear venta pendiente para diferencia: {str(e)}", exc_info=True)
+                    # Re-lanzar la excepción para que el frontend pueda manejarla
+                    raise serializers.ValidationError({
+                        "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
+                    })
+            
+            # Retornar el objeto creado para que el método create() pueda usarlo
+            return cambio_devolucion
+    
+        @action(detail=True, methods=['get'])
+        def obtener_venta_diferencia(self, request, pk=None):
+            """
+            Obtiene la venta pendiente creada para la diferencia a pagar.
+            Esta venta puede ser completada desde el flujo normal de ventas (PuntoVenta.js)
+            """
+            cambio_devolucion = get_object_or_404(CambioDevolucion, pk=pk)
+            
+            if not cambio_devolucion.diferencia_pendiente or not cambio_devolucion.venta_diferencia_pendiente:
+                return Response(
+                    {"error": "No hay venta pendiente para la diferencia."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            venta_serializer = VentaSerializer(cambio_devolucion.venta_diferencia_pendiente)
             return Response({
-                "message": "Cambio/Devolución cancelado con éxito. Los cambios de stock han sido revertidos.",
-                "estado": "CANCELADO"
+                "venta": venta_serializer.data,
+                "monto_diferencia": cambio_devolucion.monto_diferencia,
+                "message": "Esta venta puede ser completada desde el flujo normal de ventas. Actualiza el método de pago y completa la venta normalmente."
             })
         
+        def update(self, request, *args, **kwargs):
+            """Permite actualizar el estado del cambio/devolución (ej: cancelar)"""
+            cambio_devolucion = self.get_object()
+            
+            # Solo permitir actualizar el estado si está en estado PROCESADO
+            if cambio_devolucion.estado == 'CANCELADO':
+                return Response(
+                    {"error": "Este cambio/devolución ya está cancelado."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Si se intenta cancelar, revertir cambios de stock
+            nuevo_estado = request.data.get('estado')
+            if nuevo_estado == 'CANCELADO':
+                # Revertir cambios de stock
+                for detalle in cambio_devolucion.detalles.all():
+                    if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
+                        # Revertir devolución de stock (restar stock que se había sumado)
+                        if detalle.detalle_venta_original.producto:
+                            producto = detalle.detalle_venta_original.producto
+                            producto.stock -= detalle.cantidad
+                            producto.save()
+                            
+                            # Revertir anulación del detalle
+                            if detalle.detalle_venta_original.anulado_individualmente:
+                                detalle.detalle_venta_original.anulado_individualmente = False
+                                detalle.detalle_venta_original.cantidad += detalle.cantidad
+                                detalle.detalle_venta_original.subtotal = detalle.detalle_venta_original.precio_unitario * detalle.detalle_venta_original.cantidad
+                                detalle.detalle_venta_original.save()
+                    
+                    if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
+                        # Revertir reducción de stock (sumar stock que se había restado)
+                        producto = detalle.producto_nuevo
+                        producto.stock += detalle.cantidad
+                        producto.save()
+                
+                cambio_devolucion.estado = 'CANCELADO'
+                cambio_devolucion.save()
+                
+                logger.info(f"✅ Cambio/Devolución {cambio_devolucion.id} cancelado. Stock revertido.")
+                
+                return Response({
+                    "message": "Cambio/Devolución cancelado con éxito. Los cambios de stock han sido revertidos.",
+                    "estado": "CANCELADO"
+                })
+            
             # Para otros campos, usar el update normal
             return super().update(request, *args, **kwargs)
         
