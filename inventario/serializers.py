@@ -202,6 +202,8 @@ class VentaSerializer(serializers.ModelSerializer):
     
     def get_cambio_devolucion_nota_credito(self, obj):
         """Obtiene el cambio/devolución que generó esta nota de crédito"""
+        if CambioDevolucion is None:
+            return None
         try:
             cambio = obj.nota_credito_origen.first()
             if cambio:
@@ -228,6 +230,8 @@ class VentaSerializer(serializers.ModelSerializer):
     
     def get_cambio_devolucion_diferencia(self, obj):
         """Obtiene el cambio/devolución que generó esta venta de diferencia"""
+        if CambioDevolucion is None:
+            return None
         try:
             cambio = obj.cambio_devolucion_diferencia.first()
             if cambio:
@@ -247,6 +251,8 @@ class VentaSerializer(serializers.ModelSerializer):
     
     def get_es_nota_credito(self, obj):
         """Indica si esta venta es una nota de crédito"""
+        if CambioDevolucion is None:
+            return False
         try:
             return obj.nota_credito_origen.exists()
         except:
@@ -254,6 +260,8 @@ class VentaSerializer(serializers.ModelSerializer):
     
     def get_es_diferencia_pendiente(self, obj):
         """Indica si esta venta es una diferencia pendiente de un cambio/devolución"""
+        if CambioDevolucion is None:
+            return False
         try:
             return obj.cambio_devolucion_diferencia.exists()
         except:
