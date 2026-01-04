@@ -1401,7 +1401,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         
         return response
 
-# Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
+# Siempre definir CambioDevolucionViewSet, pero hacer que verifique los modelos dinámicamente
 # Intentar obtener los modelos dinámicamente - puede que Django no los haya cargado todavía en este punto
 try:
     _CambioDevolucion, _DetalleCambioDevolucion = _get_cambio_devolucion_models()
@@ -1413,7 +1413,7 @@ except Exception as e:
     CambioDevolucion = None
     DetalleCambioDevolucion = None
 
-if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+# Siempre definir el ViewSet real, verificará los modelos dinámicamente cuando se necesiten
     # Crear un serializer temporal para evitar AssertionError de DRF
     from rest_framework import serializers as drf_serializers
     class _TempSerializer(drf_serializers.Serializer):
