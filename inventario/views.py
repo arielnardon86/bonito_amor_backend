@@ -1338,22 +1338,45 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
 # Solo definir CambioDevolucionViewSet si los modelos existen (migración aplicada)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
-    class CambioDevolucionViewSet(viewsets.ModelViewSet):
-        """ViewSet para gestionar cambios y devoluciones"""
+    # Verificar que los serializers reales estén disponibles (no los dummy)
+    _serializers_available = (
+        CambioDevolucionSerializer is not None and
+        CambioDevolucionCreateSerializer is not None and
+        hasattr(CambioDevolucionSerializer, 'Meta') and
+        hasattr(CambioDevolucionSerializer.Meta, 'model') and
+        CambioDevolucionSerializer.Meta.model is not None
+    )
+    
+    if _serializers_available:
+        class CambioDevolucionViewSet(viewsets.ModelViewSet):
+            """ViewSet para gestionar cambios y devoluciones"""
+            permission_classes = [permissions.IsAuthenticated]
+            serializer_class = CambioDevolucionSerializer  # Serializer por defecto
+            
+            def get_serializer_class(self):
+                if self.action == 'create':
+                    return CambioDevolucionCreateSerializer
+                return CambioDevolucionSerializer
+    else:
+        # Si los serializers no están disponibles, crear un ViewSet dummy
+        class CambioDevolucionViewSet(viewsets.ViewSet):
+            permission_classes = [permissions.IsAuthenticated]
+            def list(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
+            def create(self, request):
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion serializers not available. Please run migrations.")
+else:
+    # Si los modelos no existen, crear un ViewSet dummy
+    class CambioDevolucionViewSet(viewsets.ViewSet):
         permission_classes = [permissions.IsAuthenticated]
-        # Definir serializer_class por defecto para evitar el error de AssertionError
-        serializer_class = CambioDevolucionSerializer if CambioDevolucionSerializer is not None else None
-        
-        def get_serializer_class(self):
-            # Verificar que los serializers estén disponibles y sean ModelSerializer (no dummy)
-            if (CambioDevolucionCreateSerializer is None or 
-                CambioDevolucionSerializer is None or
-                not hasattr(CambioDevolucionSerializer, 'Meta') or
-                not hasattr(CambioDevolucionCreateSerializer, 'Meta')):
-                raise ImportError("CambioDevolucion serializers not available. Please run migrations.")
-            if self.action == 'create':
-                return CambioDevolucionCreateSerializer
-            return CambioDevolucionSerializer
+        def list(self, request):
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
+        def create(self, request):
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
         
         def get_queryset(self):
             user = self.request.user
