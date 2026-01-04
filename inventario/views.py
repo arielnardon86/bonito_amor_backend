@@ -1474,9 +1474,9 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                     motivo=motivo,
                     estado='PROCESADO'
                 )
-                
-                # Procesar cada detalle
-                for detalle_data in detalles_data:
+            
+            # Procesar cada detalle
+            for detalle_data in detalles_data:
                     accion = detalle_data['accion']
                     cantidad = detalle_data['cantidad']
                     detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
