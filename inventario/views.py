@@ -1343,7 +1343,11 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         permission_classes = [permissions.IsAuthenticated]
         
         def get_serializer_class(self):
-            if CambioDevolucionCreateSerializer is None or CambioDevolucionSerializer is None:
+            # Verificar que los serializers estén disponibles y sean ModelSerializer (no dummy)
+            if (CambioDevolucionCreateSerializer is None or 
+                CambioDevolucionSerializer is None or
+                not hasattr(CambioDevolucionSerializer, 'Meta') or
+                not hasattr(CambioDevolucionCreateSerializer, 'Meta')):
                 raise ImportError("CambioDevolucion serializers not available. Please run migrations.")
             if self.action == 'create':
                 return CambioDevolucionCreateSerializer
