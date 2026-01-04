@@ -1410,29 +1410,29 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             raise ImportError("CambioDevolucion serializers not available. Please restart the server after running migrations.")
         
         def get_queryset(self):
-                user = self.request.user
-                queryset = CambioDevolucion.objects.all().select_related(
-                    'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
-                ).prefetch_related('detalles').order_by('-fecha_creacion')
-                
-                tienda_slug = self.request.query_params.get('tienda_slug', None)
-                
-                if not user.is_superuser:
-                    if user.tienda:
-                        queryset = queryset.filter(tienda=user.tienda)
-                    else:
-                        return CambioDevolucion.objects.none()
-                elif tienda_slug:
-                    queryset = queryset.filter(tienda__nombre=tienda_slug)
-                
-                # Filtrar por venta original
-                venta_id = self.request.query_params.get('venta_original', None)
-                if venta_id:
-                    queryset = queryset.filter(venta_original_id=venta_id)
-                
-                return queryset
+            user = self.request.user
+            queryset = CambioDevolucion.objects.all().select_related(
+                'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
+            ).prefetch_related('detalles').order_by('-fecha_creacion')
             
-            def create(self, request, *args, **kwargs):
+            tienda_slug = self.request.query_params.get('tienda_slug', None)
+            
+            if not user.is_superuser:
+                if user.tienda:
+                    queryset = queryset.filter(tienda=user.tienda)
+                else:
+                    return CambioDevolucion.objects.none()
+            elif tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+            
+            # Filtrar por venta original
+            venta_id = self.request.query_params.get('venta_original', None)
+            if venta_id:
+                queryset = queryset.filter(venta_original_id=venta_id)
+            
+            return queryset
+        
+        def create(self, request, *args, **kwargs):
                 """Sobrescribir create para devolver el objeto con el serializer completo"""
                 serializer = self.get_serializer(data=request.data)
                 serializer.is_valid(raise_exception=True)
