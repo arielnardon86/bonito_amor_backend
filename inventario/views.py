@@ -94,6 +94,7 @@ def _get_cambio_devolucion_models():
                     except ImportError as ie:
                         logger.error(f"❌ Error importando modelos desde models.py: {ie}", exc_info=True)
                         # Verificar si los modelos están definidos en el módulo
+                        # Verificar si los modelos están definidos como atributos del módulo
                         if hasattr(models_module, 'CambioDevolucion'):
                             CambioDevolucion = getattr(models_module, 'CambioDevolucion')
                             logger.info("✅ CambioDevolucion encontrado como atributo del módulo")
@@ -101,6 +102,17 @@ def _get_cambio_devolucion_models():
                             DetalleCambioDevolucion = getattr(models_module, 'DetalleCambioDevolucion')
                             logger.info("✅ DetalleCambioDevolucion encontrado como atributo del módulo")
                         if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+                            # Intentar registrar los modelos en Django si aún no están registrados
+                            try:
+                                from django.apps import apps as django_apps
+                                app_config = django_apps.get_app_config('inventario')
+                                if not hasattr(app_config, 'models_module') or app_config.models_module is None:
+                                    app_config.models_module = models_module
+                                # Forzar registro de modelos
+                                app_config.ready()
+                                logger.info("✅ Modelos registrados manualmente en Django")
+                            except Exception as reg_error:
+                                logger.warning(f"⚠️ No se pudieron registrar modelos manualmente: {reg_error}")
                             return CambioDevolucion, DetalleCambioDevolucion
                 else:
                     logger.warning(f"⚠️ Tablas no encontradas en BD. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
