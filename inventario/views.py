@@ -1447,9 +1447,9 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 response_serializer = CambioDevolucionSerializer(cambio_devolucion)
                 headers = self.get_success_headers(response_serializer.data)
                 return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-            
-            def perform_create(self, serializer):
-                """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
+        
+        def perform_create(self, serializer):
+            """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
                 validated_data = serializer.validated_data
                 venta_original = validated_data['venta_original']
                 detalles_data = validated_data['detalles']
