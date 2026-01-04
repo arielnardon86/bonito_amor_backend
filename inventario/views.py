@@ -451,27 +451,51 @@ class VentaViewSet(viewsets.ModelViewSet):
                 # Revertir el cambio/devolución completo:
                 # 1. Restaurar stock de productos devueltos (que se habían restado del stock)
                 # 2. Restar stock de productos nuevos que se habían agregado
-                # 3. Marcar el cambio/devolución como cancelado
+                # 3. Restaurar los detalles de venta original que fueron marcados como anulados
+                # 4. Marcar el cambio/devolución como cancelado
                 
                 for detalle_cambio in cambio_devolucion_afectado.detalles.all():
                     if detalle_cambio.accion == 'DEVOLVER':
-                        # Cuando se devolvió un producto, se había restado del stock
-                        # Al anular, debemos volver a agregarlo al stock
-                        if detalle_cambio.detalle_venta_original and detalle_cambio.detalle_venta_original.producto:
-                            producto = detalle_cambio.detalle_venta_original.producto
-                            producto.stock += detalle_cambio.cantidad
-                            producto.save()
-                            logger.info(f"✅ Stock restaurado para producto devuelto: {producto.nombre} (+{detalle_cambio.cantidad})")
+                        # Cuando se devolvió un producto:
+                        # - Se había restado del stock (restaurar)
+                        # - El detalle de venta original fue marcado como anulado (restaurar)
+                        if detalle_cambio.detalle_venta_original:
+                            detalle_venta = detalle_cambio.detalle_venta_original
+                            if detalle_venta.producto:
+                                producto = detalle_venta.producto
+                                producto.stock += detalle_cambio.cantidad
+                                producto.save()
+                                logger.info(f"✅ Stock restaurado para producto devuelto: {producto.nombre} (+{detalle_cambio.cantidad})")
+                            
+                            # Restaurar el detalle de venta original
+                            if detalle_venta.anulado_individualmente:
+                                detalle_venta.anulado_individualmente = False
+                                # Restaurar la cantidad original si se había reducido
+                                detalle_venta.cantidad += detalle_cambio.cantidad
+                                detalle_venta.subtotal = detalle_venta.precio_unitario * detalle_venta.cantidad
+                                detalle_venta.save()
+                                logger.info(f"✅ Detalle de venta original restaurado: {detalle_venta.id}")
                     
                     elif detalle_cambio.accion == 'CAMBIAR':
                         # Cuando se cambió un producto:
                         # - El producto devuelto se había restado del stock (restaurar)
                         # - El producto nuevo se había agregado al stock (restar)
-                        if detalle_cambio.detalle_venta_original and detalle_cambio.detalle_venta_original.producto:
-                            producto_devuelto = detalle_cambio.detalle_venta_original.producto
-                            producto_devuelto.stock += detalle_cambio.cantidad
-                            producto_devuelto.save()
-                            logger.info(f"✅ Stock restaurado para producto devuelto en cambio: {producto_devuelto.nombre} (+{detalle_cambio.cantidad})")
+                        # - El detalle de venta original fue marcado como anulado (restaurar)
+                        if detalle_cambio.detalle_venta_original:
+                            detalle_venta = detalle_cambio.detalle_venta_original
+                            if detalle_venta.producto:
+                                producto_devuelto = detalle_venta.producto
+                                producto_devuelto.stock += detalle_cambio.cantidad
+                                producto_devuelto.save()
+                                logger.info(f"✅ Stock restaurado para producto devuelto en cambio: {producto_devuelto.nombre} (+{detalle_cambio.cantidad})")
+                            
+                            # Restaurar el detalle de venta original
+                            if detalle_venta.anulado_individualmente:
+                                detalle_venta.anulado_individualmente = False
+                                detalle_venta.cantidad += detalle_cambio.cantidad
+                                detalle_venta.subtotal = detalle_venta.precio_unitario * detalle_venta.cantidad
+                                detalle_venta.save()
+                                logger.info(f"✅ Detalle de venta original restaurado en cambio: {detalle_venta.id}")
                         
                         if detalle_cambio.producto_nuevo:
                             producto_nuevo = detalle_cambio.producto_nuevo
@@ -489,6 +513,16 @@ class VentaViewSet(viewsets.ModelViewSet):
                             producto.stock += detalle_cambio.cantidad
                             producto.save()
                             logger.info(f"✅ Stock restaurado para producto agregado: {producto.nombre} (+{detalle_cambio.cantidad})")
+                
+                # Recalcular el total de la venta original
+                venta_original = cambio_devolucion_afectado.venta_original
+                total_recalculado = sum(
+                    d.subtotal for d in venta_original.detalles.all() 
+                    if not d.anulado_individualmente
+                )
+                venta_original.total = total_recalculado
+                venta_original.save()
+                logger.info(f"✅ Total de venta original recalculado: ${total_recalculado}")
                 
                 # Marcar el cambio/devolución como cancelado
                 cambio_devolucion_afectado.estado = 'CANCELADO'
