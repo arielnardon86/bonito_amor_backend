@@ -295,6 +295,13 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     )
     cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
     
+    def to_internal_value(self, data):
+        """Normalizar arancel_aplicado_id antes de la validación: convertir cadena vacía a None"""
+        if isinstance(data, dict) and 'arancel_aplicado_id' in data:
+            if data['arancel_aplicado_id'] == '':
+                data['arancel_aplicado_id'] = None
+        return super().to_internal_value(data)
+    
     class Meta:
         model = Venta
         fields = [
@@ -381,6 +388,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         # Lógica de arancel
         data['arancel_total'] = Decimal('0.00')
         arancel_obj = data.pop('arancel_aplicado_id', None) 
+        
+        # Normalizar: si viene como cadena vacía o None, convertir a None
+        if arancel_obj == '' or arancel_obj is None:
+            arancel_obj = None
 
         metodos_financieros = MetodoPago.objects.filter(es_financiero=True).values_list('nombre', flat=True)
 
