@@ -81,27 +81,11 @@ def _get_cambio_devolucion_models():
                     tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
                 
                 if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
-                    logger.info("✅ Tablas encontradas en BD, intentando importar directamente desde models.py")
-                    # Intentar importar directamente desde models.py (sin recargar el módulo)
-                    try:
-                        from inventario.models import CambioDevolucion, DetalleCambioDevolucion
-                        logger.info("✅ Modelos importados directamente desde models.py")
-                        return CambioDevolucion, DetalleCambioDevolucion
-                    except ImportError as ie:
-                        logger.error(f"❌ Error importando modelos desde models.py: {ie}", exc_info=True)
-                        # Intentar obtener los modelos como atributos del módulo (sin recargar)
-                        try:
-                            import inventario.models as models_module
-                            if hasattr(models_module, 'CambioDevolucion'):
-                                CambioDevolucion = getattr(models_module, 'CambioDevolucion')
-                                logger.info("✅ CambioDevolucion encontrado como atributo del módulo")
-                            if hasattr(models_module, 'DetalleCambioDevolucion'):
-                                DetalleCambioDevolucion = getattr(models_module, 'DetalleCambioDevolucion')
-                                logger.info("✅ DetalleCambioDevolucion encontrado como atributo del módulo")
-                            if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
-                                return CambioDevolucion, DetalleCambioDevolucion
-                        except Exception as attr_error:
-                            logger.error(f"❌ Error obteniendo modelos como atributos: {attr_error}", exc_info=True)
+                    logger.info("✅ Tablas encontradas en BD, pero modelos no están disponibles en Django")
+                    logger.warning("⚠️ Las tablas existen pero los modelos no se pueden importar. Esto puede indicar que los modelos no están definidos en models.py o hay un error de sintaxis.")
+                    # No intentar importar los modelos aquí porque causaría warnings de registro múltiple
+                    # Los modelos no están disponibles, pero las tablas existen
+                    # El código seguirá funcionando sin estos modelos
                 else:
                     logger.warning(f"⚠️ Tablas no encontradas en BD. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
     except Exception as e:
