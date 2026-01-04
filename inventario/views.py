@@ -1705,6 +1705,3 @@ else:
         def create(self, request):
             from django.core.exceptions import ImproperlyConfigured
             raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
-def create(self, request):
-            from django.core.exceptions import ImproperlyConfigured
-            raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations.")
