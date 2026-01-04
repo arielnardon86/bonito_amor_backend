@@ -82,38 +82,26 @@ def _get_cambio_devolucion_models():
                 
                 if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
                     logger.info("✅ Tablas encontradas en BD, intentando importar directamente desde models.py")
-                    # Intentar importar directamente desde models.py
+                    # Intentar importar directamente desde models.py (sin recargar el módulo)
                     try:
-                        import importlib
-                        import inventario.models as models_module
-                        # Forzar recarga del módulo models si es necesario
-                        importlib.reload(models_module)
                         from inventario.models import CambioDevolucion, DetalleCambioDevolucion
                         logger.info("✅ Modelos importados directamente desde models.py")
                         return CambioDevolucion, DetalleCambioDevolucion
                     except ImportError as ie:
                         logger.error(f"❌ Error importando modelos desde models.py: {ie}", exc_info=True)
-                        # Verificar si los modelos están definidos en el módulo
-                        # Verificar si los modelos están definidos como atributos del módulo
-                        if hasattr(models_module, 'CambioDevolucion'):
-                            CambioDevolucion = getattr(models_module, 'CambioDevolucion')
-                            logger.info("✅ CambioDevolucion encontrado como atributo del módulo")
-                        if hasattr(models_module, 'DetalleCambioDevolucion'):
-                            DetalleCambioDevolucion = getattr(models_module, 'DetalleCambioDevolucion')
-                            logger.info("✅ DetalleCambioDevolucion encontrado como atributo del módulo")
-                        if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
-                            # Intentar registrar los modelos en Django si aún no están registrados
-                            try:
-                                from django.apps import apps as django_apps
-                                app_config = django_apps.get_app_config('inventario')
-                                if not hasattr(app_config, 'models_module') or app_config.models_module is None:
-                                    app_config.models_module = models_module
-                                # Forzar registro de modelos
-                                app_config.ready()
-                                logger.info("✅ Modelos registrados manualmente en Django")
-                            except Exception as reg_error:
-                                logger.warning(f"⚠️ No se pudieron registrar modelos manualmente: {reg_error}")
-                            return CambioDevolucion, DetalleCambioDevolucion
+                        # Intentar obtener los modelos como atributos del módulo (sin recargar)
+                        try:
+                            import inventario.models as models_module
+                            if hasattr(models_module, 'CambioDevolucion'):
+                                CambioDevolucion = getattr(models_module, 'CambioDevolucion')
+                                logger.info("✅ CambioDevolucion encontrado como atributo del módulo")
+                            if hasattr(models_module, 'DetalleCambioDevolucion'):
+                                DetalleCambioDevolucion = getattr(models_module, 'DetalleCambioDevolucion')
+                                logger.info("✅ DetalleCambioDevolucion encontrado como atributo del módulo")
+                            if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
+                                return CambioDevolucion, DetalleCambioDevolucion
+                        except Exception as attr_error:
+                            logger.error(f"❌ Error obteniendo modelos como atributos: {attr_error}", exc_info=True)
                 else:
                     logger.warning(f"⚠️ Tablas no encontradas en BD. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
     except Exception as e:
