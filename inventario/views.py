@@ -290,7 +290,19 @@ class VentaViewSet(viewsets.ModelViewSet):
         queryset = Venta.objects.all().order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
-        if not user.is_superuser:
+        # Para usuarios staff (no superuser), solo permitir ver ventas buscadas por ID
+        if user.is_staff and not user.is_superuser:
+            # Solo permitir ver ventas si se busca por ID o código de barras
+            venta_id = self.request.query_params.get('id', None)
+            if not venta_id:
+                # Si no hay ID, retornar queryset vacío (no pueden ver todas las ventas)
+                return Venta.objects.none()
+            # Si hay ID, continuar con el filtro normal (se aplicará más abajo)
+            if user.tienda:
+                queryset = queryset.filter(tienda=user.tienda)
+            else:
+                return Venta.objects.none()
+        elif not user.is_superuser:
             if user.tienda:
                 queryset = queryset.filter(tienda=user.tienda)
             else:
@@ -418,6 +430,13 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
+        # Verificar permisos: solo superusuarios pueden anular ventas
+        if not request.user.is_superuser:
+            return Response(
+                {"error": "No tienes permiso para anular ventas. Solo los superusuarios pueden realizar esta acción."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         venta = get_object_or_404(Venta, pk=pk)
         if venta.anulada:
             return Response({"error": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
@@ -545,6 +564,13 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'])
     def anular_detalle(self, request, pk=None):
+        # Verificar permisos: solo superusuarios pueden anular detalles de venta
+        if not request.user.is_superuser:
+            return Response(
+                {"error": "No tienes permiso para anular detalles de venta. Solo los superusuarios pueden realizar esta acción."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         detalle_id = request.data.get('detalle_id')
         if not detalle_id:
             return Response({"error": "Se requiere el ID del detalle de venta."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1369,6 +1395,8 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # Datos de la factura (mover punto de venta y número más abajo, no justo después del nombre)
         # Primero mostrar fecha
         story.append(Paragraph(f"<b>Fecha de Emisión:</b> {factura.fecha_emision.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        # Mostrar ID de venta debajo de la fecha
+        story.append(Paragraph(f"<b>ID de Venta:</b> {venta.id}", normal_style))
         # Mostrar punto de venta y número juntos en una línea más abajo
         story.append(Paragraph(f"<b>Comprobante:</b> {factura.punto_venta:04d}-{factura.numero_comprobante:08d}", normal_style))
         if factura.cae:
