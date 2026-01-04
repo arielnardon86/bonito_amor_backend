@@ -603,20 +603,20 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             ]
 
     class CambioDevolucionCreateSerializer(serializers.ModelSerializer):
-    detalles = serializers.ListField(
-        child=serializers.DictField(),
-        write_only=True,
-        help_text="Lista de detalles del cambio/devolución. Cada detalle debe tener: detalle_venta_original_id, accion, cantidad, producto_nuevo_id (opcional), precio_unitario_nuevo (opcional)"
-    )
-    tipo = serializers.CharField(required=False, allow_blank=True, default='CAMBIO')
-    motivo = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
-    
-    class Meta:
-        model = CambioDevolucion
-        fields = [
-            'venta_original', 'tipo', 'motivo', 'detalles'
-        ]
-    
+        detalles = serializers.ListField(
+            child=serializers.DictField(),
+            write_only=True,
+            help_text="Lista de detalles del cambio/devolución. Cada detalle debe tener: detalle_venta_original_id, accion, cantidad, producto_nuevo_id (opcional), precio_unitario_nuevo (opcional)"
+        )
+        tipo = serializers.CharField(required=False, allow_blank=True, default='CAMBIO')
+        motivo = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+        
+        class Meta:
+            model = CambioDevolucion
+            fields = [
+                'venta_original', 'tipo', 'motivo', 'detalles'
+            ]
+        
         def validate(self, data):
             venta_original = data.get('venta_original')
             detalles = data.get('detalles', [])
