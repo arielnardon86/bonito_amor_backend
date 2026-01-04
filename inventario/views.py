@@ -1450,23 +1450,23 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         
         def perform_create(self, serializer):
             """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
-                validated_data = serializer.validated_data
-                venta_original = validated_data['venta_original']
-                detalles_data = validated_data['detalles']
-                tipo = validated_data.get('tipo', 'CAMBIO')
-                motivo = validated_data.get('motivo', '')
-                
-                # Verificar permisos
-                user = self.request.user
-                if not user.is_superuser and user.tienda != venta_original.tienda:
-                    raise serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
-                
-                # Calcular montos
-                monto_devolucion = Decimal('0.00')
-                monto_nuevo = Decimal('0.00')
-                
-                # Crear el cambio/devolución
-                cambio_devolucion = CambioDevolucion.objects.create(
+            validated_data = serializer.validated_data
+            venta_original = validated_data['venta_original']
+            detalles_data = validated_data['detalles']
+            tipo = validated_data.get('tipo', 'CAMBIO')
+            motivo = validated_data.get('motivo', '')
+            
+            # Verificar permisos
+            user = self.request.user
+            if not user.is_superuser and user.tienda != venta_original.tienda:
+                raise serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
+            
+            # Calcular montos
+            monto_devolucion = Decimal('0.00')
+            monto_nuevo = Decimal('0.00')
+            
+            # Crear el cambio/devolución
+            cambio_devolucion = CambioDevolucion.objects.create(
                     venta_original=venta_original,
                     tienda=venta_original.tienda,
                     usuario=user,
