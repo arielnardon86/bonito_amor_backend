@@ -40,45 +40,47 @@ except ImportError:
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
 # Importación condicional para CambioDevolucion
-# Los modelos están definidos en models.py, pero pueden no estar disponibles si la migración no está aplicada
+# Usar apps.get_model() que es más seguro y funciona después de que Django haya inicializado
 CambioDevolucion = None
 DetalleCambioDevolucion = None
 
-# Intentar importar directamente - esto fallará si hay un problema con las tablas o si la migración no está aplicada
+# Intentar obtener los modelos usando apps.get_model() que es la forma recomendada
 try:
-    from .models import CambioDevolucion, DetalleCambioDevolucion
-    logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion importados exitosamente")
+    from django.apps import apps
     
-    # Verificar que las tablas existen en la base de datos
-    try:
-        from django.db import connection
-        # Usar get_table_list() que es más confiable que table_names()
-        with connection.cursor() as cursor:
-            if connection.vendor == 'postgresql':
-                cursor.execute("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name IN ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')
-                """)
-                tables = [row[0] for row in cursor.fetchall()]
-            else:
-                # Para SQLite u otras bases de datos
-                table_names = connection.introspection.table_names()
-                tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
-            
-            if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
-                logger.info("✅ Tablas de CambioDevolucion y DetalleCambioDevolucion existen en la BD")
-            else:
-                logger.warning(f"⚠️ Tablas no encontradas. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
-                CambioDevolucion = None
-                DetalleCambioDevolucion = None
-    except Exception as e:
-        logger.warning(f"⚠️ Error verificando tablas: {e}. Los modelos fueron importados pero puede haber problemas con las tablas.")
-except ImportError as e:
-    logger.warning(f"⚠️ No se pudieron importar los modelos CambioDevolucion/DetalleCambioDevolucion: {e}")
+    # Verificar que las tablas existen primero
+    from django.db import connection
+    with connection.cursor() as cursor:
+        if connection.vendor == 'postgresql':
+            cursor.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')
+            """)
+            tables = [row[0] for row in cursor.fetchall()]
+        else:
+            table_names = connection.introspection.table_names()
+            tables = [t for t in table_names if t in ('inventario_cambiodevolucion', 'inventario_detallecambiodevolucion')]
+        
+        if 'inventario_cambiodevolucion' in tables and 'inventario_detallecambiodevolucion' in tables:
+            # Si las tablas existen, intentar obtener los modelos
+            try:
+                CambioDevolucion = apps.get_model('inventario', 'CambioDevolucion')
+                DetalleCambioDevolucion = apps.get_model('inventario', 'DetalleCambioDevolucion')
+                logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion obtenidos usando apps.get_model()")
+            except LookupError as e:
+                logger.warning(f"⚠️ No se pudieron obtener los modelos usando apps.get_model(): {e}")
+                # Intentar importación directa como fallback
+                try:
+                    from .models import CambioDevolucion, DetalleCambioDevolucion
+                    logger.info("✅ Modelos importados directamente como fallback")
+                except ImportError as ie:
+                    logger.warning(f"⚠️ Tampoco se pudieron importar directamente: {ie}")
+        else:
+            logger.warning(f"⚠️ Tablas no encontradas. Tablas encontradas: {tables}. Ejecuta: python manage.py migrate inventario 0013")
 except Exception as e:
-    logger.error(f"❌ Error inesperado importando modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
+    logger.error(f"❌ Error obteniendo modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
 from django.core.exceptions import ObjectDoesNotExist 
 # CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
