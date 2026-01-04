@@ -968,17 +968,24 @@ class MetricasAPIView(APIView):
                 try:
                     cambio_diferencia = venta.cambio_devolucion_diferencia.first()
                     if cambio_diferencia and cambio_diferencia.monto_diferencia > 0:
-                        # Solo contar la diferencia, no el total completo de la venta
+                        # Solo contar la diferencia pagada, no el total completo de la venta
                         total_ventas_periodo += cambio_diferencia.monto_diferencia
-                    else:
-                        # Para ventas normales, usar el total
-                        total_ventas_periodo += venta.total
+                        continue  # Continuar con la siguiente venta, ya procesamos esta
+                except Exception as e:
+                    logger.warning(f"⚠️ Error al acceder a cambio_devolucion_diferencia para venta {venta.id}: {e}")
+            
+            # Excluir notas de crédito de las métricas de ventas
+            if CambioDevolucion is not None:
+                try:
+                    cambio_nota_credito = venta.nota_credito_origen.first()
+                    if cambio_nota_credito:
+                        # No contar notas de crédito en las métricas de ventas
+                        continue
                 except:
-                    # Si hay error al acceder a la relación, usar el total normal
-                    total_ventas_periodo += venta.total
-            else:
-                # Si CambioDevolucion no está disponible, usar el total normal
-                total_ventas_periodo += venta.total
+                    pass
+            
+            # Para ventas normales (no de diferencia ni notas de crédito), usar el total
+            total_ventas_periodo += venta.total
         
         # Filtramos los detalles de venta para excluir los anulados individualmente
         # Pero para ventas que vienen de cambios/devoluciones, solo contamos los productos nuevos
