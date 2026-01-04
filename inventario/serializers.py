@@ -411,28 +411,25 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         arancel_total = validated_data.pop('arancel_total', Decimal('0.00'))
 
         # Obtener el usuario del request y asegurarse de que sea una instancia del modelo User correcto
+        # El problema es que request.user puede ser un TokenUser de SimpleJWT, no el modelo User real
         user = self.context['request'].user
-        # Si el usuario no es una instancia del modelo User, intentar obtenerlo
-        # Esto puede pasar si request.user es un TokenUser o otro tipo de objeto
+        user_obj = None
+        
         if user and not user.is_anonymous:
             try:
-                from inventario.models import User as UserModel
-                # Si el usuario no es una instancia de UserModel, obtenerlo de la BD
-                if not isinstance(user, UserModel):
-                    try:
-                        user = UserModel.objects.get(pk=user.pk)
-                    except (AttributeError, UserModel.DoesNotExist, TypeError):
-                        # Si no se puede obtener, usar None (el campo permite null)
-                        user = None
-            except ImportError:
-                # Si no se puede importar UserModel, usar None
-                user = None
-        else:
-            user = None
-        
+                # Intentar obtener el usuario real de la base de datos usando su ID
+                # Esto funciona tanto si user es un User real como si es un TokenUser
+                user_obj = User.objects.get(pk=user.pk)
+            except (AttributeError, User.DoesNotExist, TypeError, ValueError) as e:
+                # Si no se puede obtener el usuario, usar None (el campo permite null)
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"No se pudo obtener el usuario de la BD: {e}. Usando None.")
+                user_obj = None
+
         venta = Venta.objects.create(
             total=validated_data['total'],
-            usuario=user,
+            usuario=user_obj,
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
