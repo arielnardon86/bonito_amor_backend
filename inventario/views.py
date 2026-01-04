@@ -1414,12 +1414,12 @@ except Exception as e:
     DetalleCambioDevolucion = None
 
 # Siempre definir el ViewSet real, verificará los modelos dinámicamente cuando se necesiten
-    # Crear un serializer temporal para evitar AssertionError de DRF
-    from rest_framework import serializers as drf_serializers
-    class _TempSerializer(drf_serializers.Serializer):
-        pass
-    
-    class CambioDevolucionViewSet(viewsets.ModelViewSet):
+# Crear un serializer temporal para evitar AssertionError de DRF
+from rest_framework import serializers as drf_serializers
+class _TempSerializer(drf_serializers.Serializer):
+    pass
+
+class CambioDevolucionViewSet(viewsets.ModelViewSet):
         """ViewSet para gestionar cambios y devoluciones"""
         permission_classes = [permissions.IsAuthenticated]
         # Usar un serializer temporal, get_serializer_class() lo reemplazará con el correcto
