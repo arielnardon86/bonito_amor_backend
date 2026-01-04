@@ -422,15 +422,90 @@ class VentaViewSet(viewsets.ModelViewSet):
         if venta.anulada:
             return Response({"error": "Esta venta ya ha sido anulada."}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Verificar si esta venta está relacionada con un cambio/devolución
+        cambio_devolucion_afectado = None
+        if CambioDevolucion is not None:
+            try:
+                # Verificar si es una nota de crédito
+                cambio_nota_credito = venta.nota_credito_origen.first()
+                if cambio_nota_credito:
+                    cambio_devolucion_afectado = cambio_nota_credito
+                    logger.info(f"⚠️ Anulando nota de crédito del cambio/devolución {cambio_nota_credito.id}")
+                
+                # Verificar si es una venta de diferencia pendiente
+                if not cambio_devolucion_afectado:
+                    cambio_diferencia = venta.cambio_devolucion_diferencia.first()
+                    if cambio_diferencia:
+                        cambio_devolucion_afectado = cambio_diferencia
+                        logger.info(f"⚠️ Anulando venta de diferencia del cambio/devolución {cambio_diferencia.id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error al verificar cambio/devolución relacionado: {e}")
+        
+        # Anular la venta
         venta.anulada = True
         venta.save()
 
-        detalles = DetalleVenta.objects.filter(venta=venta)
-        for detalle in detalles:
-            if detalle.producto and not detalle.anulado_individualmente:
-                producto = detalle.producto
-                producto.stock += detalle.cantidad
-                producto.save()
+        # Si está relacionada con un cambio/devolución, revertir todos los cambios
+        if cambio_devolucion_afectado:
+            try:
+                # Revertir el cambio/devolución completo:
+                # 1. Restaurar stock de productos devueltos (que se habían restado del stock)
+                # 2. Restar stock de productos nuevos que se habían agregado
+                # 3. Marcar el cambio/devolución como cancelado
+                
+                for detalle_cambio in cambio_devolucion_afectado.detalles.all():
+                    if detalle_cambio.accion == 'DEVOLVER':
+                        # Cuando se devolvió un producto, se había restado del stock
+                        # Al anular, debemos volver a agregarlo al stock
+                        if detalle_cambio.detalle_venta_original and detalle_cambio.detalle_venta_original.producto:
+                            producto = detalle_cambio.detalle_venta_original.producto
+                            producto.stock += detalle_cambio.cantidad
+                            producto.save()
+                            logger.info(f"✅ Stock restaurado para producto devuelto: {producto.nombre} (+{detalle_cambio.cantidad})")
+                    
+                    elif detalle_cambio.accion == 'CAMBIAR':
+                        # Cuando se cambió un producto:
+                        # - El producto devuelto se había restado del stock (restaurar)
+                        # - El producto nuevo se había agregado al stock (restar)
+                        if detalle_cambio.detalle_venta_original and detalle_cambio.detalle_venta_original.producto:
+                            producto_devuelto = detalle_cambio.detalle_venta_original.producto
+                            producto_devuelto.stock += detalle_cambio.cantidad
+                            producto_devuelto.save()
+                            logger.info(f"✅ Stock restaurado para producto devuelto en cambio: {producto_devuelto.nombre} (+{detalle_cambio.cantidad})")
+                        
+                        if detalle_cambio.producto_nuevo:
+                            producto_nuevo = detalle_cambio.producto_nuevo
+                            producto_nuevo.stock -= detalle_cambio.cantidad
+                            if producto_nuevo.stock < 0:
+                                producto_nuevo.stock = 0
+                            producto_nuevo.save()
+                            logger.info(f"✅ Stock revertido para producto nuevo en cambio: {producto_nuevo.nombre} (-{detalle_cambio.cantidad})")
+                    
+                    elif detalle_cambio.accion == 'AGREGAR':
+                        # Cuando se agregó un producto nuevo, se había restado del stock
+                        # Al anular, debemos volver a agregarlo al stock
+                        if detalle_cambio.producto_nuevo:
+                            producto = detalle_cambio.producto_nuevo
+                            producto.stock += detalle_cambio.cantidad
+                            producto.save()
+                            logger.info(f"✅ Stock restaurado para producto agregado: {producto.nombre} (+{detalle_cambio.cantidad})")
+                
+                # Marcar el cambio/devolución como cancelado
+                cambio_devolucion_afectado.estado = 'CANCELADO'
+                cambio_devolucion_afectado.save()
+                logger.info(f"✅ Cambio/devolución {cambio_devolucion_afectado.id} marcado como CANCELADO")
+                
+            except Exception as e:
+                logger.error(f"❌ Error al revertir cambio/devolución: {e}", exc_info=True)
+        else:
+            # Para ventas normales, solo restaurar el stock de los productos de esta venta
+            detalles = DetalleVenta.objects.filter(venta=venta)
+            for detalle in detalles:
+                if detalle.producto and not detalle.anulado_individualmente:
+                    producto = detalle.producto
+                    producto.stock += detalle.cantidad
+                    producto.save()
+                    logger.info(f"✅ Stock restaurado para venta normal: {producto.nombre} (+{detalle.cantidad})")
         
         return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
 
