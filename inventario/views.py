@@ -1342,10 +1342,10 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
             if self.action == 'create':
                 return CambioDevolucionCreateSerializer
             return CambioDevolucionSerializer
-    
-    def get_queryset(self):
-        user = self.request.user
-        queryset = CambioDevolucion.objects.all().select_related(
+        
+        def get_queryset(self):
+            user = self.request.user
+            queryset = CambioDevolucion.objects.all().select_related(
             'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
         ).prefetch_related('detalles').order_by('-fecha_creacion')
         
@@ -1686,10 +1686,17 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 "estado": "CANCELADO"
             })
         
-        # Para otros campos, usar el update normal
-        return super().update(request, *args, **kwargs)
-    
-    # FIX DE CONEXIÓN
-    def list(self, request, *args, **kwargs):
-        close_old_connections()
-        return super().list(request, *args, **kwargs)
+            # Para otros campos, usar el update normal
+            return super().update(request, *args, **kwargs)
+        
+        # FIX DE CONEXIÓN
+        def list(self, request, *args, **kwargs):
+            close_old_connections()
+            return super().list(request, *args, **kwargs)
+else:
+    # Si los modelos no existen, crear una clase dummy para evitar errores de importación
+    class CambioDevolucionViewSet(viewsets.ModelViewSet):
+        permission_classes = [permissions.IsAuthenticated]
+        def get_queryset(self):
+            from django.http import Http404
+            raise Http404("CambioDevolucion models not available. Please run migrations.")
