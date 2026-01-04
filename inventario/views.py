@@ -39,25 +39,42 @@ except ImportError:
 
 # CAMBIO 1: Importar ArancelMetodoTienda
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
-# Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
-# Verificar si los modelos están disponibles verificando si las tablas existen en la base de datos
+# Importación condicional para CambioDevolucion
+# Intentar importar directamente primero (los modelos están definidos en models.py)
 CambioDevolucion = None
 DetalleCambioDevolucion = None
+
+# Intentar importar directamente desde el módulo models
 try:
-    from .models import CambioDevolucion as CambioDevolucionModel, DetalleCambioDevolucion as DetalleCambioDevolucionModel
-    # Verificar que los modelos realmente tienen tablas en la base de datos
-    from django.db import connection
-    table_names = connection.introspection.table_names()
-    if 'inventario_cambiodevolucion' in table_names and 'inventario_detallecambiodevolucion' in table_names:
-        CambioDevolucion = CambioDevolucionModel
-        DetalleCambioDevolucion = DetalleCambioDevolucionModel
-        logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion disponibles (tablas existen)")
+    import inventario.models as models_module
+    # Verificar si los modelos están definidos en el módulo
+    if hasattr(models_module, 'CambioDevolucion') and hasattr(models_module, 'DetalleCambioDevolucion'):
+        CambioDevolucion = models_module.CambioDevolucion
+        DetalleCambioDevolucion = models_module.DetalleCambioDevolucion
+        logger.info("✅ Modelos CambioDevolucion y DetalleCambioDevolucion importados desde models.py")
+        
+        # Verificar que las tablas existen en la base de datos
+        try:
+            from django.db import connection
+            table_names = connection.introspection.table_names()
+            if 'inventario_cambiodevolucion' in table_names and 'inventario_detallecambiodevolucion' in table_names:
+                logger.info("✅ Tablas de CambioDevolucion y DetalleCambioDevolucion existen en la BD")
+            else:
+                logger.warning("⚠️ Modelos encontrados pero las tablas no existen. Ejecuta: python manage.py migrate inventario 0013")
+                CambioDevolucion = None
+                DetalleCambioDevolucion = None
+        except Exception as e:
+            logger.warning(f"⚠️ Error verificando tablas: {e}. Asumiendo que los modelos están disponibles.")
     else:
-        logger.warning("⚠️ Modelos CambioDevolucion/DetalleCambioDevolucion encontrados pero las tablas no existen en la BD. Ejecuta: python manage.py migrate inventario 0013")
-except ImportError as e:
-    logger.warning(f"⚠️ No se pudieron importar los modelos CambioDevolucion/DetalleCambioDevolucion: {e}")
+        logger.warning("⚠️ Modelos CambioDevolucion/DetalleCambioDevolucion no encontrados en models.py")
 except Exception as e:
-    logger.error(f"❌ Error verificando modelos CambioDevolucion/DetalleCambioDevolucion: {e}", exc_info=True)
+    logger.warning(f"⚠️ Error importando modelos CambioDevolucion/DetalleCambioDevolucion: {e}")
+    try:
+        # Intentar importación directa como fallback
+        from .models import CambioDevolucion, DetalleCambioDevolucion
+        logger.info("✅ Modelos importados directamente como fallback")
+    except ImportError:
+        logger.warning("⚠️ No se pudieron importar los modelos CambioDevolucion/DetalleCambioDevolucion")
 from django.core.exceptions import ObjectDoesNotExist 
 # CAMBIO 2: Importar ArancelMetodoTiendaSerializer
 from .serializers import (
