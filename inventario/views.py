@@ -145,7 +145,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Producto.objects.all()
+        # Optimización: usar select_related para evitar consultas N+1 con tienda
+        queryset = Producto.objects.select_related('tienda').all()
 
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
@@ -287,7 +288,8 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Venta.objects.all().order_by('-fecha_venta')
+        # Optimización: usar select_related para evitar consultas N+1
+        queryset = Venta.objects.select_related('tienda', 'usuario', 'metodo_pago', 'arancel_aplicado').order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
         # Para usuarios staff (no superuser), solo permitir ver ventas buscadas por ID
@@ -1138,42 +1140,62 @@ class MetricasAPIView(APIView):
         # Las ventas relacionadas con cambios/devoluciones tienen diferencia_pendiente=True
         # y necesitamos usar el monto_diferencia del cambio/devolución relacionado
         
-        # Primero, obtener todas las ventas y calcular el total
+        # Optimización: obtener todas las ventas con relaciones optimizadas
+        # Usar select_related para ForeignKeys y prefetch_related para relaciones reversas
         if CambioDevolucion is not None:
-            ventas_list = list(queryset_ventas.select_related().prefetch_related('cambio_devolucion_diferencia'))
+            ventas_list = list(queryset_ventas.select_related(
+                'tienda', 'usuario', 'metodo_pago', 'arancel_aplicado'
+            ).prefetch_related(
+                'cambio_devolucion_diferencia',
+                'nota_credito_origen'
+            ))
         else:
-            ventas_list = list(queryset_ventas.select_related())
+            ventas_list = list(queryset_ventas.select_related(
+                'tienda', 'usuario', 'metodo_pago', 'arancel_aplicado'
+            ))
+        
+        # Optimización: crear diccionarios para acceso rápido a relaciones
+        cambio_diferencia_map = {}
+        nota_credito_map = {}
+        if CambioDevolucion is not None:
+            # Pre-cargar todas las relaciones en una sola consulta
+            for venta in ventas_list:
+                # Acceder a las relaciones prefetch para cachearlas
+                cambio_dif = list(venta.cambio_devolucion_diferencia.all())
+                if cambio_dif:
+                    cambio_diferencia_map[venta.id] = cambio_dif[0]
+                
+                nota_cred = list(venta.nota_credito_origen.all())
+                if nota_cred:
+                    nota_credito_map[venta.id] = nota_cred[0]
+        
         total_ventas_periodo = Decimal('0.00')
         
+        # Iterar una sola vez procesando todo
         for venta in ventas_list:
+            # Excluir notas de crédito primero (más rápido)
+            if venta.id in nota_credito_map:
+                continue
+            
             # Si la venta viene de un cambio/devolución (tiene diferencia pendiente),
             # usar el monto_diferencia del cambio/devolución en lugar del total de la venta
-            if CambioDevolucion is not None:
-                try:
-                    cambio_diferencia = venta.cambio_devolucion_diferencia.first()
-                    if cambio_diferencia and cambio_diferencia.monto_diferencia > 0:
-                        # Solo contar la diferencia pagada, no el total completo de la venta
-                        total_ventas_periodo += cambio_diferencia.monto_diferencia
-                        continue  # Continuar con la siguiente venta, ya procesamos esta
-                except Exception as e:
-                    logger.warning(f"⚠️ Error al acceder a cambio_devolucion_diferencia para venta {venta.id}: {e}")
-            
-            # Excluir notas de crédito de las métricas de ventas
-            if CambioDevolucion is not None:
-                try:
-                    cambio_nota_credito = venta.nota_credito_origen.first()
-                    if cambio_nota_credito:
-                        # No contar notas de crédito en las métricas de ventas
-                        continue
-                except:
-                    pass
+            if venta.id in cambio_diferencia_map:
+                cambio_diferencia = cambio_diferencia_map[venta.id]
+                if cambio_diferencia.monto_diferencia > 0:
+                    # Solo contar la diferencia pagada, no el total completo de la venta
+                    total_ventas_periodo += cambio_diferencia.monto_diferencia
+                    continue
             
             # Para ventas normales (no de diferencia ni notas de crédito), usar el total
             total_ventas_periodo += venta.total
         
         # Filtramos los detalles de venta para excluir los anulados individualmente
         # Pero para ventas que vienen de cambios/devoluciones, solo contamos los productos nuevos
-        detalles_activos = DetalleVenta.objects.filter(venta__in=queryset_ventas, anulado_individualmente=False)
+        # Optimización: usar select_related para evitar consultas N+1 con producto
+        detalles_activos = DetalleVenta.objects.filter(
+            venta__in=queryset_ventas, 
+            anulado_individualmente=False
+        ).select_related('producto', 'venta')
         total_productos_vendidos_periodo = detalles_activos.aggregate(total_productos_vendidos=Sum('cantidad'))['total_productos_vendidos'] or 0
         
         # Calcular costo vendido: para ventas normales usar todos los detalles,
@@ -1187,22 +1209,24 @@ class MetricasAPIView(APIView):
 
         # CAMBIO 10: NUEVO CÁLCULO: Arancel Total de Ventas con Comisión
         # Calcular arancel considerando solo la diferencia para ventas de cambio/devolución
+        # Optimización: usar el mapa ya creado en lugar de hacer .first() en cada iteración
         total_arancel_ventas = Decimal('0.00')
         for venta in ventas_list:
-            if CambioDevolucion is not None:
-                try:
-                    cambio_diferencia = venta.cambio_devolucion_diferencia.first()
-                    if cambio_diferencia and cambio_diferencia.monto_diferencia > 0:
-                        # Para ventas de diferencia, calcular arancel solo sobre la diferencia
-                        # (el arancel ya debería estar calculado sobre el total de la venta, pero lo ajustamos proporcionalmente)
-                        if venta.arancel_total and venta.total > 0:
-                            factor_proporcion = cambio_diferencia.monto_diferencia / venta.total
-                            total_arancel_ventas += venta.arancel_total * factor_proporcion
-                        else:
-                            total_arancel_ventas += venta.arancel_total or Decimal('0.00')
+            # Excluir notas de crédito
+            if venta.id in nota_credito_map:
+                continue
+                
+            if venta.id in cambio_diferencia_map:
+                cambio_diferencia = cambio_diferencia_map[venta.id]
+                if cambio_diferencia.monto_diferencia > 0:
+                    # Para ventas de diferencia, calcular arancel solo sobre la diferencia
+                    # (el arancel ya debería estar calculado sobre el total de la venta, pero lo ajustamos proporcionalmente)
+                    if venta.arancel_total and venta.total > 0:
+                        factor_proporcion = cambio_diferencia.monto_diferencia / venta.total
+                        total_arancel_ventas += venta.arancel_total * factor_proporcion
                     else:
                         total_arancel_ventas += venta.arancel_total or Decimal('0.00')
-                except:
+                else:
                     total_arancel_ventas += venta.arancel_total or Decimal('0.00')
             else:
                 total_arancel_ventas += venta.arancel_total or Decimal('0.00')
@@ -1220,18 +1244,19 @@ class MetricasAPIView(APIView):
         ).order_by('-cantidad_total')[:10]
         
         # Para ventas por usuario, también aplicar la lógica de diferencia
+        # Optimización: usar el mapa ya creado en lugar de hacer .first() en cada iteración
         ventas_por_usuario_dict = {}
         for venta in ventas_list:
+            # Excluir notas de crédito
+            if venta.id in nota_credito_map:
+                continue
+                
             username = venta.usuario.username if venta.usuario else 'Sin usuario'
-            if CambioDevolucion is not None:
-                try:
-                    cambio_diferencia = venta.cambio_devolucion_diferencia.first()
-                    if cambio_diferencia and cambio_diferencia.monto_diferencia > 0:
-                        monto_venta = cambio_diferencia.monto_diferencia
-                    else:
-                        monto_venta = venta.total
-                except:
-                    monto_venta = venta.total
+            
+            # Usar el mapa ya creado para acceso rápido
+            if venta.id in cambio_diferencia_map:
+                cambio_diferencia = cambio_diferencia_map[venta.id]
+                monto_venta = cambio_diferencia.monto_diferencia if cambio_diferencia.monto_diferencia > 0 else venta.total
             else:
                 monto_venta = venta.total
             
@@ -1247,18 +1272,19 @@ class MetricasAPIView(APIView):
         ventas_por_usuario.sort(key=lambda x: x['total_vendido'], reverse=True)
         
         # Para ventas por método de pago, también aplicar la lógica de diferencia
+        # Optimización: usar el mapa ya creado en lugar de hacer .first() en cada iteración
         ventas_por_metodo_pago_dict = {}
         for venta in ventas_list:
+            # Excluir notas de crédito
+            if venta.id in nota_credito_map:
+                continue
+                
             metodo_pago = venta.metodo_pago or 'Sin método'
-            if CambioDevolucion is not None:
-                try:
-                    cambio_diferencia = venta.cambio_devolucion_diferencia.first()
-                    if cambio_diferencia and cambio_diferencia.monto_diferencia > 0:
-                        monto_venta = cambio_diferencia.monto_diferencia
-                    else:
-                        monto_venta = venta.total
-                except:
-                    monto_venta = venta.total
+            
+            # Usar el mapa ya creado para acceso rápido
+            if venta.id in cambio_diferencia_map:
+                cambio_diferencia = cambio_diferencia_map[venta.id]
+                monto_venta = cambio_diferencia.monto_diferencia if cambio_diferencia.monto_diferencia > 0 else venta.total
             else:
                 monto_venta = venta.total
             
