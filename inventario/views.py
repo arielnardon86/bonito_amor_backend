@@ -289,7 +289,8 @@ class VentaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         # Optimización: usar select_related para evitar consultas N+1
-        queryset = Venta.objects.select_related('tienda', 'usuario', 'metodo_pago', 'arancel_aplicado').order_by('-fecha_venta')
+        # Nota: metodo_pago es CharField, no ForeignKey, por lo que no se puede usar en select_related
+        queryset = Venta.objects.select_related('tienda', 'usuario', 'arancel_aplicado').order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
         # Para usuarios staff (no superuser), solo permitir ver ventas buscadas por ID
@@ -1142,16 +1143,17 @@ class MetricasAPIView(APIView):
         
         # Optimización: obtener todas las ventas con relaciones optimizadas
         # Usar select_related para ForeignKeys y prefetch_related para relaciones reversas
+        # Nota: metodo_pago es CharField, no ForeignKey, por lo que no se puede usar en select_related
         if CambioDevolucion is not None:
             ventas_list = list(queryset_ventas.select_related(
-                'tienda', 'usuario', 'metodo_pago', 'arancel_aplicado'
+                'tienda', 'usuario', 'arancel_aplicado'
             ).prefetch_related(
                 'cambio_devolucion_diferencia',
                 'nota_credito_origen'
             ))
         else:
             ventas_list = list(queryset_ventas.select_related(
-                'tienda', 'usuario', 'metodo_pago', 'arancel_aplicado'
+                'tienda', 'usuario', 'arancel_aplicado'
             ))
         
         # Optimización: crear diccionarios para acceso rápido a relaciones
