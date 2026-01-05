@@ -969,6 +969,9 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
             tienda_nombre_usuario = user.tienda.nombre.strip() if user.tienda.nombre else None
             tienda_slug_normalizado = tienda_slug.strip() if tienda_slug else None
             
+            logger.info(f"🔍 Staff user '{user.username}' - Verificando aranceles. Usuario.tienda='{tienda_nombre_usuario}', tienda_slug='{tienda_slug_normalizado}'")
+            logger.info(f"🔍 Staff user '{user.username}' - user.tienda.id={user.tienda.id if user.tienda else 'None'}")
+            
             # Si viene tienda_slug, verificar que coincida con la tienda del usuario (comparación flexible)
             if tienda_slug:
                 # Comparar con y sin case sensitivity, y también comparar sin espacios
@@ -976,9 +979,22 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
                     tienda_nombre_usuario.lower() == tienda_slug_normalizado.lower()):
                     result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
                     logger.info(f"✅ Staff user '{user.username}' - Aranceles para tienda '{tienda_nombre_usuario}': {result.count()} aranceles")
+                    # Log detallado de los aranceles encontrados
+                    if result.exists():
+                        for arancel in result[:5]:  # Log primeros 5
+                            logger.info(f"  📋 Arancel: {arancel.metodo_pago.nombre if arancel.metodo_pago else 'N/A'} - {arancel.nombre_plan}")
                     return result
                 else:
                     logger.warning(f"⚠️ Staff user '{user.username}' - Tienda no coincide: usuario.tienda='{tienda_nombre_usuario}' vs tienda_slug='{tienda_slug_normalizado}'")
+                    # Intentar buscar por ID también
+                    try:
+                        tienda_obj = Tienda.objects.get(nombre=tienda_slug_normalizado)
+                        if tienda_obj.id == user.tienda.id:
+                            logger.info(f"✅ Staff user '{user.username}' - Coincidencia encontrada por ID, retornando aranceles")
+                            result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
+                            return result
+                    except Tienda.DoesNotExist:
+                        pass
                     return ArancelMetodoTienda.objects.none()
             # Si no viene tienda_slug, filtrar por la tienda del usuario
             result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
