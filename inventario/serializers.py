@@ -100,6 +100,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('password2')
         password = validated_data.pop('password')
+        # Si el usuario es superusuario, también debe ser staff
+        if validated_data.get('is_superuser', False):
+            validated_data['is_staff'] = True
         user = User.objects.create(**validated_data)
         user.set_password(password)
         user.save()
@@ -117,6 +120,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+    
+    def update(self, instance, validated_data):
+        # Si el usuario es superusuario, también debe ser staff
+        if validated_data.get('is_superuser', False):
+            validated_data['is_staff'] = True
+        return super().update(instance, validated_data)
 
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer para cambiar contraseña"""

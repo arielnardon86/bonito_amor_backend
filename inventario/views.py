@@ -6,6 +6,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
+from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Count, F, Q, Value 
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
@@ -135,6 +136,15 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
 from .models import Factura
 from .services.facturacion_service import FacturacionService
 from .filters import VentaFilter 
+
+# Clase de permiso personalizada que permite tanto is_superuser como is_staff
+class IsAdminOrSuperUser(BasePermission):
+    """
+    Permiso personalizado que permite acceso a usuarios que sean superusuarios O staff.
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and 
+                   (request.user.is_superuser or request.user.is_staff))
 
 
 class ProductoViewSet(viewsets.ModelViewSet):
@@ -1098,7 +1108,7 @@ class InventarioMetricsAPIView(APIView):
 
 # --- VISTA PARA MÉTRICAS DE VENTAS (ACTUALIZADA) ---
 class MetricasAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrSuperUser]
 
     def get(self, request, *args, **kwargs):
         tienda_slug = request.query_params.get('tienda_slug', None)
