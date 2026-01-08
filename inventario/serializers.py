@@ -100,9 +100,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('password2')
         password = validated_data.pop('password')
-        # Si el usuario es superusuario, también debe ser staff
+        # Si el usuario es superusuario, también debe ser staff automáticamente
+        # Si es solo staff, no se asigna is_superuser
         if validated_data.get('is_superuser', False):
             validated_data['is_staff'] = True
+        # Si no es superusuario, asegurarse de que is_superuser sea False explícitamente
+        elif not validated_data.get('is_superuser', False):
+            validated_data['is_superuser'] = False
         user = User.objects.create(**validated_data)
         user.set_password(password)
         user.save()
@@ -122,9 +126,13 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
     
     def update(self, instance, validated_data):
-        # Si el usuario es superusuario, también debe ser staff
+        # Si el usuario es superusuario, también debe ser staff automáticamente
         if validated_data.get('is_superuser', False):
             validated_data['is_staff'] = True
+        # Si se desmarca is_superuser, asegurarse de que sea False
+        # (pero mantener is_staff si está marcado, ya que pueden ser solo staff)
+        elif 'is_superuser' in validated_data and not validated_data.get('is_superuser', False):
+            validated_data['is_superuser'] = False
         return super().update(instance, validated_data)
 
 class ChangePasswordSerializer(serializers.Serializer):
