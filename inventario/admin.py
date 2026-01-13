@@ -20,10 +20,10 @@ class CustomUserAdmin(UserAdmin):
 # Configuración para el modelo de Tienda
 @admin.register(Tienda)
 class TiendaAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'direccion', 'telefono', 'email', 'tipo_facturacion', 'cuit', 'fecha_creacion')
-    search_fields = ('nombre', 'direccion', 'telefono', 'email', 'cuit')
-    list_filter = ('tipo_facturacion', 'modo_test_afip')
-    readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion')
+    list_display = ('nombre', 'direccion', 'telefono', 'email', 'tipo_facturacion', 'plataforma_ecommerce', 'ml_sync_habilitado', 'cuit', 'fecha_creacion')
+    search_fields = ('nombre', 'direccion', 'telefono', 'email', 'cuit', 'ml_user_id')
+    list_filter = ('tipo_facturacion', 'modo_test_afip', 'plataforma_ecommerce', 'ml_sync_habilitado', 'ml_modo_test')
+    readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion', 'ml_user_id', 'ml_token_expires_at')
     
     fieldsets = (
         ('Información Básica', {
@@ -51,6 +51,28 @@ class TiendaAdmin(admin.ModelAdmin):
                 'url_arca',
             ),
             'classes': ('collapse',),
+        }),
+        ('Configuración E-commerce - Mercado Libre', {
+            'fields': (
+                'plataforma_ecommerce',
+                'ml_app_id',
+                'ml_client_secret',
+                'ml_modo_test',
+                'ml_sync_habilitado',
+                'ml_sincronizar_stock',
+                'ml_sincronizar_precios',
+                'ml_sincronizar_productos',
+            ),
+            # Removido 'collapse' para que el campo plataforma_ecommerce sea visible siempre
+            'description': 'Configuración para integración con Mercado Libre. Los tokens OAuth se generan automáticamente después de la autenticación.',
+        }),
+        ('Tokens Mercado Libre (Solo Lectura)', {
+            'fields': (
+                'ml_user_id',
+                'ml_token_expires_at',
+            ),
+            'classes': ('collapse',),
+            'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
         }),
         ('Información del Sistema', {
             'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
