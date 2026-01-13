@@ -28,7 +28,8 @@ class ProductoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug']
+        fields = ['id', 'nombre', 'descripcion', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug', 
+                  'ml_item_id', 'ml_sincronizado', 'ml_sincronizar', 'ml_categoria_id', 'ml_ultima_sincronizacion']
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -40,25 +41,102 @@ class TiendaSerializer(serializers.ModelSerializer):
         model = Tienda
         fields = '__all__'
     
+    def create(self, validated_data):
+        """
+        Crea una tienda, estableciendo valores por defecto para campos que pueden no existir
+        si las migraciones no están aplicadas.
+        """
+        # Verificar si los campos de ML existen en el modelo
+        ml_fields_exist = hasattr(Tienda, 'plataforma_ecommerce')
+        
+        if ml_fields_exist:
+            # Si los campos existen, establecer valores por defecto
+            if 'plataforma_ecommerce' not in validated_data:
+                validated_data['plataforma_ecommerce'] = 'NINGUNA'
+            if 'ml_modo_test' not in validated_data:
+                validated_data['ml_modo_test'] = True
+            if 'ml_sync_habilitado' not in validated_data:
+                validated_data['ml_sync_habilitado'] = False
+            if 'ml_sincronizar_stock' not in validated_data:
+                validated_data['ml_sincronizar_stock'] = True
+            if 'ml_sincronizar_precios' not in validated_data:
+                validated_data['ml_sincronizar_precios'] = True
+            if 'ml_sincronizar_productos' not in validated_data:
+                validated_data['ml_sincronizar_productos'] = True
+        else:
+            # Si los campos no existen, removerlos de validated_data para evitar errores
+            ml_fields = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
+                        'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
+                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_user_id',
+                        'ml_token_expires_at', 'ml_access_token', 'ml_refresh_token']
+            for field in ml_fields:
+                validated_data.pop(field, None)
+        
+        return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """
+        Actualiza una tienda, manejando campos que pueden no existir
+        """
+        # Verificar si los campos de ML existen en el modelo
+        ml_fields_exist = hasattr(Tienda, 'plataforma_ecommerce')
+        
+        if not ml_fields_exist:
+            # Si los campos no existen, removerlos de validated_data
+            ml_fields = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
+                        'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
+                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_user_id',
+                        'ml_token_expires_at', 'ml_access_token', 'ml_refresh_token']
+            for field in ml_fields:
+                validated_data.pop(field, None)
+        
+        return super().update(instance, validated_data)
+    
     def to_representation(self, instance):
         """
         Maneja campos que pueden no existir si las migraciones no están aplicadas.
         """
         data = super().to_representation(instance)
         
-        # Campos que pueden no existir si la migración 0010 no está aplicada
+        # Campos que pueden no existir si las migraciones no están aplicadas
         campos_fiscales = ['cuit', 'punto_venta', 'tipo_facturacion', 'certificado_afip', 
-                          'clave_privada_afip', 'modo_test_afip', 'api_key_arca', 'url_arca']
+                          'clave_privada_afip', 'modo_test_afip', 'api_key_arca', 'url_arca',
+                          'condicion_iva_emisor']
         
+        # Campos de e-commerce (Mercado Libre)
+        campos_ecommerce = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
+                           'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
+                           'ml_sincronizar_productos', 'ml_modo_test', 'ml_user_id',
+                           'ml_token_expires_at']
+        
+        # Campos sensibles que NO se deben exponer en el serializer
+        campos_sensibles = ['ml_access_token', 'ml_refresh_token', 'certificado_afip',
+                           'clave_privada_afip', 'ml_client_secret']
+        
+        # Remover campos sensibles de la respuesta
+        for campo in campos_sensibles:
+            if campo in data:
+                del data[campo]
+        
+        # Agregar valores por defecto para campos que pueden no existir
         for campo in campos_fiscales:
             if campo not in data:
-                # Si el campo no existe, usar valores por defecto
                 if campo == 'punto_venta':
                     data[campo] = 1
                 elif campo == 'tipo_facturacion':
                     data[campo] = 'NINGUNA'
-                elif campo == 'modo_test_afip':
-                    data[campo] = True
+                elif campo == 'modo_test_afip' or campo == 'condicion_iva_emisor':
+                    data[campo] = 'MT' if campo == 'condicion_iva_emisor' else True
+                else:
+                    data[campo] = None
+        
+        for campo in campos_ecommerce:
+            if campo not in data:
+                if campo == 'plataforma_ecommerce':
+                    data[campo] = 'NINGUNA'
+                elif campo in ['ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
+                              'ml_sincronizar_productos', 'ml_modo_test']:
+                    data[campo] = False if campo == 'ml_sync_habilitado' else True
                 else:
                     data[campo] = None
         
