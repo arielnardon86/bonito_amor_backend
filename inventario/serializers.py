@@ -26,10 +26,29 @@ class ProductoSerializer(serializers.ModelSerializer):
         required=False
     )
     
+    def get_fields(self):
+        """Genera fields dinámicamente verificando si los campos de ML existen"""
+        fields = super().get_fields()
+        
+        # Campos base siempre presentes
+        base_fields = ['id', 'nombre', 'descripcion', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug']
+        
+        # Campos de ML que pueden no existir
+        ml_fields = ['ml_item_id', 'ml_sincronizado', 'ml_sincronizar', 'ml_categoria_id', 'ml_ultima_sincronizacion']
+        
+        # Verificar si los campos de ML existen en el modelo
+        ml_fields_exist = hasattr(Producto, 'ml_item_id')
+        
+        # Remover campos de ML si no existen en el modelo
+        if not ml_fields_exist:
+            for field_name in ml_fields:
+                fields.pop(field_name, None)
+        
+        return fields
+    
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'descripcion', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug', 
-                  'ml_item_id', 'ml_sincronizado', 'ml_sincronizar', 'ml_categoria_id', 'ml_ultima_sincronizacion']
+        fields = '__all__'
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
