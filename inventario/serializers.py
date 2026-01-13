@@ -30,8 +30,10 @@ class ProductoSerializer(serializers.ModelSerializer):
         """Genera fields dinámicamente verificando si los campos de ML existen"""
         fields = super().get_fields()
         
-        # Campos base siempre presentes
-        base_fields = ['id', 'nombre', 'descripcion', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'tienda_slug']
+        # Remover 'tienda' del serializer ya que usamos 'tienda_slug' en su lugar
+        # Esto evita el conflicto con UniqueTogetherValidator
+        if 'tienda' in fields and 'tienda_slug' in fields:
+            fields.pop('tienda', None)
         
         # Campos de ML que pueden no existir
         ml_fields = ['ml_item_id', 'ml_sincronizado', 'ml_sincronizar', 'ml_categoria_id', 'ml_ultima_sincronizacion']

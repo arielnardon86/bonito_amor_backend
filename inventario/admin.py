@@ -151,31 +151,26 @@ class TiendaAdmin(admin.ModelAdmin):
         """
         Establece valores por defecto para campos de ML al crear/actualizar tiendas
         """
-        # Verificar si los campos de ML existen en el modelo
+        # Verificar si los campos de ML existen en el modelo usando _meta
         try:
-            # Intentar establecer valores por defecto directamente
-            # Si el campo no existe, AttributeError será capturado
-            if hasattr(Tienda, 'ml_modo_test') and not change:
-                # Al crear una nueva tienda, establecer valor por defecto
-                obj.ml_modo_test = True
-            elif hasattr(Tienda, 'ml_modo_test') and not hasattr(obj, 'ml_modo_test'):
-                obj.ml_modo_test = True
+            model_field_names = [f.name for f in Tienda._meta.get_fields() if hasattr(f, 'column')]
             
-            if hasattr(Tienda, 'plataforma_ecommerce') and not hasattr(obj, 'plataforma_ecommerce'):
-                obj.plataforma_ecommerce = 'NINGUNA'
-            
-            if hasattr(Tienda, 'ml_sync_habilitado') and not hasattr(obj, 'ml_sync_habilitado'):
-                obj.ml_sync_habilitado = False
-            
-            if hasattr(Tienda, 'ml_sincronizar_stock') and not hasattr(obj, 'ml_sincronizar_stock'):
-                obj.ml_sincronizar_stock = True
-            
-            if hasattr(Tienda, 'ml_sincronizar_precios') and not hasattr(obj, 'ml_sincronizar_precios'):
-                obj.ml_sincronizar_precios = True
-            
-            if hasattr(Tienda, 'ml_sincronizar_productos') and not hasattr(obj, 'ml_sincronizar_productos'):
-                obj.ml_sincronizar_productos = True
-        except AttributeError:
+            # Al crear una nueva tienda (not change), establecer valores por defecto
+            if not change:
+                if 'ml_modo_test' in model_field_names:
+                    obj.ml_modo_test = True
+                if 'plataforma_ecommerce' in model_field_names:
+                    if not obj.plataforma_ecommerce:
+                        obj.plataforma_ecommerce = 'NINGUNA'
+                if 'ml_sync_habilitado' in model_field_names:
+                    obj.ml_sync_habilitado = False
+                if 'ml_sincronizar_stock' in model_field_names:
+                    obj.ml_sincronizar_stock = True
+                if 'ml_sincronizar_precios' in model_field_names:
+                    obj.ml_sincronizar_precios = True
+                if 'ml_sincronizar_productos' in model_field_names:
+                    obj.ml_sincronizar_productos = True
+        except (AttributeError, ValueError):
             # Si los campos no existen, simplemente continuar
             pass
         
