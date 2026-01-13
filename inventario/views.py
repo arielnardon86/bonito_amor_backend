@@ -763,13 +763,38 @@ class TiendaViewSet(viewsets.ModelViewSet):
         - Se cancela una orden
         """
         try:
-            tienda = self.get_object()
+            # Intentar obtener la tienda usando pk del kwargs o del request
+            tienda_id = pk or self.kwargs.get('pk')
+            
+            if not tienda_id:
+                logger.warning("Webhook llamado sin ID de tienda")
+                return Response({
+                    'status': 'error',
+                    'message': 'ID de tienda no proporcionado'
+                }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
+            
+            try:
+                tienda = Tienda.objects.get(pk=tienda_id)
+            except Tienda.DoesNotExist:
+                # Si no se encuentra la tienda, loguear y retornar 200 OK para que ML no reenvíe
+                logger.warning(f"Tienda no encontrada para webhook: {tienda_id}")
+                return Response({
+                    'status': 'error',
+                    'message': f'Tienda con ID {tienda_id} no encontrada en la base de datos'
+                }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
+            except Exception as e:
+                logger.error(f"Error al obtener tienda {tienda_id}: {str(e)}")
+                return Response({
+                    'status': 'error',
+                    'message': f'Error al obtener tienda: {str(e)}'
+                }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
             
             if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
-                return Response(
-                    {'error': 'La tienda no está configurada para Mercado Libre'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                logger.warning(f"Tienda {tienda.id} no está configurada para Mercado Libre")
+                return Response({
+                    'status': 'error',
+                    'message': 'La tienda no está configurada para Mercado Libre'
+                }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
             
             # Manejar petición GET (validación de Mercado Libre)
             if request.method == 'GET':
