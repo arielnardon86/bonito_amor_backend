@@ -240,12 +240,30 @@ class TiendaViewSet(viewsets.ModelViewSet):
     
     # ========== MÉTODOS DE MERCADO LIBRE ==========
     
+    def _ml_fields_exist(self, tienda):
+        """Verifica si los campos de ML existen en el modelo Tienda"""
+        return hasattr(tienda, 'plataforma_ecommerce')
+    
+    def _ml_configured(self, tienda):
+        """Verifica si ML está configurado para la tienda"""
+        if not self._ml_fields_exist(tienda):
+            return False
+        return getattr(tienda, 'plataforma_ecommerce', 'NINGUNA') == 'MERCADO_LIBRE'
+    
     @action(detail=True, methods=['get'], url_path='mercadolibre/status')
     def ml_status(self, request, pk=None):
         """Verifica el estado de la conexión con Mercado Libre"""
         tienda = self.get_object()
         
-        if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+        # Verificar si los campos de ML existen
+        if not self._ml_fields_exist(tienda):
+            return Response({
+                'connected': False,
+                'message': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.',
+                'migrations_required': True
+            })
+        
+        if not self._ml_configured(tienda):
             return Response({
                 'connected': False,
                 'message': 'La tienda no está configurada para Mercado Libre'
@@ -254,17 +272,17 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadolibre_service import MercadoLibreService
         ml_service = MercadoLibreService(tienda)
         
-        has_token = bool(tienda.ml_access_token)
-        has_app_id = bool(tienda.ml_app_id)
-        has_client_secret = bool(tienda.ml_client_secret)
+        has_token = bool(getattr(tienda, 'ml_access_token', None))
+        has_app_id = bool(getattr(tienda, 'ml_app_id', None))
+        has_client_secret = bool(getattr(tienda, 'ml_client_secret', None))
         
         return Response({
             'connected': has_token and has_app_id and has_client_secret,
             'has_token': has_token,
             'has_app_id': has_app_id,
             'has_client_secret': has_client_secret,
-            'user_id': tienda.ml_user_id,
-            'modo_test': tienda.ml_modo_test
+            'user_id': getattr(tienda, 'ml_user_id', None),
+            'modo_test': getattr(tienda, 'ml_modo_test', True)
         })
     
     @action(detail=True, methods=['get'], url_path='mercadolibre/auth-url')
@@ -272,7 +290,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
         """Genera la URL de autorización OAuth para Mercado Libre"""
         tienda = self.get_object()
         
-        if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+        if not self._ml_fields_exist(tienda):
+            return Response(
+                {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not self._ml_configured(tienda):
             return Response(
                 {'error': 'La tienda no está configurada para Mercado Libre'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -298,7 +322,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
         """Procesa el callback de OAuth de Mercado Libre"""
         tienda = self.get_object()
         
-        if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+        if not self._ml_fields_exist(tienda):
+            return Response(
+                {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not self._ml_configured(tienda):
             return Response(
                 {'error': 'La tienda no está configurada para Mercado Libre'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -319,21 +349,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
         try:
             tokens = ml_service.exchange_code_for_tokens(code, redirect_uri)
             
-            # Guardar tokens en la tienda
-            tienda.ml_access_token = tokens['access_token']
-            tienda.ml_refresh_token = tokens.get('refresh_token')
-            tienda.ml_user_id = tokens.get('user_id')
+            # Guardar tokens en la tienda (usando getattr/setattr para seguridad)
+            if hasattr(tienda, 'ml_access_token'):
+                tienda.ml_access_token = tokens['access_token']
+            if hasattr(tienda, 'ml_refresh_token'):
+                tienda.ml_refresh_token = tokens.get('refresh_token')
+            if hasattr(tienda, 'ml_user_id'):
+                tienda.ml_user_id = tokens.get('user_id')
             
             # Calcular fecha de expiración
-            expires_in = tokens.get('expires_in', 21600)  # 6 horas por defecto
-            tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+            if hasattr(tienda, 'ml_token_expires_at'):
+                expires_in = tokens.get('expires_in', 21600)  # 6 horas por defecto
+                tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
             
             tienda.save()
             
             return Response({
                 'success': True,
                 'message': 'Autenticación exitosa',
-                'user_id': tienda.ml_user_id
+                'user_id': getattr(tienda, 'ml_user_id', None)
             })
         except Exception as e:
             logger.error(f"Error en callback OAuth: {e}", exc_info=True)
@@ -352,7 +386,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
         try:
             tienda = self.get_object()
             
-            if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+            if not self._ml_fields_exist(tienda):
+                return Response(
+                    {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not self._ml_configured(tienda):
                 return Response(
                     {'error': 'La tienda no está configurada para Mercado Libre'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -617,7 +657,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
         try:
             tienda = self.get_object()
             
-            if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+            if not self._ml_fields_exist(tienda):
+                return Response(
+                    {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not self._ml_configured(tienda):
                 return Response(
                     {'error': 'La tienda no está configurada para Mercado Libre'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -789,7 +835,15 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     'message': f'Error al obtener tienda: {str(e)}'
                 }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
             
-            if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
+            # Verificar si los campos de ML existen
+            if not self._ml_fields_exist(tienda):
+                logger.warning(f"Campos de ML no disponibles para tienda {tienda.id}")
+                return Response({
+                    'status': 'error',
+                    'message': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'
+                }, status=status.HTTP_200_OK)  # 200 OK para que ML no reenvíe
+            
+            if not self._ml_configured(tienda):
                 logger.warning(f"Tienda {tienda.id} no está configurada para Mercado Libre")
                 return Response({
                     'status': 'error',
