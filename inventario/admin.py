@@ -151,34 +151,33 @@ class TiendaAdmin(admin.ModelAdmin):
         """
         Establece valores por defecto para campos de ML al crear/actualizar tiendas
         """
-        # Establecer valores por defecto para campos de ML si existen en el modelo
-        # Verificar directamente si el campo existe en el modelo usando _meta
-        model_fields = [f.name for f in Tienda._meta.get_fields() if hasattr(f, 'column')]
-        
-        # Establecer valores por defecto si el campo existe y no tiene valor
-        if 'ml_modo_test' in model_fields:
-            if not hasattr(obj, 'ml_modo_test') or getattr(obj, 'ml_modo_test', None) is None:
+        # Verificar si los campos de ML existen en el modelo
+        try:
+            # Intentar establecer valores por defecto directamente
+            # Si el campo no existe, AttributeError será capturado
+            if hasattr(Tienda, 'ml_modo_test') and not change:
+                # Al crear una nueva tienda, establecer valor por defecto
                 obj.ml_modo_test = True
-        
-        if 'plataforma_ecommerce' in model_fields:
-            if not hasattr(obj, 'plataforma_ecommerce') or getattr(obj, 'plataforma_ecommerce', None) is None:
+            elif hasattr(Tienda, 'ml_modo_test') and not hasattr(obj, 'ml_modo_test'):
+                obj.ml_modo_test = True
+            
+            if hasattr(Tienda, 'plataforma_ecommerce') and not hasattr(obj, 'plataforma_ecommerce'):
                 obj.plataforma_ecommerce = 'NINGUNA'
-        
-        if 'ml_sync_habilitado' in model_fields:
-            if not hasattr(obj, 'ml_sync_habilitado') or getattr(obj, 'ml_sync_habilitado', None) is None:
+            
+            if hasattr(Tienda, 'ml_sync_habilitado') and not hasattr(obj, 'ml_sync_habilitado'):
                 obj.ml_sync_habilitado = False
-        
-        if 'ml_sincronizar_stock' in model_fields:
-            if not hasattr(obj, 'ml_sincronizar_stock') or getattr(obj, 'ml_sincronizar_stock', None) is None:
+            
+            if hasattr(Tienda, 'ml_sincronizar_stock') and not hasattr(obj, 'ml_sincronizar_stock'):
                 obj.ml_sincronizar_stock = True
-        
-        if 'ml_sincronizar_precios' in model_fields:
-            if not hasattr(obj, 'ml_sincronizar_precios') or getattr(obj, 'ml_sincronizar_precios', None) is None:
+            
+            if hasattr(Tienda, 'ml_sincronizar_precios') and not hasattr(obj, 'ml_sincronizar_precios'):
                 obj.ml_sincronizar_precios = True
-        
-        if 'ml_sincronizar_productos' in model_fields:
-            if not hasattr(obj, 'ml_sincronizar_productos') or getattr(obj, 'ml_sincronizar_productos', None) is None:
+            
+            if hasattr(Tienda, 'ml_sincronizar_productos') and not hasattr(obj, 'ml_sincronizar_productos'):
                 obj.ml_sincronizar_productos = True
+        except AttributeError:
+            # Si los campos no existen, simplemente continuar
+            pass
         
         super().save_model(request, obj, form, change)
 
