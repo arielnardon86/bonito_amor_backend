@@ -65,22 +65,47 @@ class TiendaAdmin(admin.ModelAdmin):
     def _get_ml_fields(self):
         """Obtiene los campos de ML que existen en el modelo"""
         fields = []
-        if hasattr(Tienda, 'plataforma_ecommerce'):
+        # Verificar si los campos existen usando _meta.get_field
+        try:
+            Tienda._meta.get_field('plataforma_ecommerce')
             fields.append('plataforma_ecommerce')
-        if hasattr(Tienda, 'ml_app_id'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_app_id')
             fields.append('ml_app_id')
-        if hasattr(Tienda, 'ml_client_secret'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_client_secret')
             fields.append('ml_client_secret')
-        if hasattr(Tienda, 'ml_modo_test'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_modo_test')
             fields.append('ml_modo_test')
-        if hasattr(Tienda, 'ml_sync_habilitado'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_sync_habilitado')
             fields.append('ml_sync_habilitado')
-        if hasattr(Tienda, 'ml_sincronizar_stock'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_sincronizar_stock')
             fields.append('ml_sincronizar_stock')
-        if hasattr(Tienda, 'ml_sincronizar_precios'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_sincronizar_precios')
             fields.append('ml_sincronizar_precios')
-        if hasattr(Tienda, 'ml_sincronizar_productos'):
+        except:
+            pass
+        try:
+            Tienda._meta.get_field('ml_sincronizar_productos')
             fields.append('ml_sincronizar_productos')
+        except:
+            pass
         return tuple(fields)
     
     def _get_ml_token_fields(self):
