@@ -152,31 +152,33 @@ class TiendaAdmin(admin.ModelAdmin):
         Establece valores por defecto para campos de ML al crear/actualizar tiendas
         """
         # Establecer valores por defecto para campos de ML si existen en el modelo
-        # Usar getattr con valores por defecto para evitar AttributeError
-        if hasattr(Tienda, 'ml_modo_test'):
-            # Siempre establecer si no tiene valor (incluye None)
-            if getattr(obj, 'ml_modo_test', None) is None:
-                setattr(obj, 'ml_modo_test', True)
+        # Verificar directamente si el campo existe en el modelo usando _meta
+        model_fields = [f.name for f in Tienda._meta.get_fields() if hasattr(f, 'column')]
         
-        if hasattr(Tienda, 'plataforma_ecommerce'):
-            if getattr(obj, 'plataforma_ecommerce', None) is None:
-                setattr(obj, 'plataforma_ecommerce', 'NINGUNA')
+        # Establecer valores por defecto si el campo existe y no tiene valor
+        if 'ml_modo_test' in model_fields:
+            if not hasattr(obj, 'ml_modo_test') or getattr(obj, 'ml_modo_test', None) is None:
+                obj.ml_modo_test = True
         
-        if hasattr(Tienda, 'ml_sync_habilitado'):
-            if getattr(obj, 'ml_sync_habilitado', None) is None:
-                setattr(obj, 'ml_sync_habilitado', False)
+        if 'plataforma_ecommerce' in model_fields:
+            if not hasattr(obj, 'plataforma_ecommerce') or getattr(obj, 'plataforma_ecommerce', None) is None:
+                obj.plataforma_ecommerce = 'NINGUNA'
         
-        if hasattr(Tienda, 'ml_sincronizar_stock'):
-            if getattr(obj, 'ml_sincronizar_stock', None) is None:
-                setattr(obj, 'ml_sincronizar_stock', True)
+        if 'ml_sync_habilitado' in model_fields:
+            if not hasattr(obj, 'ml_sync_habilitado') or getattr(obj, 'ml_sync_habilitado', None) is None:
+                obj.ml_sync_habilitado = False
         
-        if hasattr(Tienda, 'ml_sincronizar_precios'):
-            if getattr(obj, 'ml_sincronizar_precios', None) is None:
-                setattr(obj, 'ml_sincronizar_precios', True)
+        if 'ml_sincronizar_stock' in model_fields:
+            if not hasattr(obj, 'ml_sincronizar_stock') or getattr(obj, 'ml_sincronizar_stock', None) is None:
+                obj.ml_sincronizar_stock = True
         
-        if hasattr(Tienda, 'ml_sincronizar_productos'):
-            if getattr(obj, 'ml_sincronizar_productos', None) is None:
-                setattr(obj, 'ml_sincronizar_productos', True)
+        if 'ml_sincronizar_precios' in model_fields:
+            if not hasattr(obj, 'ml_sincronizar_precios') or getattr(obj, 'ml_sincronizar_precios', None) is None:
+                obj.ml_sincronizar_precios = True
+        
+        if 'ml_sincronizar_productos' in model_fields:
+            if not hasattr(obj, 'ml_sincronizar_productos') or getattr(obj, 'ml_sincronizar_productos', None) is None:
+                obj.ml_sincronizar_productos = True
         
         super().save_model(request, obj, form, change)
 
