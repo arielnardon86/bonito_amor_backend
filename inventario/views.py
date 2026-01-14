@@ -336,12 +336,24 @@ def ml_oauth_callback_public_view(request):
                 
                 tienda.save()
                 
-                # Retornar HTML de éxito para el navegador
+                # Retornar HTML de éxito para el navegador con postMessage para comunicarse con la ventana padre
                 return HttpResponse(
-                    f'<html><body><h1>✅ Autenticación exitosa</h1>'
+                    f'<html><head><title>Autenticación exitosa</title></head><body>'
+                    f'<h1>✅ Autenticación exitosa</h1>'
                     f'<p>La integración con Mercado Libre se configuró correctamente para la tienda: {tienda.nombre}</p>'
                     f'<p>Puedes cerrar esta ventana.</p>'
-                    f'<script>setTimeout(function(){{window.close();}}, 3000);</script></body></html>',
+                    f'<script>'
+                    f'if (window.opener) {{'
+                    f'  window.opener.postMessage({{'
+                    f'    type: "ML_OAUTH_SUCCESS",'
+                    f'    tienda_id: "{tienda.id}",'
+                    f'    message: "Autenticación exitosa"'
+                    f'  }}, "*");'
+                    f'  setTimeout(function(){{window.close();}}, 2000);'
+                    f'}} else {{'
+                    f'  setTimeout(function(){{window.close();}}, 3000);'
+                    f'}}'
+                    f'</script></body></html>',
                     content_type='text/html'
                 )
             except Exception as e:
