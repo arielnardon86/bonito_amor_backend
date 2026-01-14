@@ -314,7 +314,7 @@ def ml_oauth_callback_public_view(request):
             ml_service = MercadoLibreService(tienda)
             
             if not settings.DEBUG:
-                redirect_uri = 'https://totalstock.onrender.com/api/tiendas/mercadolibre/callback/'
+                redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadolibre/callback/'
             else:
                 scheme = request.scheme
                 host = request.get_host()
@@ -501,8 +501,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
             # Usar la URL fija configurada en Mercado Libre (sin tienda_id)
             from django.conf import settings
             if not settings.DEBUG:
-                # Producción: usar totalstock.onrender.com
-                redirect_uri = 'https://totalstock.onrender.com/api/tiendas/mercadolibre/callback/'
+                # Producción: usar bonito-amor-backend.onrender.com
+                redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadolibre/callback/'
             else:
                 # Desarrollo: construirla dinámicamente
                 scheme = request.scheme  # http o https
