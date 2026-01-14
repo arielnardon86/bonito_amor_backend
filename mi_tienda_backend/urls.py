@@ -6,8 +6,14 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
-    ArancelMetodoTiendaViewSet, FacturaViewSet, ml_oauth_callback_public_view
+    ArancelMetodoTiendaViewSet, FacturaViewSet
 )
+# Importación condicional del callback público de ML
+try:
+    from inventario.views import ml_oauth_callback_public_view
+except (ImportError, AttributeError) as e:
+    ml_oauth_callback_public_view = None
+    print(f"⚠️ Warning: No se pudo importar ml_oauth_callback_public_view: {e}")
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 # Importación condicional de CambioDevolucionViewSet
@@ -39,7 +45,17 @@ urlpatterns = [
     # IMPORTANTE: Ruta manual del callback público DEBE ir ANTES de include(router.urls)
     # para que tenga prioridad sobre las rutas generadas por el router
     # Usamos una vista independiente (@api_view) en lugar de un método del ViewSet
-    path('api/tiendas/mercadolibre/callback/', ml_oauth_callback_public_view, name='ml-oauth-callback-public'),
+]
+
+# Agregar ruta del callback público solo si la vista está disponible
+if ml_oauth_callback_public_view is not None:
+    urlpatterns.append(
+        path('api/tiendas/mercadolibre/callback/', ml_oauth_callback_public_view, name='ml-oauth-callback-public')
+    )
+else:
+    print("⚠️ Warning: ml_oauth_callback_public_view no disponible, la ruta /api/tiendas/mercadolibre/callback/ no estará disponible")
+
+urlpatterns.extend([
     path('api/', include(router.urls)),
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
