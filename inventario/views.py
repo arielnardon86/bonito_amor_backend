@@ -461,6 +461,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         if not self._ml_fields_exist(tienda):
             return Response({
                 'connected': False,
+                'authenticated': False,
+                'plataforma_ecommerce': 'NINGUNA',
                 'message': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.',
                 'migrations_required': True
             })
@@ -468,6 +470,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         if not self._ml_configured(tienda):
             return Response({
                 'connected': False,
+                'authenticated': False,
+                'plataforma_ecommerce': getattr(tienda, 'plataforma_ecommerce', 'NINGUNA'),
                 'message': 'La tienda no está configurada para Mercado Libre'
             })
         
@@ -480,11 +484,14 @@ class TiendaViewSet(viewsets.ModelViewSet):
         
         return Response({
             'connected': has_token and has_app_id and has_client_secret,
+            'authenticated': has_token and has_app_id and has_client_secret,
+            'plataforma_ecommerce': getattr(tienda, 'plataforma_ecommerce', 'NINGUNA'),
             'has_token': has_token,
             'has_app_id': has_app_id,
             'has_client_secret': has_client_secret,
             'user_id': getattr(tienda, 'ml_user_id', None),
-            'modo_test': getattr(tienda, 'ml_modo_test', True)
+            'modo_test': getattr(tienda, 'ml_modo_test', True),
+            'token_expires_at': getattr(tienda, 'ml_token_expires_at', None)
         })
     
     @action(detail=True, methods=['get'], url_path='mercadolibre/auth-url')
