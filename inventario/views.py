@@ -305,8 +305,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadolibre_service import MercadoLibreService
         ml_service = MercadoLibreService(tienda)
         
-        # Obtener la URL de redirección desde el request o usar una por defecto
-        redirect_uri = request.query_params.get('redirect_uri', 'https://localhost:8000/mercadolibre/callback')
+        # Obtener la URL de redirección desde el request o construirla dinámicamente
+        redirect_uri = request.query_params.get('redirect_uri')
+        if not redirect_uri:
+            # Construir la URL dinámicamente basándose en el request
+            scheme = request.scheme  # http o https
+            host = request.get_host()  # dominio del servidor
+            redirect_uri = f"{scheme}://{host}/api/tiendas/{pk}/mercadolibre/callback/"
         
         try:
             auth_url = ml_service.get_authorization_url(redirect_uri)
