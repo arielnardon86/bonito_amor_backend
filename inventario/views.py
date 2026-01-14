@@ -221,7 +221,6 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 
 # Vista independiente para el callback público de Mercado Libre (fuera del ViewSet)
 @api_view(['GET', 'POST'])
-@permissions.AllowAny()
 def ml_oauth_callback_public_view(request):
     """
     Vista independiente para recibir el callback de OAuth de Mercado Libre
