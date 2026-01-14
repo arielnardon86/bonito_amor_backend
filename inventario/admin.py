@@ -121,40 +121,31 @@ class TiendaAdmin(admin.ModelAdmin):
         ]
         
         # Agregar configuración de ML - Las migraciones están aplicadas
-        ml_fields = self._get_ml_fields()
-        if ml_fields:
+        # Incluir campos directamente ya que las migraciones están aplicadas
+        try:
             fieldsets.append(('Configuración E-commerce - Mercado Libre', {
-                'fields': ml_fields,
+                'fields': (
+                    'plataforma_ecommerce',
+                    'ml_app_id',
+                    'ml_client_secret',
+                    'ml_modo_test',
+                    'ml_sync_habilitado',
+                    'ml_sincronizar_stock',
+                    'ml_sincronizar_precios',
+                    'ml_sincronizar_productos',
+                ),
                 'description': 'Configuración para integración con Mercado Libre. Los tokens OAuth se generan automáticamente después de la autenticación.',
             }))
             
-            # Agregar tokens solo si existen
-            token_fields = self._get_ml_token_fields()
-            if token_fields:
-                fieldsets.append(('Tokens Mercado Libre (Solo Lectura)', {
-                    'fields': token_fields,
-                    'classes': ('collapse',),
-                    'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
-                }))
-        else:
-            # Si _get_ml_fields() devuelve vacío, incluir campos directamente
-            # Esto puede ocurrir si hay un problema con la verificación
-            try:
-                fieldsets.append(('Configuración E-commerce - Mercado Libre', {
-                    'fields': (
-                        'plataforma_ecommerce',
-                        'ml_app_id',
-                        'ml_client_secret',
-                        'ml_modo_test',
-                        'ml_sync_habilitado',
-                        'ml_sincronizar_stock',
-                        'ml_sincronizar_precios',
-                        'ml_sincronizar_productos',
-                    ),
-                    'description': 'Configuración para integración con Mercado Libre. Los tokens OAuth se generan automáticamente después de la autenticación.',
-                }))
-            except:
-                pass
+            # Agregar tokens
+            fieldsets.append(('Tokens Mercado Libre (Solo Lectura)', {
+                'fields': ('ml_user_id', 'ml_token_expires_at'),
+                'classes': ('collapse',),
+                'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
+            }))
+        except Exception:
+            # Si hay algún error, simplemente continuar sin estos fieldsets
+            pass
         
         fieldsets.append(('Información del Sistema', {
             'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
