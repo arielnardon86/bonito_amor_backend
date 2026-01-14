@@ -38,7 +38,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     # IMPORTANTE: Ruta manual del callback público DEBE ir ANTES de include(router.urls)
     # para que tenga prioridad sobre las rutas generadas por el router
-    path('api/tiendas/mercadolibre/callback/', TiendaViewSet.as_view({'get': 'ml_oauth_callback_public', 'post': 'ml_oauth_callback_public'}), name='ml-oauth-callback-public'),
+    # Usamos una vista independiente (@api_view) en lugar de un método del ViewSet
+    path('api/tiendas/mercadolibre/callback/', ml_oauth_callback_public_view, name='ml-oauth-callback-public'),
     path('api/', include(router.urls)),
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

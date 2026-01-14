@@ -4,7 +4,7 @@ import logging
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.views import APIView
 from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -219,6 +219,196 @@ class CategoriaViewSet(viewsets.ModelViewSet):
         close_old_connections()
         return super().list(request, *args, **kwargs)
 
+# Vista independiente para el callback público de Mercado Libre (fuera del ViewSet)
+@api_view(['GET', 'POST'])
+@permissions.AllowAny()
+def ml_oauth_callback_public_view(request):
+    """
+    Vista independiente para recibir el callback de OAuth de Mercado Libre
+    Este endpoint NO requiere {tienda_id} en la URL, permitiendo que Mercado Libre
+    redirija a una URL fija como /api/tiendas/mercadolibre/callback/
+    
+    GET: Maneja la redirección desde Mercado Libre (obtiene el código)
+    POST: Intercambia el código por tokens
+    """
+    from .models import Tienda
+    from .services.mercadolibre_service import MercadoLibreService
+    from django.conf import settings
+    
+    # Obtener tienda_id del request (puede venir en query params, body, o state)
+    tienda_id = request.query_params.get('tienda_id') or (request.data.get('tienda_id') if hasattr(request, 'data') else None)
+    tienda = None
+    
+    # Manejar GET (redirección desde Mercado Libre con code en query params)
+    if request.method == 'GET':
+        state = request.query_params.get('state')  # El state puede contener tienda_id
+        
+        # PRIORIDAD 1: Si viene state, extraer tienda_id de ahí (es lo más confiable)
+        if state:
+            try:
+                # El state puede venir en formato "tienda_id:numero" (ej: "uuid:1")
+                # Extraer solo la parte del UUID (antes del primer :)
+                if ':' in state:
+                    # Dividir por ':' y tomar la primera parte (el UUID)
+                    tienda_id = state.split(':')[0]
+                elif len(state) > 30:  # Probablemente es un UUID sin separador
+                    tienda_id = state
+                
+                if tienda_id:
+                    tienda = Tienda.objects.get(id=tienda_id)
+                    logger.info(f"Tienda identificada desde state: {tienda_id}")
+            except (ValueError, Tienda.DoesNotExist) as e:
+                logger.warning(f"No se pudo extraer tienda_id del state '{state}': {e}")
+    
+    # Si aún no tenemos tienda, intentar otras formas
+    if not tienda:
+        if tienda_id:
+            try:
+                tienda = Tienda.objects.get(id=tienda_id)
+            except Tienda.DoesNotExist:
+                return Response(
+                    {'error': f'Tienda con ID {tienda_id} no encontrada'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # Como último recurso, buscar tiendas configuradas con ML
+            # Solo funciona si hay exactamente una tienda configurada
+            tiendas_ml = Tienda.objects.filter(
+                plataforma_ecommerce='MERCADO_LIBRE'
+            ).exclude(ml_app_id__isnull=True).exclude(ml_app_id='')
+            
+            if tiendas_ml.count() == 1:
+                tienda = tiendas_ml.first()
+                logger.info(f"Tienda identificada automáticamente (única configurada): {tienda.id}")
+            elif tiendas_ml.count() == 0:
+                return Response(
+                    {'error': 'No hay tiendas configuradas para Mercado Libre'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                return Response(
+                    {'error': 'No se pudo determinar la tienda. Múltiples tiendas configuradas. Proporciona tienda_id en el request o usa el parámetro state.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+    
+    # Si llegamos aquí sin tienda, es un error
+    if not tienda:
+        return Response(
+            {'error': 'No se pudo determinar la tienda'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Verificar si ML está configurado
+    if not hasattr(tienda, 'plataforma_ecommerce') or getattr(tienda, 'plataforma_ecommerce', 'NINGUNA') != 'MERCADO_LIBRE':
+        return Response(
+            {'error': 'La tienda no está configurada para Mercado Libre'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Manejar GET (redirección desde Mercado Libre con code en query params)
+    if request.method == 'GET':
+        code = request.query_params.get('code')
+        
+        if code:
+            # Procesar el callback directamente
+            ml_service = MercadoLibreService(tienda)
+            
+            if not settings.DEBUG:
+                redirect_uri = 'https://totalstock.onrender.com/api/tiendas/mercadolibre/callback/'
+            else:
+                scheme = request.scheme
+                host = request.get_host()
+                redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
+            
+            try:
+                tokens = ml_service.exchange_code_for_tokens(code, redirect_uri)
+                
+                # Guardar tokens
+                if hasattr(tienda, 'ml_access_token'):
+                    tienda.ml_access_token = tokens['access_token']
+                if hasattr(tienda, 'ml_refresh_token'):
+                    tienda.ml_refresh_token = tokens.get('refresh_token')
+                if hasattr(tienda, 'ml_user_id'):
+                    tienda.ml_user_id = tokens.get('user_id')
+                if hasattr(tienda, 'ml_token_expires_at'):
+                    expires_in = tokens.get('expires_in', 21600)
+                    tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+                
+                tienda.save()
+                
+                # Retornar HTML de éxito para el navegador
+                return HttpResponse(
+                    f'<html><body><h1>✅ Autenticación exitosa</h1>'
+                    f'<p>La integración con Mercado Libre se configuró correctamente para la tienda: {tienda.nombre}</p>'
+                    f'<p>Puedes cerrar esta ventana.</p>'
+                    f'<script>setTimeout(function(){{window.close();}}, 3000);</script></body></html>',
+                    content_type='text/html'
+                )
+            except Exception as e:
+                logger.error(f"Error procesando callback GET: {e}", exc_info=True)
+                return HttpResponse(
+                    f'<html><body><h1>❌ Error en autenticación</h1>'
+                    f'<p>Error: {str(e)}</p></body></html>',
+                    content_type='text/html',
+                    status=400
+                )
+        else:
+            return Response({
+                'message': 'Endpoint de callback de Mercado Libre. Esperando código de autorización.'
+            })
+    
+    # Manejar POST (intercambiar código por tokens)
+    code = request.data.get('code') if hasattr(request, 'data') else None
+    if not code:
+        code = request.query_params.get('code')
+    
+    if not code:
+        return Response(
+            {'error': 'Código de autorización no proporcionado'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    ml_service = MercadoLibreService(tienda)
+    
+    # Usar la URL fija configurada en Mercado Libre
+    if not settings.DEBUG:
+        redirect_uri = 'https://totalstock.onrender.com/api/tiendas/mercadolibre/callback/'
+    else:
+        scheme = request.scheme
+        host = request.get_host()
+        redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
+    
+    try:
+        tokens = ml_service.exchange_code_for_tokens(code, redirect_uri)
+        
+        # Guardar tokens en la tienda
+        if hasattr(tienda, 'ml_access_token'):
+            tienda.ml_access_token = tokens['access_token']
+        if hasattr(tienda, 'ml_refresh_token'):
+            tienda.ml_refresh_token = tokens.get('refresh_token')
+        if hasattr(tienda, 'ml_user_id'):
+            tienda.ml_user_id = tokens.get('user_id')
+        
+        # Calcular fecha de expiración
+        if hasattr(tienda, 'ml_token_expires_at'):
+            expires_in = tokens.get('expires_in', 21600)
+            tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+        
+        tienda.save()
+        
+        return Response({
+            'success': True,
+            'message': 'Autenticación exitosa',
+            'user_id': getattr(tienda, 'ml_user_id', None)
+        })
+    except Exception as e:
+        logger.error(f"Error en callback OAuth público: {e}", exc_info=True)
+        return Response(
+            {'error': f'Error al procesar el callback: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
@@ -396,7 +586,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    @action(detail=False, methods=['get', 'post'], url_path='mercadolibre/callback')
+    @action(detail=False, methods=['get', 'post'], url_path='mercadolibre/callback', permission_classes=[permissions.AllowAny])
     def ml_oauth_callback_public(self, request):
         """
         Endpoint público para recibir el callback de OAuth de Mercado Libre
