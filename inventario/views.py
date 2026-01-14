@@ -958,7 +958,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
-    @action(detail=True, methods=['get'], url_path='mercadolibre/categories')
+    @action(detail=True, methods=['get'], url_path='mercadolibre/categories', pagination_class=None)
     def ml_search_categories(self, request, pk=None):
         """
         Busca categorías de Mercado Libre con un buscador
