@@ -120,32 +120,22 @@ class TiendaAdmin(admin.ModelAdmin):
             }),
         ]
         
-        # Agregar configuración de ML - Las migraciones están aplicadas
-        # Incluir campos directamente ya que las migraciones están aplicadas
-        try:
+        # Agregar configuración de ML solo si los campos existen en el modelo
+        ml_fields = self._get_ml_fields()
+        if ml_fields:
             fieldsets.append(('Configuración E-commerce - Mercado Libre', {
-                'fields': (
-                    'plataforma_ecommerce',
-                    'ml_app_id',
-                    'ml_client_secret',
-                    'ml_modo_test',
-                    'ml_sync_habilitado',
-                    'ml_sincronizar_stock',
-                    'ml_sincronizar_precios',
-                    'ml_sincronizar_productos',
-                ),
+                'fields': ml_fields,
                 'description': 'Configuración para integración con Mercado Libre. Los tokens OAuth se generan automáticamente después de la autenticación.',
             }))
             
-            # Agregar tokens
-            fieldsets.append(('Tokens Mercado Libre (Solo Lectura)', {
-                'fields': ('ml_user_id', 'ml_token_expires_at'),
-                'classes': ('collapse',),
-                'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
-            }))
-        except Exception:
-            # Si hay algún error, simplemente continuar sin estos fieldsets
-            pass
+            # Agregar tokens solo si existen
+            token_fields = self._get_ml_token_fields()
+            if token_fields:
+                fieldsets.append(('Tokens Mercado Libre (Solo Lectura)', {
+                    'fields': token_fields,
+                    'classes': ('collapse',),
+                    'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
+                }))
         
         fieldsets.append(('Información del Sistema', {
             'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
