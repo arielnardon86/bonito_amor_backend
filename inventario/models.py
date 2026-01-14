@@ -76,6 +76,69 @@ class Tienda(models.Model):
         help_text="URL del endpoint del servicio ARCA. Ejemplo: https://api.arca.com/v1/facturacion. Consulta la documentación de tu proveedor."
     )
     
+    # Configuración E-commerce - Mercado Libre
+    PLATAFORMA_ECOMMERCE_CHOICES = [
+        ('NINGUNA', 'Sin integración e-commerce'),
+        ('MERCADO_LIBRE', 'Mercado Libre'),
+        ('TIENDA_NUBE', 'Tienda Nube'),
+    ]
+    plataforma_ecommerce = models.CharField(
+        max_length=20, 
+        choices=PLATAFORMA_ECOMMERCE_CHOICES, 
+        default='NINGUNA',
+        help_text="Plataforma de e-commerce a integrar con esta tienda"
+    )
+    
+    # Credenciales Mercado Libre (OAuth)
+    ml_access_token = models.TextField(
+        blank=True, null=True,
+        help_text="Access Token de Mercado Libre (obtenido mediante OAuth). No compartir públicamente."
+    )
+    ml_refresh_token = models.TextField(
+        blank=True, null=True,
+        help_text="Refresh Token de Mercado Libre para renovar el access token. No compartir públicamente."
+    )
+    ml_user_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID del usuario/vendedor en Mercado Libre"
+    )
+    ml_app_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="Application ID de Mercado Libre (Client ID)"
+    )
+    ml_client_secret = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Client Secret de Mercado Libre. No compartir públicamente."
+    )
+    ml_token_expires_at = models.DateTimeField(
+        blank=True, null=True,
+        help_text="Fecha y hora de expiración del access token"
+    )
+    
+    # Configuración de sincronización
+    ml_sync_habilitado = models.BooleanField(
+        default=False,
+        help_text="Habilitar sincronización automática de productos y stock con Mercado Libre"
+    )
+    ml_sincronizar_stock = models.BooleanField(
+        default=True,
+        help_text="Sincronizar cambios de stock automáticamente con Mercado Libre"
+    )
+    ml_sincronizar_precios = models.BooleanField(
+        default=True,
+        help_text="Sincronizar cambios de precios automáticamente con Mercado Libre"
+    )
+    ml_sincronizar_productos = models.BooleanField(
+        default=True,
+        help_text="Sincronizar nuevos productos automáticamente con Mercado Libre"
+    )
+    
+    # Modo de prueba
+    ml_modo_test = models.BooleanField(
+        default=True,
+        help_text="Usar ambiente de testing/sandbox de Mercado Libre (True) o producción (False)"
+    )
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -86,6 +149,44 @@ class Tienda(models.Model):
 
     def __str__(self):
         return self.nombre
+
+# Modelo para almacenar categorías de Mercado Libre
+class CategoriaMercadoLibre(models.Model):
+    """
+    Almacena las categorías de Mercado Libre para evitar consultas constantes a la API
+    """
+    id = models.CharField(max_length=50, primary_key=True, help_text="ID de la categoría en Mercado Libre (ej: MLA1574)")
+    nombre = models.CharField(max_length=255, help_text="Nombre de la categoría")
+    site_id = models.CharField(max_length=10, default='MLA', help_text="ID del sitio (MLA=Argentina, MLB=Brasil, etc.)")
+    
+    # Información de la jerarquía
+    parent_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la categoría padre")
+    is_leaf = models.BooleanField(default=False, help_text="Indica si es una categoría hoja (sin subcategorías)")
+    
+    # Información adicional
+    total_items = models.IntegerField(default=0, help_text="Total de items en esta categoría")
+    path_from_root = models.JSONField(default=list, blank=True, help_text="Ruta completa desde la raíz")
+    
+    # Metadatos
+    fecha_actualizacion = models.DateTimeField(auto_now=True, help_text="Fecha de última actualización")
+    fecha_creacion = models.DateTimeField(auto_now_add=True, help_text="Fecha de creación del registro")
+    
+    class Meta:
+        verbose_name = "Categoría Mercado Libre"
+        verbose_name_plural = "Categorías Mercado Libre"
+        ordering = ['nombre']
+        indexes = [
+            models.Index(fields=['site_id', 'is_leaf']),
+            models.Index(fields=['parent_id']),
+        ]
+    
+    def __str__(self):
+        return f"{self.nombre} ({self.id})"
+    
+    @property
+    def es_hoja(self):
+        """Alias para is_leaf en español"""
+        return self.is_leaf
 
 # Modelo de Categoría
 class Categoria(models.Model):
@@ -114,7 +215,30 @@ class Producto(models.Model):
     talle = models.CharField(max_length=50, blank=True, null=True) 
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
-    codigo_barras = models.CharField(max_length=100, unique=True, blank=True, null=True) 
+    codigo_barras = models.CharField(max_length=100, unique=True, blank=True, null=True)
+    
+    # Integración con Mercado Libre
+    ml_item_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID del producto en Mercado Libre (si está sincronizado)"
+    )
+    ml_sincronizado = models.BooleanField(
+        default=False,
+        help_text="Indica si este producto está sincronizado con Mercado Libre"
+    )
+    ml_sincronizar = models.BooleanField(
+        default=False,
+        help_text="Marca esta casilla para sincronizar este producto con Mercado Libre en la próxima sincronización"
+    )
+    ml_categoria_id = models.CharField(
+        max_length=20, blank=True, null=True,
+        help_text="ID de la categoría de Mercado Libre para este producto (ej: MLA1574)"
+    )
+    ml_ultima_sincronizacion = models.DateTimeField(
+        blank=True, null=True,
+        help_text="Fecha y hora de la última sincronización con Mercado Libre"
+    )
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
