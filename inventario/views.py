@@ -305,13 +305,19 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadolibre_service import MercadoLibreService
         ml_service = MercadoLibreService(tienda)
         
-        # Obtener la URL de redirección desde el request o construirla dinámicamente
+        # Obtener la URL de redirección desde el request o usar la URL fija configurada
         redirect_uri = request.query_params.get('redirect_uri')
         if not redirect_uri:
-            # Construir la URL dinámicamente basándose en el request
-            scheme = request.scheme  # http o https
-            host = request.get_host()  # dominio del servidor
-            redirect_uri = f"{scheme}://{host}/api/tiendas/{pk}/mercadolibre/callback/"
+            # Usar la URL fija configurada en Mercado Libre (sin tienda_id)
+            from django.conf import settings
+            if not settings.DEBUG:
+                # Producción: usar totalstock.onrender.com
+                redirect_uri = 'https://totalstock.onrender.com/api/tiendas/mercadolibre/callback/'
+            else:
+                # Desarrollo: construirla dinámicamente
+                scheme = request.scheme  # http o https
+                host = request.get_host()  # dominio del servidor
+                redirect_uri = f"{scheme}://{host}/api/tiendas/{pk}/mercadolibre/callback/"
         
         try:
             auth_url = ml_service.get_authorization_url(redirect_uri)
