@@ -6,7 +6,7 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
-    ArancelMetodoTiendaViewSet, FacturaViewSet
+    ArancelMetodoTiendaViewSet, FacturaViewSet, ml_oauth_callback_public_view
 )
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
