@@ -8,6 +8,8 @@ from inventario.views import (
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
     ArancelMetodoTiendaViewSet, FacturaViewSet
 )
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 # Importación condicional de CambioDevolucionViewSet
 try:
     from inventario.views import CambioDevolucionViewSet
@@ -39,4 +41,6 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
+    # Ruta manual para el callback público de Mercado Libre (sin tienda_id en la URL)
+    path('api/tiendas/mercadolibre/callback/', TiendaViewSet.as_view({'get': 'ml_oauth_callback_public', 'post': 'ml_oauth_callback_public'}), name='ml-oauth-callback-public'),
 ]
