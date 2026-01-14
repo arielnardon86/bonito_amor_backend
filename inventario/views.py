@@ -442,15 +442,17 @@ class TiendaViewSet(viewsets.ModelViewSet):
             # Si viene state, intentar extraer tienda_id de ahí
             if state and not tienda_id:
                 try:
-                    # El state podría ser el tienda_id directamente, o estar en formato "tienda_id:uuid"
-                    if state.count(':') == 0 and len(state) > 30:  # Probablemente es un UUID
+                    # El state puede venir en formato "tienda_id:numero" (ej: "uuid:1")
+                    # Extraer solo la parte del UUID (antes del último :)
+                    if ':' in state:
+                        # Dividir por ':' y tomar la primera parte (el UUID)
+                        tienda_id = state.split(':')[0]
+                        tienda = Tienda.objects.get(id=tienda_id)
+                    elif len(state) > 30:  # Probablemente es un UUID sin separador
                         tienda_id = state
                         tienda = Tienda.objects.get(id=tienda_id)
-                    elif ':' in state:
-                        # Formato "tienda_id:uuid"
-                        _, tienda_id = state.split(':', 1)
-                        tienda = Tienda.objects.get(id=tienda_id)
-                except (ValueError, Tienda.DoesNotExist):
+                except (ValueError, Tienda.DoesNotExist) as e:
+                    logger.warning(f"No se pudo extraer tienda_id del state '{state}': {e}")
                     pass
             
             if code:
