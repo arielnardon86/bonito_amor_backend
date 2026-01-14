@@ -64,49 +64,21 @@ class TiendaAdmin(admin.ModelAdmin):
     
     def _get_ml_fields(self):
         """Obtiene los campos de ML que existen en el modelo"""
-        fields = []
-        # Verificar si los campos existen usando _meta.get_field
-        try:
-            Tienda._meta.get_field('plataforma_ecommerce')
-            fields.append('plataforma_ecommerce')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_app_id')
-            fields.append('ml_app_id')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_client_secret')
-            fields.append('ml_client_secret')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_modo_test')
-            fields.append('ml_modo_test')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_sync_habilitado')
-            fields.append('ml_sync_habilitado')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_sincronizar_stock')
-            fields.append('ml_sincronizar_stock')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_sincronizar_precios')
-            fields.append('ml_sincronizar_precios')
-        except:
-            pass
-        try:
-            Tienda._meta.get_field('ml_sincronizar_productos')
-            fields.append('ml_sincronizar_productos')
-        except:
-            pass
-        return tuple(fields)
+        # Verificar si los campos existen usando _meta.get_all_field_names() o directamente
+        # Como las migraciones están aplicadas, simplemente retornar los campos
+        field_names = [f.name for f in Tienda._meta.get_fields() if hasattr(f, 'column')]
+        ml_field_names = [
+            'plataforma_ecommerce',
+            'ml_app_id',
+            'ml_client_secret',
+            'ml_modo_test',
+            'ml_sync_habilitado',
+            'ml_sincronizar_stock',
+            'ml_sincronizar_precios',
+            'ml_sincronizar_productos'
+        ]
+        # Retornar solo los campos que existen en el modelo
+        return tuple(f for f in ml_field_names if f in field_names)
     
     def _get_ml_token_fields(self):
         """Obtiene los campos de tokens de ML que existen en el modelo"""
@@ -148,7 +120,7 @@ class TiendaAdmin(admin.ModelAdmin):
             }),
         ]
         
-        # Agregar configuración de ML solo si los campos existen
+        # Agregar configuración de ML - Las migraciones están aplicadas
         ml_fields = self._get_ml_fields()
         if ml_fields:
             fieldsets.append(('Configuración E-commerce - Mercado Libre', {
@@ -164,6 +136,25 @@ class TiendaAdmin(admin.ModelAdmin):
                     'classes': ('collapse',),
                     'description': 'Estos campos se actualizan automáticamente después de la autenticación OAuth. Los tokens no se muestran por seguridad.',
                 }))
+        else:
+            # Si _get_ml_fields() devuelve vacío, incluir campos directamente
+            # Esto puede ocurrir si hay un problema con la verificación
+            try:
+                fieldsets.append(('Configuración E-commerce - Mercado Libre', {
+                    'fields': (
+                        'plataforma_ecommerce',
+                        'ml_app_id',
+                        'ml_client_secret',
+                        'ml_modo_test',
+                        'ml_sync_habilitado',
+                        'ml_sincronizar_stock',
+                        'ml_sincronizar_precios',
+                        'ml_sincronizar_productos',
+                    ),
+                    'description': 'Configuración para integración con Mercado Libre. Los tokens OAuth se generan automáticamente después de la autenticación.',
+                }))
+            except:
+                pass
         
         fieldsets.append(('Información del Sistema', {
             'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
