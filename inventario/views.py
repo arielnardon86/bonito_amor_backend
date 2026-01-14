@@ -321,7 +321,7 @@ def ml_oauth_callback_public_view(request):
                 redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
             
             try:
-                tokens = ml_service.exchange_code_for_tokens(code, redirect_uri)
+                tokens = ml_service.exchange_code_for_token(code, redirect_uri)
                 
                 # Guardar tokens
                 if hasattr(tienda, 'ml_access_token'):
@@ -675,7 +675,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
                     
                     try:
-                        tokens = ml_service.exchange_code_for_tokens(code, redirect_uri)
+                        tokens = ml_service.exchange_code_for_token(code, redirect_uri)
                         
                         # Guardar tokens
                         if hasattr(tienda, 'ml_access_token'):
