@@ -64,9 +64,7 @@ class TiendaAdmin(admin.ModelAdmin):
     
     def _get_ml_fields(self):
         """Obtiene los campos de ML que existen en el modelo"""
-        # Verificar si los campos existen usando _meta.get_all_field_names() o directamente
-        # Como las migraciones están aplicadas, simplemente retornar los campos
-        field_names = [f.name for f in Tienda._meta.get_fields() if hasattr(f, 'column')]
+        # Verificar si los campos existen usando _meta.get_field (más confiable)
         ml_field_names = [
             'plataforma_ecommerce',
             'ml_app_id',
@@ -77,8 +75,15 @@ class TiendaAdmin(admin.ModelAdmin):
             'ml_sincronizar_precios',
             'ml_sincronizar_productos'
         ]
-        # Retornar solo los campos que existen en el modelo
-        return tuple(f for f in ml_field_names if f in field_names)
+        # Verificar cada campo individualmente usando get_field
+        existing_fields = []
+        for field_name in ml_field_names:
+            try:
+                Tienda._meta.get_field(field_name)
+                existing_fields.append(field_name)
+            except:
+                pass
+        return tuple(existing_fields)
     
     def _get_ml_token_fields(self):
         """Obtiene los campos de tokens de ML que existen en el modelo"""
