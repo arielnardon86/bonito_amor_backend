@@ -36,11 +36,12 @@ if CambioDevolucionViewSet is not None:
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # IMPORTANTE: Ruta manual del callback público DEBE ir ANTES de include(router.urls)
+    # para que tenga prioridad sobre las rutas generadas por el router
+    path('api/tiendas/mercadolibre/callback/', TiendaViewSet.as_view({'get': 'ml_oauth_callback_public', 'post': 'ml_oauth_callback_public'}), name='ml-oauth-callback-public'),
     path('api/', include(router.urls)),
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
-    # Ruta manual para el callback público de Mercado Libre (sin tienda_id en la URL)
-    path('api/tiendas/mercadolibre/callback/', TiendaViewSet.as_view({'get': 'ml_oauth_callback_public', 'post': 'ml_oauth_callback_public'}), name='ml-oauth-callback-public'),
 ]

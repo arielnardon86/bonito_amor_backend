@@ -406,54 +406,68 @@ class TiendaViewSet(viewsets.ModelViewSet):
         GET: Maneja la redirección desde Mercado Libre (obtiene el código)
         POST: Intercambia el código por tokens
         """
-        # Obtener tienda_id del request (puede venir en query params o body)
+        # Obtener tienda_id del request (puede venir en query params, body, o state)
         tienda_id = request.query_params.get('tienda_id') or request.data.get('tienda_id')
-        
-        # Si no viene tienda_id, intentar obtenerlo del code o del estado
-        if not tienda_id:
-            # En producción, podríamos tener solo una tienda configurada
-            # o podríamos identificar la tienda por ml_app_id
-            # Por ahora, buscamos tiendas configuradas con ML
-            tiendas_ml = Tienda.objects.filter(
-                plataforma_ecommerce='MERCADO_LIBRE'
-            ).exclude(ml_app_id__isnull=True).exclude(ml_app_id='')
-            
-            if tiendas_ml.count() == 1:
-                tienda = tiendas_ml.first()
-            else:
-                return Response(
-                    {'error': 'No se pudo determinar la tienda. Proporciona tienda_id en el request.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        else:
-            try:
-                tienda = Tienda.objects.get(id=tienda_id)
-            except Tienda.DoesNotExist:
-                return Response(
-                    {'error': f'Tienda con ID {tienda_id} no encontrada'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+        tienda = None
         
         # Manejar GET (redirección desde Mercado Libre con code en query params)
         if request.method == 'GET':
-            code = request.query_params.get('code')
             state = request.query_params.get('state')  # El state puede contener tienda_id
             
-            # Si viene state, intentar extraer tienda_id de ahí
-            if state and not tienda_id:
+            # PRIORIDAD 1: Si viene state, extraer tienda_id de ahí (es lo más confiable)
+            if state:
                 try:
                     # El state puede venir en formato "tienda_id:numero" (ej: "uuid:1")
-                    # Extraer solo la parte del UUID (antes del último :)
+                    # Extraer solo la parte del UUID (antes del primer :)
                     if ':' in state:
                         # Dividir por ':' y tomar la primera parte (el UUID)
                         tienda_id = state.split(':')[0]
-                        tienda = Tienda.objects.get(id=tienda_id)
                     elif len(state) > 30:  # Probablemente es un UUID sin separador
                         tienda_id = state
+                    
+                    if tienda_id:
                         tienda = Tienda.objects.get(id=tienda_id)
+                        logger.info(f"Tienda identificada desde state: {tienda_id}")
                 except (ValueError, Tienda.DoesNotExist) as e:
                     logger.warning(f"No se pudo extraer tienda_id del state '{state}': {e}")
-                    pass
+        
+        # Si aún no tenemos tienda, intentar otras formas
+        if not tienda:
+            if tienda_id:
+                try:
+                    tienda = Tienda.objects.get(id=tienda_id)
+                except Tienda.DoesNotExist:
+                    return Response(
+                        {'error': f'Tienda con ID {tienda_id} no encontrada'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            else:
+                # Como último recurso, buscar tiendas configuradas con ML
+                # Solo funciona si hay exactamente una tienda configurada
+                tiendas_ml = Tienda.objects.filter(
+                    plataforma_ecommerce='MERCADO_LIBRE'
+                ).exclude(ml_app_id__isnull=True).exclude(ml_app_id='')
+                
+                if tiendas_ml.count() == 1:
+                    tienda = tiendas_ml.first()
+                    logger.info(f"Tienda identificada automáticamente (única configurada): {tienda.id}")
+                elif tiendas_ml.count() == 0:
+                    return Response(
+                        {'error': 'No hay tiendas configuradas para Mercado Libre'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                else:
+                    return Response(
+                        {'error': 'No se pudo determinar la tienda. Múltiples tiendas configuradas. Proporciona tienda_id en el request o usa el parámetro state.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        
+        # Si llegamos aquí sin tienda, es un error
+        if not tienda:
+            return Response(
+                {'error': 'No se pudo determinar la tienda'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
             
             if code:
                 # Si tenemos la tienda identificada, procesar directamente
