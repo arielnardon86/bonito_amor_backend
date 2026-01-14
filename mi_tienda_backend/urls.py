@@ -42,9 +42,6 @@ if CambioDevolucionViewSet is not None:
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # IMPORTANTE: Ruta manual del callback público DEBE ir ANTES de include(router.urls)
-    # para que tenga prioridad sobre las rutas generadas por el router
-    # Usamos una vista independiente (@api_view) en lugar de un método del ViewSet
 ]
 
 # Agregar ruta del callback público solo si la vista está disponible
@@ -55,10 +52,11 @@ if ml_oauth_callback_public_view is not None:
 else:
     print("⚠️ Warning: ml_oauth_callback_public_view no disponible, la ruta /api/tiendas/mercadolibre/callback/ no estará disponible")
 
-urlpatterns.extend([
+# Agregar el resto de las rutas
+urlpatterns += [
     path('api/', include(router.urls)),
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
-])
+]
