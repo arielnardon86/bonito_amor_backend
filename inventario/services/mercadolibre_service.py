@@ -79,12 +79,13 @@ class MercadoLibreService:
         
         return headers
     
-    def get_authorization_url(self, redirect_uri):
+    def get_authorization_url(self, redirect_uri, state=None):
         """
         Genera la URL de autorización OAuth para que el usuario autentique la aplicación
         
         Args:
             redirect_uri: URL de redirección después de la autorización
+            state: Parámetro opcional de estado (puede usarse para pasar tienda_id)
             
         Returns:
             URL completa para autorización
@@ -104,6 +105,10 @@ class MercadoLibreService:
             'redirect_uri': redirect_uri,
             'scope': scopes,
         }
+        
+        # Agregar state si se proporciona (útil para identificar la tienda en el callback)
+        if state:
+            params['state'] = state
         
         auth_url = self.OAUTH_URLS[self.ambiente]
         query_string = '&'.join([f'{k}={v}' for k, v in params.items()])
