@@ -981,7 +981,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             search_query = request.query_params.get('search', '').strip()
             site_id = request.query_params.get('site_id', 'MLA')
             parent_id = request.query_params.get('parent_id', None)
-            limit = int(request.query_params.get('limit', 100))  # Aumentar límite por defecto
+            limit = int(request.query_params.get('limit', 15000))  # Límite alto por defecto para cargar todas las categorías
             
             # Usar categorías de la base de datos en lugar de consultar la API
             # Esto evita errores 403 y es mucho más rápido
