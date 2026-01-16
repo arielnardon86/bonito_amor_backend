@@ -1288,38 +1288,39 @@ class MercadoLibreService:
                                 producto.ml_item_id = None
                                 producto.ml_sincronizado = False
                                 item_updated = False  # Marcar para crear nuevo
-                            
-                    # Si es un error 403, puede ser una restricción de política de ML
-                    elif e.response is not None and e.response.status_code == 403:
-                        logger.warning(f"Error 403 al actualizar item {producto.ml_item_id}. Verificando si el item existe...")
-                        try:
-                            # Intentar obtener el item para verificar que existe
-                            existing_item = self.get_item(producto.ml_item_id)
-                            if existing_item:
-                                item_status = existing_item.get('status', '')
-                                # Si el item está cerrado, limpiar y crear nuevo
-                                if item_status == 'closed':
-                                    logger.warning(f"Item {producto.ml_item_id} está cerrado. Limpiando ml_item_id y creando producto nuevo.")
-                                    Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
-                                    producto.ml_item_id = None
-                                    producto.ml_sincronizado = False
-                                    item_updated = False  # Marcar para crear nuevo
-                                else:
-                                    logger.warning(f"Item {producto.ml_item_id} existe en ML pero no se pudo actualizar (403). Esto puede ser una restricción temporal de ML.")
-                                    # Considerar la sincronización como exitosa aunque no se pudo actualizar
-                                    producto.ml_ultima_sincronizacion = timezone.now()
-                                    producto.save()
-                                    return existing_item
-                        except Exception as get_error:
-                            logger.warning(f"Error al verificar item {producto.ml_item_id}: {get_error}. Limpiando ml_item_id y creando producto nuevo.")
-                            # Si no se puede obtener el item, limpiar y crear nuevo
-                            Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
-                            producto.ml_item_id = None
-                            producto.ml_sincronizado = False
-                            item_updated = False  # Marcar para crear nuevo
-                    else:
-                        # Para otros errores, lanzar el error original
-                        raise
+                        
+                        # Si es un error 403, puede ser una restricción de política de ML
+                        if e.response is not None and e.response.status_code == 403:
+                            logger.warning(f"Error 403 al actualizar item {producto.ml_item_id}. Verificando si el item existe...")
+                            try:
+                                # Intentar obtener el item para verificar que existe
+                                existing_item = self.get_item(producto.ml_item_id)
+                                if existing_item:
+                                    item_status = existing_item.get('status', '')
+                                    # Si el item está cerrado, limpiar y crear nuevo
+                                    if item_status == 'closed':
+                                        logger.warning(f"Item {producto.ml_item_id} está cerrado. Limpiando ml_item_id y creando producto nuevo.")
+                                        Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
+                                        producto.ml_item_id = None
+                                        producto.ml_sincronizado = False
+                                        item_updated = False  # Marcar para crear nuevo
+                                    else:
+                                        logger.warning(f"Item {producto.ml_item_id} existe en ML pero no se pudo actualizar (403). Esto puede ser una restricción temporal de ML.")
+                                        # Considerar la sincronización como exitosa aunque no se pudo actualizar
+                                        producto.ml_ultima_sincronizacion = timezone.now()
+                                        producto.save()
+                                        return existing_item
+                            except Exception as get_error:
+                                logger.warning(f"Error al verificar item {producto.ml_item_id}: {get_error}. Limpiando ml_item_id y creando producto nuevo.")
+                                # Si no se puede obtener el item, limpiar y crear nuevo
+                                Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
+                                producto.ml_item_id = None
+                                producto.ml_sincronizado = False
+                                item_updated = False  # Marcar para crear nuevo
+                        else:
+                            # Para otros errores HTTP, lanzar el error original
+                            if not isinstance(e, ValueError):
+                                raise
             
             # Si el producto no tiene ml_item_id o no se pudo actualizar, crear uno nuevo
             if not hasattr(producto, 'ml_item_id') or not producto.ml_item_id:
