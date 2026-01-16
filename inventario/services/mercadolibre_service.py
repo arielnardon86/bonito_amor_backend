@@ -484,6 +484,27 @@ class MercadoLibreService:
                     error_message = error_data.get('message', 'Error de validación')
                     causes = error_data.get('cause', [])
                     
+                    # Detectar si el error es porque el item no es modificable
+                    error_lower = error_message.lower()
+                    causes_lower = []
+                    for cause in causes:
+                        cause_msg = cause.get('message', '').lower()
+                        causes_lower.append(cause_msg)
+                    
+                    is_not_modifiable = (
+                        'not_modifiable' in error_lower or 
+                        'is not modifiable' in error_lower or
+                        'cannot be modified' in error_lower or
+                        'no se puede modificar' in error_lower or
+                        any('not modifiable' in msg for msg in causes_lower) or
+                        any('is not modifiable' in msg for msg in causes_lower)
+                    )
+                    
+                    # Si el item no es modificable, lanzar un error especial que será manejado arriba
+                    if is_not_modifiable:
+                        logger.warning(f"Item {item_id} no es modificable. Error: {error_message}")
+                        raise ValueError(f"El producto no se puede modificar en Mercado Libre. Puede estar vendido, cerrado o en un estado que no permite modificaciones. Error: {error_message}")
+                    
                     # Buscar errores específicos de cantidad
                     for cause in causes:
                         if cause.get('code') == 'item.available_quantity.invalid':
@@ -1209,27 +1230,64 @@ class MercadoLibreService:
                     producto.save()
                     
                     return updated_item
-                except requests.exceptions.HTTPError as e:
+                except (requests.exceptions.HTTPError, ValueError) as e:
                     error_data = None
                     error_message = ""
                     
-                    # Obtener información del error
-                    if e.response is not None:
-                        try:
-                            error_data = e.response.json()
-                            error_message = error_data.get('message', '')
-                        except:
-                            error_message = str(e)
-                    
-                    # Si el item está cerrado o no existe, crear uno nuevo
-                    if e.response is not None and e.response.status_code == 400:
-                        if 'status:closed' in error_message or 'not_modifiable' in error_message:
-                            logger.warning(f"Item {producto.ml_item_id} está cerrado o no se puede modificar. Limpiando ml_item_id y creando producto nuevo.")
+                    # Si es un ValueError, el mensaje ya está en str(e)
+                    if isinstance(e, ValueError):
+                        error_message = str(e)
+                        # Si el ValueError menciona "no se puede modificar", limpiar y crear nuevo
+                        if 'no se puede modificar' in error_message.lower() or 'cannot be modified' in error_message.lower():
+                            logger.warning(f"Item {producto.ml_item_id} no se puede modificar. Limpiando ml_item_id y creando producto nuevo.")
+                            logger.warning(f"Error detallado: {error_message}")
                             # Limpiar ml_item_id para crear como nuevo
                             Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
                             producto.ml_item_id = None
                             producto.ml_sincronizado = False
                             item_updated = False  # Marcar para crear nuevo
+                            # Continuar para crear nuevo producto
+                        else:
+                            # Si es otro ValueError, re-lanzarlo
+                            raise
+                    else:
+                        # Es un HTTPError
+                        # Obtener información del error
+                        if e.response is not None:
+                            try:
+                                error_data = e.response.json()
+                                error_message = error_data.get('message', '')
+                            except:
+                                error_message = str(e)
+                        
+                        # Si el item está cerrado o no existe, crear uno nuevo
+                        if e.response is not None and e.response.status_code == 400:
+                            # Detectar si el error es porque el item no es modificable
+                            # ML puede devolver errores como "is not modifiable", "not_modifiable", etc.
+                            error_lower = error_message.lower()
+                            causes_lower = []
+                            if error_data and 'cause' in error_data:
+                                for cause in error_data.get('cause', []):
+                                    cause_msg = cause.get('message', '').lower()
+                                    causes_lower.append(cause_msg)
+                            
+                            is_not_modifiable = (
+                                'not_modifiable' in error_lower or 
+                                'is not modifiable' in error_lower or
+                                'cannot be modified' in error_lower or
+                                'no se puede modificar' in error_lower or
+                                any('not modifiable' in msg for msg in causes_lower) or
+                                any('is not modifiable' in msg for msg in causes_lower)
+                            )
+                            
+                            if 'status:closed' in error_message or is_not_modifiable:
+                                logger.warning(f"Item {producto.ml_item_id} está cerrado o no se puede modificar. Limpiando ml_item_id y creando producto nuevo.")
+                                logger.warning(f"Error detallado: {error_message}")
+                                # Limpiar ml_item_id para crear como nuevo
+                                Producto.objects.filter(id=producto.id).update(ml_item_id=None, ml_sincronizado=False)
+                                producto.ml_item_id = None
+                                producto.ml_sincronizado = False
+                                item_updated = False  # Marcar para crear nuevo
                             
                     # Si es un error 403, puede ser una restricción de política de ML
                     elif e.response is not None and e.response.status_code == 403:
@@ -1443,6 +1501,63 @@ class MercadoLibreService:
         
         return self.update_price(producto.ml_item_id, float(producto.precio))
     
+    def get_orders(self, limit=50, offset=0, status=None):
+        """
+        Obtiene la lista de órdenes del vendedor desde Mercado Libre
+        
+        Args:
+            limit: Cantidad de órdenes a retornar (máx 50)
+            offset: Offset para paginación
+            status: Estado de las órdenes a filtrar (opcional). Ej: 'confirmed', 'payment_required', 'payment_in_process'
+            
+        Returns:
+            dict con las órdenes y metadata de paginación, o None si hay error
+        """
+        self.ensure_valid_token()
+        
+        if not self.user_id:
+            raise ValueError("User ID no configurado. Complete el flujo OAuth primero.")
+        
+        try:
+            url = f"{self.base_url}/orders/search"
+            headers = self.get_headers()
+            params = {
+                'seller': self.user_id,
+                'limit': min(limit, 50),
+                'offset': offset
+            }
+            
+            # Agregar filtro de estado si se proporciona
+            if status:
+                params['order.status'] = status
+            
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+            
+            orders_data = response.json()
+            logger.info(f"Órdenes obtenidas exitosamente: {len(orders_data.get('results', []))} órdenes")
+            return orders_data
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None:
+                if e.response.status_code == 401:
+                    logger.error(f"Token inválido al obtener órdenes")
+                    self.refresh_access_token()
+                    # Reintentar una vez
+                    try:
+                        response = requests.get(url, headers=headers, params=params, timeout=30)
+                        response.raise_for_status()
+                        return response.json()
+                    except:
+                        return None
+                else:
+                    logger.error(f"Error HTTP {e.response.status_code} al obtener órdenes: {e.response.text}")
+            logger.error(f"Error al obtener órdenes: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error inesperado al obtener órdenes: {e}")
+            return None
+    
     def get_order(self, order_id):
         """
         Obtiene información de una orden/pedido de Mercado Libre
@@ -1476,7 +1591,7 @@ class MercadoLibreService:
                     return None
                 elif e.response.status_code == 401:
                     logger.error(f"Token inválido al obtener orden {order_id}")
-                    self.refresh_token()
+                    self.refresh_access_token()
                     # Reintentar una vez
                     try:
                         headers = {
