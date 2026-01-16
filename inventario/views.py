@@ -2236,7 +2236,11 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
                 metodo_ml = MetodoPago.objects.filter(nombre='Mercado Libre', activo=True).first()
                 # Si es financiero, NO excluirlo (para que se pueda configurar el arancel)
                 # Solo excluirlo si NO es financiero (caso raro)
-                if not metodo_ml or not metodo_ml.es_financiero:
+                if metodo_ml and metodo_ml.es_financiero:
+                    # Si es financiero, NO excluirlo - siempre mostrarlo para configurar aranceles
+                    pass
+                else:
+                    # Solo excluirlo si NO es financiero o no existe
                     queryset = queryset.exclude(nombre='Mercado Libre')
         
         return queryset.order_by('nombre')
