@@ -1,6 +1,6 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, Factura, CategoriaMercadoLibre
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
 try:
     from .models import CambioDevolucion, DetalleCambioDevolucion
@@ -282,6 +282,61 @@ class ArancelMetodoTiendaCreateSerializer(serializers.ModelSerializer):
         if value < 0 or value > 100:
             raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
         return value
+# ------------------------------------------------
+
+# SERIALIZER: Arancel Mercado Libre por Categoría
+class ArancelMercadoLibreSerializer(serializers.ModelSerializer):
+    categoria_ml_nombre = serializers.CharField(source='categoria_ml.nombre', read_only=True)
+    categoria_ml_id = serializers.CharField(source='categoria_ml.id', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    
+    class Meta:
+        model = ArancelMercadoLibre
+        fields = ['id', 'tienda', 'tienda_nombre', 'categoria_ml', 'categoria_ml_id', 'categoria_ml_nombre', 'arancel_porcentaje', 'fecha_creacion', 'fecha_actualizacion']
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+        
+    def validate_arancel_porcentaje(self, value):
+        """Validar que el arancel esté entre 0 y 100"""
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
+        return value
+
+class ArancelMercadoLibreCreateSerializer(serializers.ModelSerializer):
+    """Serializer para crear/actualizar aranceles ML"""
+    tienda = serializers.SlugRelatedField(
+        slug_field='nombre', 
+        queryset=Tienda.objects.all(), 
+        required=True,
+        write_only=True
+    )
+    categoria_ml = serializers.PrimaryKeyRelatedField(
+        queryset=CategoriaMercadoLibre.objects.all(),
+        required=True
+    )
+    
+    class Meta:
+        model = ArancelMercadoLibre
+        fields = ['id', 'tienda', 'categoria_ml', 'arancel_porcentaje']
+        
+    def validate_arancel_porcentaje(self, value):
+        """Validar que el arancel esté entre 0 y 100"""
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
+        return value
+    
+    def validate(self, data):
+        """Validar que la tienda tenga integración ML"""
+        tienda = data.get('tienda')
+        if tienda:
+            tiene_ml = (
+                hasattr(tienda, 'plataforma_ecommerce') and
+                tienda.plataforma_ecommerce == 'MERCADO_LIBRE' and
+                hasattr(tienda, 'ml_access_token') and
+                tienda.ml_access_token
+            )
+            if not tiene_ml:
+                raise serializers.ValidationError("La tienda debe tener integración con Mercado Libre configurada.")
+        return data
 # ------------------------------------------------
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
