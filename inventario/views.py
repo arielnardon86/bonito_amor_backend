@@ -38,8 +38,15 @@ try:
 except ImportError:
     BARCODE_AVAILABLE = False
 
-# CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, CategoriaMercadoLibre, Factura
+# CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, CategoriaMercadoLibre, Factura
+
+# Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
+try:
+    from .models import ArancelMercadoLibre
+except ImportError:
+    ArancelMercadoLibre = None
+    logger.warning("⚠️ ArancelMercadoLibre no está disponible. Aplica la migración 0019_arancel_mercado_libre.")
 # Importación condicional para CambioDevolucion
 # Intentar importar directamente - si falla, los modelos no están disponibles
 try:
@@ -104,8 +111,15 @@ from .serializers import (
     CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer,
     FacturaSerializer, EmitirFacturaSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
-    ArancelMetodoTiendaCreateSerializer, ArancelMercadoLibreSerializer, ArancelMercadoLibreCreateSerializer
+    ArancelMetodoTiendaCreateSerializer
 )
+# Importación condicional de serializers de ArancelMercadoLibre
+try:
+    from .serializers import ArancelMercadoLibreSerializer, ArancelMercadoLibreCreateSerializer
+except ImportError:
+    ArancelMercadoLibreSerializer = None
+    ArancelMercadoLibreCreateSerializer = None
+    logger.warning("⚠️ Serializers de ArancelMercadoLibre no están disponibles. Aplica la migración 0019_arancel_mercado_libre.")
 # Importación condicional de serializers de CambioDevolucion
 # Primero importar normalmente
 try:
@@ -1382,20 +1396,24 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         arancel_item = Decimal('0.00')
                                         if producto.ml_categoria_id:
                                             try:
-                                                from .models import ArancelMercadoLibre, CategoriaMercadoLibre
-                                                categoria_ml = CategoriaMercadoLibre.objects.get(id=producto.ml_categoria_id)
-                                                arancel_ml = ArancelMercadoLibre.objects.filter(
-                                                    tienda=tienda,
-                                                    categoria_ml=categoria_ml
-                                                ).first()
-                                                
-                                                if arancel_ml:
-                                                    arancel_porcentaje = arancel_ml.arancel_porcentaje
-                                                    arancel_item = subtotal_item * (arancel_porcentaje / Decimal('100'))
-                                                    total_arancel += arancel_item
-                                                    logger.info(f"Arancel aplicado para {producto.nombre}: {arancel_porcentaje}% = ${arancel_item}")
+                                                from .models import CategoriaMercadoLibre
+                                                # Solo calcular arancel si el modelo ArancelMercadoLibre existe
+                                                if ArancelMercadoLibre is not None:
+                                                    categoria_ml = CategoriaMercadoLibre.objects.get(id=producto.ml_categoria_id)
+                                                    arancel_ml = ArancelMercadoLibre.objects.filter(
+                                                        tienda=tienda,
+                                                        categoria_ml=categoria_ml
+                                                    ).first()
+                                                    
+                                                    if arancel_ml:
+                                                        arancel_porcentaje = arancel_ml.arancel_porcentaje
+                                                        arancel_item = subtotal_item * (arancel_porcentaje / Decimal('100'))
+                                                        total_arancel += arancel_item
+                                                        logger.info(f"Arancel aplicado para {producto.nombre}: {arancel_porcentaje}% = ${arancel_item}")
+                                                    else:
+                                                        logger.warning(f"No se encontró arancel configurado para categoría {producto.ml_categoria_id} de producto {producto.nombre}")
                                                 else:
-                                                    logger.warning(f"No se encontró arancel configurado para categoría {producto.ml_categoria_id} de producto {producto.nombre}")
+                                                    logger.warning(f"ArancelMercadoLibre no está disponible. No se calculará arancel para {producto.nombre}. Aplica la migración 0019_arancel_mercado_libre.")
                                             except Exception as e:
                                                 logger.error(f"Error al calcular arancel para producto {producto.nombre}: {e}")
                                         
@@ -2353,57 +2371,66 @@ class CompraViewSet(viewsets.ModelViewSet):
 
 
 # VIEWSET: Aranceles Mercado Libre por Categoría
-class ArancelMercadoLibreViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def get_serializer_class(self):
-        if self.action in ['create', 'update', 'partial_update']:
-            return ArancelMercadoLibreCreateSerializer
-        return ArancelMercadoLibreSerializer
-    
-    def get_queryset(self):
-        """
-        Filtra aranceles ML por tienda y solo muestra categorías que la tienda ha usado.
-        """
-        user = self.request.user
-        queryset = ArancelMercadoLibre.objects.all().select_related('tienda', 'categoria_ml')
+# Solo definir si el modelo y los serializers existen
+if ArancelMercadoLibre is not None and ArancelMercadoLibreSerializer is not None:
+    class ArancelMercadoLibreViewSet(viewsets.ModelViewSet):
+        permission_classes = [permissions.IsAuthenticated]
         
-        if user.is_superuser:
-            # Superusuarios ven todos los aranceles
-            tienda_slug = self.request.query_params.get('tienda_slug', None)
-            if tienda_slug:
-                queryset = queryset.filter(tienda__nombre=tienda_slug)
-            return queryset.order_by('tienda__nombre', 'categoria_ml__nombre')
+        def get_serializer_class(self):
+            if self.action in ['create', 'update', 'partial_update']:
+                return ArancelMercadoLibreCreateSerializer
+            return ArancelMercadoLibreSerializer
         
-        elif user.tienda:
-            # Usuarios staff solo ven aranceles de su tienda
-            # Filtrar solo categorías que la tienda ha usado (productos con ml_categoria_id)
-            from .models import Producto
-            categorias_usadas = Producto.objects.filter(
-                tienda=user.tienda,
-                ml_categoria_id__isnull=False
-            ).exclude(ml_categoria_id='').values_list('ml_categoria_id', flat=True).distinct()
+        def get_queryset(self):
+            """
+            Filtra aranceles ML por tienda y solo muestra categorías que la tienda ha usado.
+            """
+            if ArancelMercadoLibre is None:
+                from rest_framework.exceptions import NotFound
+                raise NotFound("ArancelMercadoLibre no está disponible. Aplica la migración 0019_arancel_mercado_libre.")
             
-            queryset = queryset.filter(
-                tienda=user.tienda,
-                categoria_ml__id__in=categorias_usadas
-            )
-            return queryset.order_by('categoria_ml__nombre')
+            user = self.request.user
+            queryset = ArancelMercadoLibre.objects.all().select_related('tienda', 'categoria_ml')
+            
+            if user.is_superuser:
+                # Superusuarios ven todos los aranceles
+                tienda_slug = self.request.query_params.get('tienda_slug', None)
+                if tienda_slug:
+                    queryset = queryset.filter(tienda__nombre=tienda_slug)
+                return queryset.order_by('tienda__nombre', 'categoria_ml__nombre')
+            
+            elif user.tienda:
+                # Usuarios staff solo ven aranceles de su tienda
+                # Filtrar solo categorías que la tienda ha usado (productos con ml_categoria_id)
+                from .models import Producto
+                categorias_usadas = Producto.objects.filter(
+                    tienda=user.tienda,
+                    ml_categoria_id__isnull=False
+                ).exclude(ml_categoria_id='').values_list('ml_categoria_id', flat=True).distinct()
+                
+                queryset = queryset.filter(
+                    tienda=user.tienda,
+                    categoria_ml__id__in=categorias_usadas
+                )
+                return queryset.order_by('categoria_ml__nombre')
+            
+            return ArancelMercadoLibre.objects.none()
         
-        return ArancelMercadoLibre.objects.none()
-    
-    def perform_create(self, serializer):
-        """Asegurar que el arancel se crea para la tienda del usuario"""
-        user = self.request.user
-        if not user.is_superuser and user.tienda:
-            serializer.save(tienda=user.tienda)
-        else:
-            serializer.save()
-    
-    # FIX DE CONEXIÓN
-    def list(self, request, *args, **kwargs):
-        close_old_connections()
-        return super().list(request, *args, **kwargs)
+        def perform_create(self, serializer):
+            """Asegurar que el arancel se crea para la tienda del usuario"""
+            user = self.request.user
+            if not user.is_superuser and user.tienda:
+                serializer.save(tienda=user.tienda)
+            else:
+                serializer.save()
+        
+        # FIX DE CONEXIÓN
+        def list(self, request, *args, **kwargs):
+            close_old_connections()
+            return super().list(request, *args, **kwargs)
+else:
+    # Si el modelo no existe, definir una clase dummy para evitar errores de importación
+    ArancelMercadoLibreViewSet = None
         
 
 class CustomTokenObtainPairView(TokenObtainPairView):

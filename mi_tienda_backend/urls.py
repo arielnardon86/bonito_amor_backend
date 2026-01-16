@@ -8,6 +8,12 @@ from inventario.views import (
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
     ArancelMetodoTiendaViewSet, FacturaViewSet
 )
+# Importación condicional de ArancelMercadoLibreViewSet (puede no existir si la migración no se ha aplicado)
+try:
+    from inventario.views import ArancelMercadoLibreViewSet
+except (ImportError, AttributeError) as e:
+    ArancelMercadoLibreViewSet = None
+    print(f"⚠️ Warning: No se pudo importar ArancelMercadoLibreViewSet: {e}")
 # Importación condicional del callback público de ML
 try:
     from inventario.views import ml_oauth_callback_public_view
@@ -34,6 +40,11 @@ router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalles-venta
 router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
 router.register(r'compras', CompraViewSet, basename='compras')
 router.register(r'aranceles-tienda', ArancelMetodoTiendaViewSet, basename='aranceles-tienda') # NUEVA RUTA
+# Registrar ArancelMercadoLibreViewSet solo si existe (migración aplicada)
+if ArancelMercadoLibreViewSet is not None:
+    router.register(r'aranceles-ml', ArancelMercadoLibreViewSet, basename='aranceles-ml') # NUEVA RUTA
+else:
+    print("⚠️ Warning: ArancelMercadoLibreViewSet no disponible, la ruta /api/aranceles-ml/ no estará disponible. Aplica la migración 0019_arancel_mercado_libre.")
 router.register(r'facturas', FacturaViewSet, basename='facturas') # NUEVA RUTA
 # Registrar CambioDevolucionViewSet solo si existe (migración aplicada)
 if CambioDevolucionViewSet is not None:
