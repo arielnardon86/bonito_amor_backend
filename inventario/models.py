@@ -302,6 +302,38 @@ class ArancelMetodoTienda(models.Model):
         return f"{self.tienda.nombre} - {self.metodo_pago.nombre} - {self.get_nombre_plan_display()} ({self.arancel_porcentaje}%)"
 # ------------------------------------------------
 
+# --- NUEVO MODELO: ARANCEL MERCADO LIBRE POR CATEGORÍA ---
+class ArancelMercadoLibre(models.Model):
+    """
+    Aranceles configurables por categoría de Mercado Libre para cada tienda.
+    Solo se muestran las categorías que la tienda ha usado alguna vez.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles_ml')
+    categoria_ml = models.ForeignKey(CategoriaMercadoLibre, on_delete=models.CASCADE, related_name='aranceles_por_tienda')
+    arancel_porcentaje = models.DecimalField(
+        max_digits=5, 
+        decimal_places=2, 
+        default=Decimal('0.00'), 
+        help_text="Arancel en porcentaje (%) que la tienda paga a Mercado Libre por ventas en esta categoría."
+    )
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Arancel Mercado Libre por Categoría"
+        verbose_name_plural = "Aranceles Mercado Libre por Categoría"
+        unique_together = ('tienda', 'categoria_ml')
+        ordering = ['tienda', 'categoria_ml__nombre']
+        indexes = [
+            models.Index(fields=['tienda', 'categoria_ml']),
+        ]
+
+    def __str__(self):
+        return f"{self.tienda.nombre} - {self.categoria_ml.nombre} ({self.categoria_ml.id}) - {self.arancel_porcentaje}%"
+# ------------------------------------------------
+
 # Modelo de Venta
 class Venta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -598,6 +630,7 @@ class DetalleCambioDevolucion(models.Model):
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago', 
-    'ArancelMetodoTienda', 'Venta', 'DetalleVenta', 'Compra', 
+    'ArancelMetodoTienda', 'ArancelMercadoLibre', 'CategoriaMercadoLibre',
+    'Venta', 'DetalleVenta', 'Compra', 
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion'
 ]
