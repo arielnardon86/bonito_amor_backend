@@ -829,15 +829,26 @@ class MercadoLibreService:
         
         # Validar que la categoría sea una hoja si está especificada
         if categoria_ml_id:
-            if not self.is_leaf_category(categoria_ml_id):
-                logger.warning(f"La categoría {categoria_ml_id} no es una hoja. Buscando categoría hoja...")
+            # Verificar si es una categoría hoja
+            is_leaf = self.is_leaf_category(categoria_ml_id)
+            if not is_leaf:
+                logger.warning(f"La categoría {categoria_ml_id} no es una hoja. Buscando categoría hoja dentro de esta categoría...")
+                # Buscar una categoría hoja dentro de esta categoría
                 leaf_category = self.get_leaf_category_from_parent(categoria_ml_id)
                 if leaf_category:
-                    logger.info(f"Usando categoría hoja {leaf_category} en lugar de {categoria_ml_id}")
+                    logger.info(f"✅ Encontrada categoría hoja {leaf_category} dentro de {categoria_ml_id}. Usando esta categoría.")
                     categoria_ml_id = leaf_category
                 else:
-                    logger.warning(f"No se encontró categoría hoja para {categoria_ml_id}. Usando categoría automática.")
-                    categoria_ml_id = None  # Dejar que se determine automáticamente
+                    # Si no se encuentra una hoja, buscar categorías hoja con más profundidad
+                    logger.warning(f"No se encontró categoría hoja inmediata para {categoria_ml_id}. Buscando con más profundidad...")
+                    leaf_categories = self.get_leaf_categories(categoria_ml_id, max_depth=3)
+                    if leaf_categories:
+                        # Usar la primera categoría hoja encontrada
+                        categoria_ml_id = leaf_categories[0]['id']
+                        logger.info(f"✅ Encontrada categoría hoja {categoria_ml_id} ({leaf_categories[0].get('name', '')}) dentro de la categoría seleccionada.")
+                    else:
+                        logger.error(f"❌ No se encontró ninguna categoría hoja para {categoria_ml_id}. Esto puede causar que ML asigne una categoría incorrecta.")
+                        raise ValueError(f"La categoría {categoria_ml_id} no tiene subcategorías hoja válidas. Por favor, selecciona una categoría más específica (categoría hoja).")
         
         # Si no se especifica categoría o es una categoría inválida, usar una categoría por defecto simple
         # OPTIMIZACIÓN: Evitar hacer múltiples llamadas a la API que tardan mucho tiempo

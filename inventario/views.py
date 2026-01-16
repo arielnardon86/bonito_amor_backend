@@ -16,7 +16,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
-from django.db import close_old_connections # <-- Importado para el fix de conexión
+from django.db import close_old_connections, models # <-- Importado para el fix de conexión y búsqueda de categorías
 from django.http import HttpResponse
 from io import BytesIO
 
@@ -38,8 +38,8 @@ try:
 except ImportError:
     BARCODE_AVAILABLE = False
 
-# CAMBIO 1: Importar ArancelMetodoTienda
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, Factura
+# CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, CategoriaMercadoLibre, Factura
 # Importación condicional para CambioDevolucion
 # Intentar importar directamente - si falla, los modelos no están disponibles
 try:
@@ -104,7 +104,7 @@ from .serializers import (
     CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer,
     FacturaSerializer, EmitirFacturaSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
-    ArancelMetodoTiendaCreateSerializer
+    ArancelMetodoTiendaCreateSerializer, ArancelMercadoLibreSerializer, ArancelMercadoLibreCreateSerializer
 )
 # Importación condicional de serializers de CambioDevolucion
 # Primero importar normalmente
@@ -988,11 +988,23 @@ class TiendaViewSet(viewsets.ModelViewSet):
             if search_query:
                 # Buscar categorías por nombre en la base de datos
                 query_lower = search_query.lower()
+                # Buscar en el nombre y también en path_from_root para encontrar mejor coincidencias
+                # Primero buscar coincidencias exactas o que empiecen con el término
+                from django.db.models import Case, When
                 categorias_db = CategoriaMercadoLibre.objects.filter(
                     site_id=site_id,
-                    nombre__icontains=query_lower,
                     is_leaf=True  # Solo categorías hoja
-                ).order_by('nombre')[:limit]
+                ).filter(
+                    Q(nombre__icontains=query_lower) | 
+                    Q(path_from_root__icontains=query_lower)
+                ).order_by(
+                    # Priorizar categorías cuyo nombre empiece con el término de búsqueda
+                    Case(
+                        When(nombre__istartswith=query_lower, then=0),
+                        default=1
+                    ),
+                    'nombre'
+                )[:limit]
                 
                 categories = [{
                     'id': cat.id,
@@ -1310,11 +1322,51 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         if order_status in ['confirmed', 'payment_required', 'payment_in_process']:
                             order_items = order.get('order_items', [])
                             
+                            # Obtener el método de pago "Mercado Libre"
+                            try:
+                                metodo_pago_ml = MetodoPago.objects.get(nombre='Mercado Libre', activo=True)
+                            except MetodoPago.DoesNotExist:
+                                logger.error(f"Método de pago 'Mercado Libre' no encontrado. Creando automáticamente...")
+                                metodo_pago_ml = MetodoPago.objects.create(
+                                    nombre='Mercado Libre',
+                                    descripcion='Ventas realizadas a través de Mercado Libre',
+                                    activo=True,
+                                    es_financiero=True
+                                )
+                            
+                            # Preparar detalles de venta y calcular totales
+                            detalles_venta = []
+                            total_venta = Decimal('0.00')
+                            total_arancel = Decimal('0.00')
+                            
                             for item in order_items:
                                 ml_item_id = item.get('item', {}).get('id')
                                 quantity = item.get('quantity', 0)
                                 
-                                if ml_item_id:
+                                # Obtener precio unitario de la orden (ML puede devolverlo en diferentes campos)
+                                # Primero intentar unit_price, luego item.price, luego calcular desde el total del item
+                                unit_price = Decimal(str(item.get('unit_price', 0)))
+                                if unit_price == 0:
+                                    # Intentar obtener el precio del item
+                                    item_data = item.get('item', {})
+                                    unit_price = Decimal(str(item_data.get('price', 0)))
+                                    
+                                    # Si aún no hay precio, intentar calcular desde el total del item
+                                    if unit_price == 0:
+                                        item_total = Decimal(str(item.get('total_amount', 0)))
+                                        if item_total > 0 and quantity > 0:
+                                            unit_price = item_total / quantity
+                                        else:
+                                            # Último recurso: usar el precio del producto en nuestro sistema
+                                            try:
+                                                producto_temp = Producto.objects.get(tienda=tienda, ml_item_id=ml_item_id)
+                                                unit_price = producto_temp.precio
+                                                logger.warning(f"Precio no encontrado en orden ML, usando precio del sistema: ${unit_price} para {producto_temp.nombre}")
+                                            except Producto.DoesNotExist:
+                                                unit_price = Decimal('0.00')
+                                                logger.error(f"No se pudo obtener precio para item {ml_item_id}")
+                                
+                                if ml_item_id and unit_price > 0:
                                     # Buscar el producto en nuestro sistema por ml_item_id
                                     try:
                                         producto = Producto.objects.get(
@@ -1322,19 +1374,81 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             ml_item_id=ml_item_id
                                         )
                                         
+                                        # Calcular subtotal del item
+                                        subtotal_item = unit_price * quantity
+                                        total_venta += subtotal_item
+                                        
+                                        # Calcular arancel según la categoría del producto
+                                        arancel_item = Decimal('0.00')
+                                        if producto.ml_categoria_id:
+                                            try:
+                                                from .models import ArancelMercadoLibre, CategoriaMercadoLibre
+                                                categoria_ml = CategoriaMercadoLibre.objects.get(id=producto.ml_categoria_id)
+                                                arancel_ml = ArancelMercadoLibre.objects.filter(
+                                                    tienda=tienda,
+                                                    categoria_ml=categoria_ml
+                                                ).first()
+                                                
+                                                if arancel_ml:
+                                                    arancel_porcentaje = arancel_ml.arancel_porcentaje
+                                                    arancel_item = subtotal_item * (arancel_porcentaje / Decimal('100'))
+                                                    total_arancel += arancel_item
+                                                    logger.info(f"Arancel aplicado para {producto.nombre}: {arancel_porcentaje}% = ${arancel_item}")
+                                                else:
+                                                    logger.warning(f"No se encontró arancel configurado para categoría {producto.ml_categoria_id} de producto {producto.nombre}")
+                                            except Exception as e:
+                                                logger.error(f"Error al calcular arancel para producto {producto.nombre}: {e}")
+                                        
+                                        # Agregar detalle de venta
+                                        detalles_venta.append({
+                                            'producto': producto.id,
+                                            'cantidad': quantity,
+                                            'precio_unitario': float(unit_price),
+                                            'costo_unitario': float(producto.costo) if producto.costo else None,
+                                            'subtotal': float(subtotal_item),
+                                            'arancel_item': float(arancel_item)
+                                        })
+                                        
                                         # Actualizar stock: restar la cantidad vendida
                                         producto.stock = max(0, producto.stock - quantity)
                                         producto.save()
                                         
                                         logger.info(f"Stock actualizado para {producto.nombre}: -{quantity} unidades (nuevo stock: {producto.stock})")
                                         
-                                        # Opcional: crear un registro de venta en el sistema
-                                        # (esto se puede hacer si quieres registrar las ventas de ML en tu sistema)
-                                        
                                     except Producto.DoesNotExist:
                                         logger.warning(f"Producto con ml_item_id {ml_item_id} no encontrado en el sistema")
                                     except Exception as e:
-                                        logger.error(f"Error al actualizar stock para ml_item_id {ml_item_id}: {e}")
+                                        logger.error(f"Error al procesar item {ml_item_id}: {e}")
+                            
+                            # Crear la venta en el sistema si hay detalles
+                            if detalles_venta:
+                                try:
+                                    # Crear la venta
+                                    venta = Venta.objects.create(
+                                        tienda=tienda,
+                                        metodo_pago=metodo_pago_ml.nombre,
+                                        total=total_venta,
+                                        arancel_total=total_arancel,
+                                        usuario=None,  # Venta automática desde ML
+                                        fecha_venta=timezone.now()
+                                    )
+                                    
+                                    # Crear los detalles de venta
+                                    for detalle_data in detalles_venta:
+                                        producto_obj = Producto.objects.get(id=detalle_data['producto'])
+                                        DetalleVenta.objects.create(
+                                            venta=venta,
+                                            producto=producto_obj,
+                                            cantidad=detalle_data['cantidad'],
+                                            precio_unitario=Decimal(str(detalle_data['precio_unitario'])),
+                                            costo_unitario=Decimal(str(detalle_data['costo_unitario'])) if detalle_data['costo_unitario'] else None,
+                                            subtotal=Decimal(str(detalle_data['subtotal']))
+                                        )
+                                    
+                                    logger.info(f"Venta de Mercado Libre registrada: ID {venta.id}, Total: ${total_venta}, Arancel: ${total_arancel}")
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error al crear venta desde orden ML {order_id}: {e}", exc_info=True)
                         
                         return Response({
                             'status': 'success',
@@ -2074,6 +2188,41 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        """
+        Filtra los métodos de pago según la integración de Mercado Libre.
+        Si la tienda no tiene integración ML, oculta el método 'Mercado Libre' del punto de venta.
+        Pero siempre lo muestra si es financiero (para configurar aranceles).
+        """
+        queryset = MetodoPago.objects.filter(activo=True)
+        
+        # Obtener la tienda del usuario
+        user = self.request.user
+        if user and not user.is_anonymous and hasattr(user, 'tienda') and user.tienda:
+            tienda = user.tienda
+            
+            # Verificar si la tienda tiene integración ML
+            tiene_ml = (
+                hasattr(tienda, 'plataforma_ecommerce') and
+                tienda.plataforma_ecommerce == 'MERCADO_LIBRE' and
+                hasattr(tienda, 'ml_access_token') and
+                tienda.ml_access_token
+            )
+            
+            # Solo excluir "Mercado Libre" si:
+            # 1. No tiene integración ML
+            # 2. Y el método NO es financiero (para permitir configurar aranceles)
+            # Si es financiero, siempre mostrarlo para que se pueda configurar el arancel
+            if not tiene_ml:
+                # Verificar si el método "Mercado Libre" es financiero
+                metodo_ml = MetodoPago.objects.filter(nombre='Mercado Libre', activo=True).first()
+                # Si es financiero, NO excluirlo (para que se pueda configurar el arancel)
+                # Solo excluirlo si NO es financiero (caso raro)
+                if not metodo_ml or not metodo_ml.es_financiero:
+                    queryset = queryset.exclude(nombre='Mercado Libre')
+        
+        return queryset.order_by('nombre')
+
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
         close_old_connections()
@@ -2197,6 +2346,60 @@ class CompraViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(usuario=self.request.user)
 
+    # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
+
+# VIEWSET: Aranceles Mercado Libre por Categoría
+class ArancelMercadoLibreViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return ArancelMercadoLibreCreateSerializer
+        return ArancelMercadoLibreSerializer
+    
+    def get_queryset(self):
+        """
+        Filtra aranceles ML por tienda y solo muestra categorías que la tienda ha usado.
+        """
+        user = self.request.user
+        queryset = ArancelMercadoLibre.objects.all().select_related('tienda', 'categoria_ml')
+        
+        if user.is_superuser:
+            # Superusuarios ven todos los aranceles
+            tienda_slug = self.request.query_params.get('tienda_slug', None)
+            if tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+            return queryset.order_by('tienda__nombre', 'categoria_ml__nombre')
+        
+        elif user.tienda:
+            # Usuarios staff solo ven aranceles de su tienda
+            # Filtrar solo categorías que la tienda ha usado (productos con ml_categoria_id)
+            from .models import Producto
+            categorias_usadas = Producto.objects.filter(
+                tienda=user.tienda,
+                ml_categoria_id__isnull=False
+            ).exclude(ml_categoria_id='').values_list('ml_categoria_id', flat=True).distinct()
+            
+            queryset = queryset.filter(
+                tienda=user.tienda,
+                categoria_ml__id__in=categorias_usadas
+            )
+            return queryset.order_by('categoria_ml__nombre')
+        
+        return ArancelMercadoLibre.objects.none()
+    
+    def perform_create(self, serializer):
+        """Asegurar que el arancel se crea para la tienda del usuario"""
+        user = self.request.user
+        if not user.is_superuser and user.tienda:
+            serializer.save(tienda=user.tienda)
+        else:
+            serializer.save()
+    
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
         close_old_connections()
