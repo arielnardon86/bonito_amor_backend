@@ -22,6 +22,7 @@ except (ImportError, AttributeError) as e:
     print(f"⚠️ Warning: No se pudo importar ml_oauth_callback_public_view: {e}")
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from inventario.views import verificar_database_config
 # Importación condicional de CambioDevolucionViewSet
 try:
     from inventario.views import CambioDevolucionViewSet
@@ -70,4 +71,5 @@ urlpatterns += [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
+    path('api/verificar-database/', verificar_database_config, name='verificar-database'),  # Endpoint de verificación
 ]

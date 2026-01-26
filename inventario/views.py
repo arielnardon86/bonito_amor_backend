@@ -2477,6 +2477,81 @@ class InventarioMetricsAPIView(APIView):
 
         return Response(data)
 
+# --- VISTA PARA VERIFICAR CONFIGURACIÓN DE BASE DE DATOS ---
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])  # Permitir acceso sin autenticación para diagnóstico
+def verificar_database_config(request):
+    """
+    Endpoint para verificar qué base de datos está usando el sistema.
+    Útil para diagnosticar si está usando la BD en la nube o la local.
+    """
+    from django.conf import settings
+    from django.db import connection
+    import os
+    
+    db_config = settings.DATABASES['default']
+    environment = os.environ.get('DJANGO_ENVIRONMENT', 'development').lower()
+    
+    # Información de la base de datos (sin credenciales sensibles)
+    db_info = {
+        'environment': environment,
+        'engine': db_config.get('ENGINE', 'N/A'),
+        'database_name': db_config.get('NAME', 'N/A'),
+        'host': db_config.get('HOST', 'N/A'),
+        'port': db_config.get('PORT', 'N/A'),
+        'user': db_config.get('USER', 'N/A'),
+        'has_database_url': 'DATABASE_URL' in os.environ,
+        'is_sqlite': 'sqlite3' in db_config.get('ENGINE', ''),
+        'is_postgresql': 'postgresql' in db_config.get('ENGINE', ''),
+    }
+    
+    # Intentar hacer una consulta simple para verificar la conexión
+    try:
+        with connection.cursor() as cursor:
+            if db_info['is_postgresql']:
+                cursor.execute("SELECT version();")
+                version = cursor.fetchone()[0]
+                db_info['database_version'] = version
+                db_info['connection_status'] = '✅ Conectado a PostgreSQL'
+                
+                # Contar usuarios para verificar que está usando la BD correcta
+                cursor.execute("SELECT COUNT(*) FROM inventario_user;")
+                user_count = cursor.fetchone()[0]
+                db_info['user_count'] = user_count
+                
+                # Obtener lista de usernames (solo los primeros 10)
+                cursor.execute("SELECT username FROM inventario_user ORDER BY username LIMIT 10;")
+                usernames = [row[0] for row in cursor.fetchall()]
+                db_info['sample_usernames'] = usernames
+                
+            elif db_info['is_sqlite']:
+                cursor.execute("SELECT sqlite_version();")
+                version = cursor.fetchone()[0]
+                db_info['database_version'] = version
+                db_info['connection_status'] = '⚠️ Usando SQLite (local)'
+                
+                # Contar usuarios
+                cursor.execute("SELECT COUNT(*) FROM inventario_user;")
+                user_count = cursor.fetchone()[0]
+                db_info['user_count'] = user_count
+                
+                # Obtener lista de usernames
+                cursor.execute("SELECT username FROM inventario_user ORDER BY username LIMIT 10;")
+                usernames = [row[0] for row in cursor.fetchall()]
+                db_info['sample_usernames'] = usernames
+            else:
+                db_info['connection_status'] = '❓ Tipo de base de datos desconocido'
+                
+    except Exception as e:
+        db_info['connection_status'] = f'❌ Error de conexión: {str(e)}'
+        db_info['error'] = str(e)
+    
+    # Advertencia si está en producción pero usando SQLite
+    if environment == 'production' and db_info['is_sqlite']:
+        db_info['warning'] = '⚠️ ADVERTENCIA: Estás en PRODUCCIÓN pero usando SQLite local. Debes usar PostgreSQL en la nube.'
+    
+    return Response(db_info, status=status.HTTP_200_OK)
+
 # --- VISTA PARA MÉTRICAS DE VENTAS (ACTUALIZADA) ---
 class MetricasAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAdminOrSuperUser]

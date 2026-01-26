@@ -144,13 +144,20 @@ elif ENVIRONMENT == 'production':
             ssl_require=True  # SSL requerido en producción
         )
         print("\n--- PRODUCTION DATABASE CONFIG ---")
-        print("DATABASE_URL found in environment variables!")
-        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']} (SSL: True)")
+        print("✅ DATABASE_URL found in environment variables!")
+        print(f"✅ Engine: {DATABASES['default']['ENGINE']}")
+        print(f"✅ Database Name: {DATABASES['default'].get('NAME', 'N/A')}")
+        print(f"✅ Host: {DATABASES['default'].get('HOST', 'N/A')}")
+        print(f"✅ Port: {DATABASES['default'].get('PORT', 'N/A')}")
+        print(f"✅ User: {DATABASES['default'].get('USER', 'N/A')}")
+        print(f"✅ SSL Required: True")
+        print(f"✅ Using Cloud PostgreSQL Database")
         print("--- END CONFIG ---\n")
     else:
         print("\n--- PRODUCTION DATABASE CONFIG ---")
-        print("ERROR: DATABASE_URL NOT found in environment variables for production!")
-        print("Falling back to SQLite (NOT RECOMMENDED FOR PRODUCTION)")
+        print("❌ ERROR: DATABASE_URL NOT found in environment variables for production!")
+        print("⚠️  WARNING: Falling back to SQLite (NOT RECOMMENDED FOR PRODUCTION)")
+        print(f"⚠️  Using local SQLite: {DATABASES['default']['NAME']}")
         print("--- END CONFIG ---\n")
 
 else:  # development
