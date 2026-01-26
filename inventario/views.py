@@ -438,7 +438,8 @@ def ml_oauth_callback_public_view(request):
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
-    
+    pagination_class = None
+
     def get_permissions(self):
         if self.action == 'list':
             permission_classes = [permissions.AllowAny]
@@ -2484,6 +2485,8 @@ class MetricasAPIView(APIView):
         year = request.query_params.get('year', None)
         month = request.query_params.get('month', None)
         day = request.query_params.get('day', None)
+        date_from = request.query_params.get('date_from', None)
+        date_to = request.query_params.get('date_to', None)
         seller_id = request.query_params.get('seller_id', None)
         payment_method = request.query_params.get('payment_method', None)
 
@@ -2501,15 +2504,33 @@ class MetricasAPIView(APIView):
         )
         queryset_compras = Compra.objects.filter(tienda=tienda_obj)
 
-        if year:
-            queryset_ventas = queryset_ventas.filter(fecha_venta__year=year)
-            queryset_compras = queryset_compras.filter(fecha_compra__year=year)
-        if month:
-            queryset_ventas = queryset_ventas.filter(fecha_venta__month=month)
-            queryset_compras = queryset_compras.filter(fecha_compra__month=month)
-        if day:
-            queryset_ventas = queryset_ventas.filter(fecha_venta__day=day)
-            queryset_compras = queryset_compras.filter(fecha_compra__day=day)
+        use_date_range = date_from and date_to
+        if use_date_range:
+            try:
+                dt_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+                dt_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+                if dt_from > dt_to:
+                    return Response({"error": "'date_from' debe ser anterior o igual a 'date_to'."}, status=status.HTTP_400_BAD_REQUEST)
+                queryset_ventas = queryset_ventas.filter(
+                    fecha_venta__date__gte=dt_from,
+                    fecha_venta__date__lte=dt_to
+                )
+                queryset_compras = queryset_compras.filter(
+                    fecha_compra__date__gte=dt_from,
+                    fecha_compra__date__lte=dt_to
+                )
+            except ValueError:
+                return Response({"error": "Formato de fecha inválido. Use YYYY-MM-DD para date_from y date_to."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if year:
+                queryset_ventas = queryset_ventas.filter(fecha_venta__year=year)
+                queryset_compras = queryset_compras.filter(fecha_compra__year=year)
+            if month:
+                queryset_ventas = queryset_ventas.filter(fecha_venta__month=month)
+                queryset_compras = queryset_compras.filter(fecha_compra__month=month)
+            if day:
+                queryset_ventas = queryset_ventas.filter(fecha_venta__day=day)
+                queryset_compras = queryset_compras.filter(fecha_compra__day=day)
         if seller_id:
             queryset_ventas = queryset_ventas.filter(usuario__id=seller_id)
         if payment_method:

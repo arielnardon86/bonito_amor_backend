@@ -154,21 +154,11 @@ elif ENVIRONMENT == 'production':
         print("--- END CONFIG ---\n")
 
 else:  # development
-    # Ambiente de desarrollo: SQLite por defecto
-    if 'DATABASE_URL' in os.environ:
-        DATABASES['default'] = dj_database_url.config(
-            conn_max_age=60,
-            ssl_require=False
-        )
-        print("\n--- DEVELOPMENT DATABASE CONFIG ---")
-        print("DATABASE_URL found, using it instead of SQLite")
-        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
-        print("--- END CONFIG ---\n")
-    else:
-        print("\n--- DEVELOPMENT DATABASE CONFIG ---")
-        print("Using SQLite for development")
-        print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
-        print("--- END CONFIG ---\n")
+    # Desarrollo siempre usa SQLite (sin PostgreSQL)
+    print("\n--- DEVELOPMENT DATABASE CONFIG ---")
+    print("Using SQLite for development")
+    print(f"Django's DATABASES['default'] configured as: {DATABASES['default']['ENGINE']}")
+    print("--- END CONFIG ---\n")
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -196,10 +186,11 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",              
-    "https://bonitoamorstock.onrender.com", 
-    "https://bonito-amor-backend.onrender.com", 
-    "https://totalstock.onrender.com", 
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://bonitoamorstock.onrender.com",
+    "https://bonito-amor-backend.onrender.com",
+    "https://totalstock.onrender.com",
 ]
 CORS_ALLOW_CREDENTIALS = True 
 
