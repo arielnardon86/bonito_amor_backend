@@ -1,6 +1,9 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
+import logging
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, Factura, CategoriaMercadoLibre
+
+logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
 try:
     from .models import CambioDevolucion, DetalleCambioDevolucion
@@ -714,8 +717,30 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        data = super().validate(attrs)
-        return data
+        username = attrs.get('username') or ''
+        try:
+            data = super().validate(attrs)
+            return data
+        except Exception as e:
+            try:
+                u = User.objects.filter(username=username).first()
+                if u is None:
+                    logger.warning(
+                        "[LOGIN] Usuario no encontrado: username=%r",
+                        username,
+                        exc_info=False,
+                    )
+                else:
+                    logger.warning(
+                        "[LOGIN] Usuario existe pero login fallo: username=%r is_active=%s tiene_tienda=%s",
+                        username,
+                        u.is_active,
+                        u.tienda_id is not None,
+                        exc_info=False,
+                    )
+            except Exception as log_err:
+                logger.exception("[LOGIN] Error al registrar debug: %s", log_err)
+            raise
 
 class CompraSerializer(serializers.ModelSerializer):
     usuario = SimpleUserSerializer(read_only=True)
