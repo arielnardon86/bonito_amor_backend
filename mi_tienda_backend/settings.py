@@ -278,3 +278,9 @@ LOGGING = {
 }
 
 AUTH_USER_MODEL = 'inventario.User'
+
+# Backend iexact primero: evita fallos por mayúsculas (ej. "ari" vs "Ari" en DB).
+AUTHENTICATION_BACKENDS = [
+    'inventario.auth_backends.CaseInsensitiveUsernameBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]

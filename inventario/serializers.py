@@ -725,11 +725,23 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             try:
                 u = User.objects.filter(username=username).first()
                 if u is None:
-                    logger.warning(
-                        "[LOGIN] Usuario no encontrado: username=%r",
-                        username,
-                        exc_info=False,
-                    )
+                    u_iexact = User.objects.filter(username__iexact=username).first()
+                    total = User.objects.count()
+                    if u_iexact is not None:
+                        logger.warning(
+                            "[LOGIN] Usuario existe con distinta capitalizacion: request=%r vs DB=%r total_users=%d",
+                            username,
+                            u_iexact.username,
+                            total,
+                            exc_info=False,
+                        )
+                    else:
+                        logger.warning(
+                            "[LOGIN] Usuario no encontrado: username=%r total_users_en_DB=%d",
+                            username,
+                            total,
+                            exc_info=False,
+                        )
                 else:
                     logger.warning(
                         "[LOGIN] Usuario existe pero login fallo: username=%r is_active=%s tiene_tienda=%s",
