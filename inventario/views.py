@@ -450,6 +450,15 @@ class TiendaViewSet(viewsets.ModelViewSet):
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
+    def get_queryset(self):
+        """Optimización: Filtrar por nombre si se proporciona en query params"""
+        queryset = super().get_queryset()
+        nombre = self.request.query_params.get('nombre', None)
+        if nombre:
+            # Filtrar por nombre (case-insensitive)
+            queryset = queryset.filter(nombre__iexact=nombre)
+        return queryset
+
     # FIX DE CONEXIÓN (Mantenido)
     def list(self, request, *args, **kwargs):
         close_old_connections()
