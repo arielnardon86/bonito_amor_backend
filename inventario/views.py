@@ -2439,6 +2439,7 @@ else:
         
 
 class CustomTokenObtainPairView(TokenObtainPairView):
+    permission_classes = [permissions.AllowAny]
     serializer_class = CustomTokenObtainPairSerializer
 
 # --- NUEVA VISTA PARA MÉTRICAS DE INVENTARIO ---
