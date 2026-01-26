@@ -717,7 +717,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        username = attrs.get('username') or ''
+        raw = attrs.get('username') or ''
+        username = str(raw).strip()
+        attrs = {**attrs, 'username': username}
         try:
             data = super().validate(attrs)
             return data
@@ -736,10 +738,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                             exc_info=False,
                         )
                     else:
+                        db_usernames = list(User.objects.values_list('username', flat=True)[:5])
                         logger.warning(
-                            "[LOGIN] Usuario no encontrado: username=%r total_users_en_DB=%d",
+                            "[LOGIN] Usuario no encontrado: request=%r total_users=%d usernames_en_DB=%r",
                             username,
                             total,
+                            db_usernames,
                             exc_info=False,
                         )
                 else:

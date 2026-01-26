@@ -15,6 +15,9 @@ class CaseInsensitiveUsernameBackend(ModelBackend):
         User = get_user_model()
         if username is None or password is None:
             return None
+        username = str(username).strip()
+        if not username:
+            return None
         user = User.objects.filter(username__iexact=username).first()
         if user is None:
             return None
