@@ -8,7 +8,28 @@ from datetime import timedelta
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Determinar qué archivo .env cargar según el ambiente
-ENVIRONMENT = os.environ.get('DJANGO_ENVIRONMENT', 'development').lower()
+# Detección automática: Si está en Render o tiene DATABASE_URL, asumir producción
+ENVIRONMENT = os.environ.get('DJANGO_ENVIRONMENT', '').lower()
+
+# Si no está configurada, intentar detectar automáticamente
+if not ENVIRONMENT:
+    # Si tiene DATABASE_URL (típico de Render/Heroku), asumir producción
+    if 'DATABASE_URL' in os.environ:
+        ENVIRONMENT = 'production'
+        print("\n⚠️  DJANGO_ENVIRONMENT no configurada, pero DATABASE_URL detectada. Usando: production")
+    # Si está en Render (tiene RENDER), asumir producción
+    elif 'RENDER' in os.environ:
+        ENVIRONMENT = 'production'
+        print("\n⚠️  DJANGO_ENVIRONMENT no configurada, pero RENDER detectado. Usando: production")
+    else:
+        ENVIRONMENT = 'development'
+        print("\n⚠️  DJANGO_ENVIRONMENT no configurada. Usando: development (por defecto)")
+
+print(f"\n🔍 Ambiente detectado: {ENVIRONMENT.upper()}")
+print(f"🔍 Variables de entorno disponibles:")
+print(f"   - DJANGO_ENVIRONMENT: {os.environ.get('DJANGO_ENVIRONMENT', 'NO CONFIGURADA')}")
+print(f"   - DATABASE_URL: {'CONFIGURADA' if 'DATABASE_URL' in os.environ else 'NO CONFIGURADA'}")
+print(f"   - RENDER: {'CONFIGURADA' if 'RENDER' in os.environ else 'NO CONFIGURADA'}")
 
 if ENVIRONMENT == 'staging':
     env_file = BASE_DIR / '.env.staging'
