@@ -2451,6 +2451,83 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     permission_classes = [permissions.AllowAny]
     serializer_class = CustomTokenObtainPairSerializer
 
+# --- ENDPOINT PARA NOTIFICACIONES PUSH (FCM) ---
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def registrar_token_fcm(request):
+    """
+    Endpoint para registrar un token FCM de un dispositivo.
+    Se usa para recibir notificaciones push cuando se realizan ventas.
+    """
+    from .services.notificaciones_service import NotificacionesService
+    
+    token = request.data.get('token')
+    device_info = request.data.get('device_info', None)
+    
+    if not token:
+        return Response(
+            {'error': 'El token FCM es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        fcm_token, created = NotificacionesService.registrar_token(
+            user=request.user,
+            token=token,
+            device_info=device_info
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'Token registrado correctamente' if created else 'Token actualizado correctamente',
+            'token_id': str(fcm_token.id)
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error al registrar token FCM: {str(e)}")
+        return Response(
+            {'error': f'Error al registrar token: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['DELETE', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def eliminar_token_fcm(request):
+    """
+    Endpoint para eliminar/desactivar un token FCM.
+    Útil cuando el usuario cierra sesión o desactiva notificaciones.
+    """
+    from .services.notificaciones_service import NotificacionesService
+    
+    token = request.data.get('token')
+    
+    if not token:
+        return Response(
+            {'error': 'El token FCM es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        success = NotificacionesService.eliminar_token(token)
+        
+        if success:
+            return Response({
+                'success': True,
+                'message': 'Token eliminado correctamente'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'success': False,
+                'message': 'Token no encontrado'
+            }, status=status.HTTP_404_NOT_FOUND)
+            
+    except Exception as e:
+        logger.error(f"Error al eliminar token FCM: {str(e)}")
+        return Response(
+            {'error': f'Error al eliminar token: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 # --- NUEVA VISTA PARA MÉTRICAS DE INVENTARIO ---
 class InventarioMetricsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]

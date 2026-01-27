@@ -660,6 +660,16 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 producto_obj.stock -= cantidad
                 producto_obj.save()
 
+        # Enviar notificaciones push a usuarios de la tienda
+        try:
+            from .services.notificaciones_service import NotificacionesService
+            NotificacionesService.enviar_notificacion_venta(venta)
+        except Exception as e:
+            # No fallar la creación de la venta si las notificaciones fallan
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error al enviar notificaciones push para venta {venta.id}: {str(e)}")
+
         return venta
 
 # Serializers para Facturación

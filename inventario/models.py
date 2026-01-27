@@ -627,10 +627,44 @@ class DetalleCambioDevolucion(models.Model):
     def __str__(self):
         return f"Detalle {self.id} - {self.get_accion_display()} - Cantidad: {self.cantidad}"
 
+# Modelo para almacenar tokens FCM (Firebase Cloud Messaging) para notificaciones push
+class FCMToken(models.Model):
+    """
+    Almacena los tokens FCM de los usuarios para enviar notificaciones push.
+    Un usuario puede tener múltiples tokens (diferentes dispositivos).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='fcm_tokens'
+    )
+    token = models.TextField(unique=True, help_text="Token FCM del dispositivo")
+    device_info = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Información del dispositivo (navegador, SO, etc.)"
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    activo = models.BooleanField(default=True, help_text="Indica si el token está activo")
+
+    class Meta:
+        verbose_name = "Token FCM"
+        verbose_name_plural = "Tokens FCM"
+        ordering = ['-fecha_creacion']
+        indexes = [
+            models.Index(fields=['user', 'activo']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.device_info or 'Dispositivo desconocido'}"
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago', 
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 
-    'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion'
+    'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken'
 ]
