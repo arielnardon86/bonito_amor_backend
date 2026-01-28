@@ -168,12 +168,22 @@ class NotificacionesService:
         Usa FCM HTTP v1 si está configurada la cuenta de servicio (recomendado para Safari PWA).
         """
         usuarios_tienda = User.objects.filter(tienda=venta.tienda, is_active=True)
-        tokens = list(
+        tokens_qs = (
             FCMToken.objects.filter(
                 user__in=usuarios_tienda,
                 activo=True,
-            ).select_related('user')
+            )
+            .select_related('user')
+            .order_by('user_id', '-fecha_actualizacion')
         )
+        # Un solo token por usuario (el más reciente) para no duplicar notificaciones
+        seen_users = set()
+        tokens = []
+        for t in tokens_qs:
+            if t.user_id in seen_users:
+                continue
+            seen_users.add(t.user_id)
+            tokens.append(t)
 
         if not tokens:
             logger.info(
