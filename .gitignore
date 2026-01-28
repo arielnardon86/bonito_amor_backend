@@ -43,6 +43,10 @@ db.sqlite3-journal
 .env.*.local
 *.env
 
+# Firebase (nunca subir credenciales)
+*-firebase-adminsdk-*.json
+*firebase*adminsdk*.json
+
 # IDEs
 .vscode/
 .idea/

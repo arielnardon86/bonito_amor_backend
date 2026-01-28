@@ -21,3 +21,4 @@ requests==2.31.0
 cryptography==41.0.7
 setuptools>=80.0.0  # Necesario para pyafipws en Python 3.12+
 reportlab==4.0.9  # Para generar PDFs de facturas
+firebase-admin>=6.0.0  # FCM HTTP v1 (necesario para Safari/Web Push)
