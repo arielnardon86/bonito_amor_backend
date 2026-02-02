@@ -2364,11 +2364,26 @@ class CompraViewSet(viewsets.ModelViewSet):
 
         if user.is_superuser:
             if tienda_slug:
-                return queryset.filter(tienda__nombre=tienda_slug).order_by('-fecha_compra')
-            return queryset.order_by('-fecha_compra')
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
         elif user.tienda:
-            return queryset.filter(tienda=user.tienda).order_by('-fecha_compra')
-        return Compra.objects.none()
+            queryset = queryset.filter(tienda=user.tienda)
+        else:
+            return Compra.objects.none()
+
+        # Filtro por rango de fechas
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        if date_from:
+            queryset = queryset.filter(fecha_compra__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(fecha_compra__date__lte=date_to)
+
+        # Búsqueda por concepto (proveedor)
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            queryset = queryset.filter(proveedor__icontains=search)
+
+        return queryset.order_by('-fecha_compra')
 
     def get_serializer_class(self):
         if self.action == 'create':
