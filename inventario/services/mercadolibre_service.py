@@ -356,6 +356,36 @@ class MercadoLibreService:
             logger.error(f"Error al obtener item {item_id}: {e}")
             raise
     
+    def get_sale_price(self, item_id):
+        """
+        Obtiene el precio de venta actual del item (incluye precio con promoción/descuento si aplica).
+        API: GET /items/{id}/sale_price - devuelve el precio ganador mostrado al comprador.
+        
+        Args:
+            item_id: ID del item en Mercado Libre
+            
+        Returns:
+            dict con amount (precio actual), regular_amount (precio original si hay promo), currency_id, etc.
+            None si el endpoint no está disponible o falla.
+        """
+        self.ensure_valid_token()
+        try:
+            response = requests.get(
+                f"{self.base_url}/items/{item_id}/sale_price",
+                headers=self.get_headers(),
+                params={'context': 'channel_marketplace'},
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
+                logger.debug(f"sale_price no disponible para item {item_id}")
+            else:
+                logger.debug(f"Error al obtener sale_price para {item_id}: {e}")
+            return None
+    
     def create_producto_from_ml_item(self, tienda, item_data):
         """
         Crea o actualiza un Producto en la base de datos a partir de los datos de un item de Mercado Libre.
@@ -381,10 +411,19 @@ class MercadoLibreService:
         if not title:
             title = f"Producto ML {ml_item_id}"
         
-        try:
-            price = float(item_data.get('price', 0))
-        except (TypeError, ValueError):
-            price = 0
+        # Preferir precio con promoción (sale_price) si existe; si no, usar price del item
+        price = None
+        sale_data = self.get_sale_price(ml_item_id)
+        if sale_data is not None and sale_data.get('amount') is not None:
+            try:
+                price = float(sale_data['amount'])
+            except (TypeError, ValueError):
+                pass
+        if price is None:
+            try:
+                price = float(item_data.get('price', 0))
+            except (TypeError, ValueError):
+                price = 0
         if price < 0:
             price = 0
         
