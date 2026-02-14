@@ -1703,3 +1703,38 @@ class MercadoLibreService:
         except Exception as e:
             logger.error(f"Error inesperado al obtener orden {order_id}: {e}")
             return None
+    
+    def get_order_billing_info(self, order_id):
+        """
+        Obtiene datos de facturación del comprador para una orden (nombre, apellido, documento, dirección).
+        Útil para emitir facturas con datos reales del cliente.
+        Documentación: https://developers.mercadolibre.com.ar/es_ar/billing-data
+        
+        Args:
+            order_id: ID de la orden en Mercado Libre
+            
+        Returns:
+            dict con name, last_name, identification (type + number), address, o None si no está disponible
+        """
+        self.ensure_valid_token()
+        try:
+            url = f"{self.base_url}/orders/{order_id}/billing_info"
+            headers = {
+                'Authorization': f'Bearer {self.tienda.ml_access_token}',
+                'Content-Type': 'application/json',
+                'x-version': '2',
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Billing info obtenido para orden {order_id}")
+            return data
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                logger.debug(f"Billing info no disponible para orden {order_id}")
+            else:
+                logger.warning(f"Error al obtener billing info para orden {order_id}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Error inesperado al obtener billing info {order_id}: {e}")
+            return None

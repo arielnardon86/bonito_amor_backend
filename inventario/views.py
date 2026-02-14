@@ -1621,28 +1621,51 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     # Facturación automática: intentar emitir factura para ventas de ML
                                     if venta.tienda.tipo_facturacion and venta.tienda.tipo_facturacion != 'NINGUNA':
                                         try:
-                                            # Datos del comprador desde la orden de ML (buyer, shipment)
-                                            buyer = order.get('buyer', {})
-                                            buyer_id = buyer.get('id')
+                                            # Preferir datos de facturación de ML (nombre, DNI, dirección) si existe el endpoint
                                             cliente_nombre = 'Consumidor Final'
                                             cliente_domicilio = ''
-                                            if buyer:
-                                                nickname = buyer.get('nickname', '')
-                                                if nickname:
-                                                    cliente_nombre = f"Comprador ML {nickname}"[:255]
-                                            # Intentar obtener domicilio del envío
-                                            shipment = order.get('shipment', {}) or order.get('shipping', {})
-                                            if isinstance(shipment, dict):
-                                                receiver_addr = shipment.get('receiver_address', {}) or shipment.get('address', {})
-                                                if isinstance(receiver_addr, dict):
-                                                    address_line = receiver_addr.get('address_line', '') or receiver_addr.get('street_name', '')
-                                                    city = receiver_addr.get('city', {}).get('name', '') if isinstance(receiver_addr.get('city'), dict) else ''
-                                                    if address_line or city:
-                                                        cliente_domicilio = f"{address_line} {city}".strip()[:255]
+                                            cliente_cuit_dni = ''
+                                            billing = ml_service.get_order_billing_info(order_id)
+                                            if billing:
+                                                first = (billing.get('name') or billing.get('first_name') or '').strip()
+                                                last = (billing.get('last_name') or '').strip()
+                                                if first or last:
+                                                    cliente_nombre = f"{first} {last}".strip()[:255] or cliente_nombre
+                                                ident = billing.get('identification', {})
+                                                if isinstance(ident, dict):
+                                                    cliente_cuit_dni = (ident.get('number') or '').strip()
+                                                elif isinstance(ident, str):
+                                                    cliente_cuit_dni = ident.strip()
+                                                addr = billing.get('address', {})
+                                                if isinstance(addr, dict):
+                                                    street = (addr.get('street_name') or addr.get('address_line') or '')
+                                                    number = (addr.get('street_number') or '')
+                                                    city = (addr.get('city_name') or (addr.get('city', {}).get('name') if isinstance(addr.get('city'), dict) else ''))
+                                                    state = (addr.get('state', {}).get('name') if isinstance(addr.get('state'), dict) else '') or addr.get('state_name', '')
+                                                    zipcode = addr.get('zip_code', '')
+                                                    parts = [p for p in [street, number, city, state, zipcode] if p]
+                                                    if parts:
+                                                        cliente_domicilio = ' '.join(parts)[:255]
+                                            # Fallback: datos desde la orden (buyer, shipment)
+                                            if cliente_nombre == 'Consumidor Final' or not cliente_domicilio:
+                                                buyer = order.get('buyer', {})
+                                                if buyer and cliente_nombre == 'Consumidor Final':
+                                                    nickname = buyer.get('nickname', '')
+                                                    if nickname:
+                                                        cliente_nombre = f"Comprador ML {nickname}"[:255]
+                                                if not cliente_domicilio:
+                                                    shipment = order.get('shipment', {}) or order.get('shipping', {})
+                                                    if isinstance(shipment, dict):
+                                                        receiver_addr = shipment.get('receiver_address', {}) or shipment.get('address', {})
+                                                        if isinstance(receiver_addr, dict):
+                                                            address_line = receiver_addr.get('address_line', '') or receiver_addr.get('street_name', '')
+                                                            city = receiver_addr.get('city', {}).get('name', '') if isinstance(receiver_addr.get('city'), dict) else ''
+                                                            if address_line or city:
+                                                                cliente_domicilio = f"{address_line} {city}".strip()[:255]
                                             
                                             cliente_data = {
                                                 'cliente_nombre': cliente_nombre,
-                                                'cliente_cuit': '',
+                                                'cliente_cuit': cliente_cuit_dni,
                                                 'cliente_domicilio': cliente_domicilio or 'Sin especificar',
                                                 'cliente_tipo_documento': '99',
                                                 'cliente_condicion_iva': 'CF'
