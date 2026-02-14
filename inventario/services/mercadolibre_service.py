@@ -320,6 +320,89 @@ class MercadoLibreService:
             logger.error(f"Error al obtener item {item_id}: {e}")
             raise
     
+    def create_producto_from_ml_item(self, tienda, item_data):
+        """
+        Crea o actualiza un Producto en la base de datos a partir de los datos de un item de Mercado Libre.
+        Se usa al importar productos desde ML o al registrar una venta de ML cuyo producto no existía localmente.
+        
+        Args:
+            tienda: Instancia del modelo Tienda
+            item_data: dict con la respuesta de get_item (id, title, price, available_quantity, etc.)
+            
+        Returns:
+            Instancia de Producto creada o actualizada, o None si falla
+        """
+        if not item_data or not isinstance(item_data, dict):
+            logger.warning("create_producto_from_ml_item: item_data inválido o vacío")
+            return None
+        
+        ml_item_id = item_data.get('id')
+        if not ml_item_id:
+            logger.warning("create_producto_from_ml_item: el item no tiene id")
+            return None
+        
+        title = (item_data.get('title') or '').strip()
+        if not title:
+            title = f"Producto ML {ml_item_id}"
+        
+        try:
+            price = float(item_data.get('price', 0))
+        except (TypeError, ValueError):
+            price = 0
+        if price < 0:
+            price = 0
+        
+        try:
+            available_quantity = int(item_data.get('available_quantity', 0))
+        except (TypeError, ValueError):
+            available_quantity = 0
+        if available_quantity < 0:
+            available_quantity = 0
+        
+        # Descripción: ML puede devolver un objeto con plain_text
+        description = None
+        if item_data.get('descriptions') and isinstance(item_data['descriptions'], list) and len(item_data['descriptions']) > 0:
+            desc_id = item_data['descriptions'][0]
+            if isinstance(desc_id, dict) and desc_id.get('id'):
+                # Se podría hacer otra llamada para obtener el texto, por ahora dejamos None
+                pass
+        codigo_barras = f"ML-{ml_item_id}"  # Código único para productos importados de ML
+        # Usar ml_item_id como talle para cumplir unique_together (nombre, tienda, talle) sin colisiones
+        talle_ml = ml_item_id[:50] if len(ml_item_id) <= 50 else ml_item_id[:47] + "..."
+        
+        from django.db import IntegrityError
+        base_codigo = codigo_barras
+        intento = 0
+        while intento < 100:
+            try:
+                producto, created = Producto.objects.update_or_create(
+                    tienda=tienda,
+                    ml_item_id=ml_item_id,
+                    defaults={
+                        'nombre': title[:200],
+                        'precio': price,
+                        'stock': available_quantity,
+                        'talle': talle_ml,
+                        'descripcion': description,
+                        'codigo_barras': codigo_barras,
+                        'ml_sincronizado': True,
+                        'ml_ultima_sincronizacion': timezone.now(),
+                    }
+                )
+                if created:
+                    logger.info(f"Producto creado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
+                else:
+                    logger.info(f"Producto actualizado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
+                return producto
+            except IntegrityError as e:
+                if 'codigo_barras' in str(e) or 'unique' in str(e).lower():
+                    intento += 1
+                    codigo_barras = f"{base_codigo}-{intento}"
+                else:
+                    raise
+        logger.error(f"create_producto_from_ml_item: no se pudo asignar codigo_barras único para {ml_item_id}")
+        return None
+    
     def create_item(self, item_data):
         """
         Crea un nuevo producto/publicación en Mercado Libre
