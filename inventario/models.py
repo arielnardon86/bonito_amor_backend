@@ -285,8 +285,8 @@ class ArancelMetodoTienda(models.Model):
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles')
     metodo_pago = models.ForeignKey(MetodoPago, on_delete=models.CASCADE, related_name='aranceles_por_tienda')
     
-    # Campo que define el plan (solo relevante para Tarjeta de Crédito, Débito y QR)
-    nombre_plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='CONTADO')
+    # Plan predefinido o nombre personalizado (ej: 18 cuotas, Plan especial)
+    nombre_plan = models.CharField(max_length=50, default='CONTADO', help_text='Plan predefinido o nombre personalizado')
     arancel_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Arancel en porcentaje (%) que la tienda paga al procesar este pago/plan.")
     
     fecha_creacion = models.DateTimeField(auto_now_add=True)
@@ -299,7 +299,8 @@ class ArancelMetodoTienda(models.Model):
         ordering = ['tienda', 'metodo_pago', 'nombre_plan']
 
     def __str__(self):
-        return f"{self.tienda.nombre} - {self.metodo_pago.nombre} - {self.get_nombre_plan_display()} ({self.arancel_porcentaje}%)"
+        plan_display = dict(self.PLAN_CHOICES).get(self.nombre_plan, self.nombre_plan)
+        return f"{self.tienda.nombre} - {self.metodo_pago.nombre} - {plan_display} ({self.arancel_porcentaje}%)"
 # ------------------------------------------------
 
 # --- NUEVO MODELO: ARANCEL MERCADO LIBRE POR CATEGORÍA ---
@@ -334,6 +335,36 @@ class ArancelMercadoLibre(models.Model):
         return f"{self.tienda.nombre} - {self.categoria_ml.nombre} ({self.categoria_ml.id}) - {self.arancel_porcentaje}%"
 # ------------------------------------------------
 
+# --- ARANCEL MERCADO LIBRE POR PRODUCTO (arancel % + costo envío por producto) ---
+class ArancelMercadoLibreProducto(models.Model):
+    """
+    Aranceles y costo de envío configurables por PRODUCTO para ventas de Mercado Libre.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles_ml_producto')
+    producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='aranceles_ml')
+    arancel_porcentaje = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.00'),
+        help_text="Arancel en % que ML cobra por ventas de este producto"
+    )
+    costo_envio = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00'),
+        help_text="Costo de envío estimado por unidad de este producto"
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Arancel Mercado Libre por Producto"
+        verbose_name_plural = "Aranceles Mercado Libre por Producto"
+        unique_together = ('tienda', 'producto')
+        ordering = ['tienda', 'producto__nombre']
+        indexes = [models.Index(fields=['tienda', 'producto'])]
+
+    def __str__(self):
+        return f"{self.tienda.nombre} - {self.producto.nombre} - Arancel {self.arancel_porcentaje}% + Envío ${self.costo_envio}"
+# ------------------------------------------------
+
 # Modelo de Venta
 class Venta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -359,6 +390,8 @@ class Venta(models.Model):
     # NUEVOS CAMPOS: Referencia al arancel aplicado y el monto calculado
     arancel_aplicado = models.ForeignKey(ArancelMetodoTienda, on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_con_arancel')
     arancel_total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto total del arancel calculado para esta venta.")
+    costo_envio_ml = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Costo total de envío (solo ventas Mercado Libre)")
+    origen_mercadolibre = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Mercado Libre")
     
     # Campos para facturación
     facturada = models.BooleanField(default=False, help_text="Indica si esta venta ha sido facturada")
@@ -664,7 +697,7 @@ class FCMToken(models.Model):
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago', 
-    'ArancelMetodoTienda', 'ArancelMercadoLibre', 'CategoriaMercadoLibre',
+    'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken'
 ]

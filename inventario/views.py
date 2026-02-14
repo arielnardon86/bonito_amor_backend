@@ -120,6 +120,14 @@ except ImportError:
     ArancelMercadoLibreSerializer = None
     ArancelMercadoLibreCreateSerializer = None
     logger.warning("⚠️ Serializers de ArancelMercadoLibre no están disponibles. Aplica la migración 0019_arancel_mercado_libre.")
+# Importación ArancelMercadoLibreProducto (por producto: arancel % + costo envío)
+try:
+    from .models import ArancelMercadoLibreProducto
+    from .serializers import ArancelMercadoLibreProductoSerializer, ArancelMercadoLibreProductoCreateSerializer
+except (ImportError, AttributeError):
+    ArancelMercadoLibreProducto = None
+    ArancelMercadoLibreProductoSerializer = None
+    ArancelMercadoLibreProductoCreateSerializer = None
 # Importación condicional de serializers de CambioDevolucion
 # Primero importar normalmente
 try:
@@ -982,6 +990,133 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    @action(detail=True, methods=['post'], url_path='mercadolibre/import-products')
+    def ml_import_products(self, request, pk=None):
+        """
+        Importa productos desde Mercado Libre hacia Total Stock (sincronización inversa).
+        Crea productos en el sistema para los items que ya existen en tu tienda de ML.
+        POST /api/tiendas/{id}/mercadolibre/import-products/
+        Body opcional: {"solo_nuevos": true} - si true, solo importa productos no vinculados
+        """
+        try:
+            tienda = self.get_object()
+            
+            if not self._ml_fields_exist(tienda):
+                return Response(
+                    {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not self._ml_configured(tienda):
+                return Response(
+                    {'error': 'La tienda no está configurada para Mercado Libre'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not getattr(tienda, 'ml_access_token', None):
+                return Response(
+                    {'error': 'No hay token de acceso configurado. Complete el flujo OAuth primero.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            from .services.mercadolibre_service import MercadoLibreService
+            ml_service = MercadoLibreService(tienda)
+            
+            solo_nuevos = request.data.get('solo_nuevos', True)
+            
+            # Obtener items de ML (paginado)
+            all_item_ids = []
+            offset = 0
+            limit = 50
+            
+            while True:
+                items_data = ml_service.get_items(limit=limit, offset=offset)
+                results = items_data.get('results', [])
+                if not results:
+                    break
+                all_item_ids.extend(results)
+                offset += limit
+                if offset >= items_data.get('paging', {}).get('total', 0):
+                    break
+            
+            import_results = {'success': 0, 'errors': 0, 'details': [], 'actualizados': 0}
+            
+            for ml_item_id in all_item_ids:
+                try:
+                    # Si solo_nuevos y ya existe vinculado, omitir
+                    if solo_nuevos and Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).exists():
+                        continue
+                    
+                    # Obtener datos completos del item
+                    item_data = ml_service.get_item(ml_item_id)
+                    if not item_data:
+                        import_results['errors'] += 1
+                        import_results['details'].append({
+                            'ml_item_id': ml_item_id,
+                            'nombre': ml_item_id,
+                            'status': 'error',
+                            'message': 'No se pudo obtener información del item'
+                        })
+                        continue
+                    
+                    producto_existia = Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).exists()
+                    producto = ml_service.create_producto_from_ml_item(tienda, item_data)
+                    
+                    if producto:
+                        if producto_existia:
+                            import_results['actualizados'] += 1
+                            import_results['details'].append({
+                                'producto_id': str(producto.id),
+                                'ml_item_id': ml_item_id,
+                                'nombre': producto.nombre,
+                                'status': 'success',
+                                'message': 'Producto actualizado'
+                            })
+                        else:
+                            import_results['success'] += 1
+                            import_results['details'].append({
+                                'producto_id': str(producto.id),
+                                'ml_item_id': ml_item_id,
+                                'nombre': producto.nombre,
+                                'status': 'success',
+                                'message': 'Producto importado'
+                            })
+                    else:
+                        import_results['errors'] += 1
+                        import_results['details'].append({
+                            'ml_item_id': ml_item_id,
+                            'nombre': item_data.get('title', ml_item_id),
+                            'status': 'error',
+                            'message': 'No se pudo crear el producto'
+                        })
+                        
+                except Exception as e:
+                    import_results['errors'] += 1
+                    import_results['details'].append({
+                        'ml_item_id': ml_item_id,
+                        'nombre': ml_item_id,
+                        'status': 'error',
+                        'message': str(e)[:200]
+                    })
+                    logger.error(f"Error importando item {ml_item_id}: {e}", exc_info=True)
+            
+            total = import_results['success'] + import_results['errors'] + import_results['actualizados']
+            return Response({
+                'message': f'Importación completada: {import_results["success"]} nuevos, {import_results["actualizados"]} actualizados, {import_results["errors"]} errores',
+                'results': import_results,
+                'total': total,
+                'success': import_results['success'],
+                'actualizados': import_results['actualizados'],
+                'errors': import_results['errors']
+            })
+            
+        except Exception as e:
+            logger.error(f"Error al importar productos desde ML: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al importar productos: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     @action(detail=True, methods=['get'], url_path='mercadolibre/categories', pagination_class=None)
     def ml_search_categories(self, request, pk=None):
         """
@@ -1358,10 +1493,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     es_financiero=True
                                 )
                             
-                            # Preparar detalles de venta y calcular totales
+                            # Preparar detalles de venta y calcular totales (arancel + costo envío por producto)
                             detalles_venta = []
                             total_venta = Decimal('0.00')
                             total_arancel = Decimal('0.00')
+                            total_costo_envio = Decimal('0.00')
                             
                             for item in order_items:
                                 ml_item_id = item.get('item', {}).get('id')
@@ -1392,40 +1528,48 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                 
                                 if ml_item_id and unit_price > 0:
                                     # Buscar el producto en nuestro sistema por ml_item_id
+                                    # Si no existe, crearlo automáticamente desde los datos de ML (sincronización inversa)
+                                    producto = None
                                     try:
                                         producto = Producto.objects.get(
                                             tienda=tienda,
                                             ml_item_id=ml_item_id
                                         )
+                                    except Producto.DoesNotExist:
+                                        # Producto no vinculado: importarlo desde ML para poder registrar la venta
+                                        try:
+                                            item_full = ml_service.get_item(ml_item_id)
+                                            if item_full:
+                                                producto = ml_service.create_producto_from_ml_item(tienda, item_full)
+                                                if producto:
+                                                    logger.info(f"Producto creado automáticamente desde orden ML: {producto.nombre} (ml_item_id: {ml_item_id})")
+                                        except Exception as import_err:
+                                            logger.error(f"No se pudo importar producto {ml_item_id} desde ML: {import_err}", exc_info=True)
+                                    
+                                    if producto:
                                         
                                         # Calcular subtotal del item
                                         subtotal_item = unit_price * quantity
                                         total_venta += subtotal_item
                                         
-                                        # Calcular arancel según la categoría del producto
+                                        # Calcular arancel y costo envío según ArancelMercadoLibreProducto
                                         arancel_item = Decimal('0.00')
-                                        if producto.ml_categoria_id:
+                                        costo_envio_item = Decimal('0.00')
+                                        if ArancelMercadoLibreProducto is not None:
                                             try:
-                                                from .models import CategoriaMercadoLibre
-                                                # Solo calcular arancel si el modelo ArancelMercadoLibre existe
-                                                if ArancelMercadoLibre is not None:
-                                                    categoria_ml = CategoriaMercadoLibre.objects.get(id=producto.ml_categoria_id)
-                                                    arancel_ml = ArancelMercadoLibre.objects.filter(
-                                                        tienda=tienda,
-                                                        categoria_ml=categoria_ml
-                                                    ).first()
-                                                    
-                                                    if arancel_ml:
-                                                        arancel_porcentaje = arancel_ml.arancel_porcentaje
-                                                        arancel_item = subtotal_item * (arancel_porcentaje / Decimal('100'))
-                                                        total_arancel += arancel_item
-                                                        logger.info(f"Arancel aplicado para {producto.nombre}: {arancel_porcentaje}% = ${arancel_item}")
-                                                    else:
-                                                        logger.warning(f"No se encontró arancel configurado para categoría {producto.ml_categoria_id} de producto {producto.nombre}")
-                                                else:
-                                                    logger.warning(f"ArancelMercadoLibre no está disponible. No se calculará arancel para {producto.nombre}. Aplica la migración 0019_arancel_mercado_libre.")
+                                                arancel_ml = ArancelMercadoLibreProducto.objects.filter(
+                                                    tienda=tienda,
+                                                    producto=producto
+                                                ).first()
+                                                if arancel_ml:
+                                                    arancel_porcentaje = arancel_ml.arancel_porcentaje
+                                                    arancel_item = subtotal_item * (arancel_porcentaje / Decimal('100'))
+                                                    total_arancel += arancel_item
+                                                    costo_envio_item = (arancel_ml.costo_envio or Decimal('0')) * quantity
+                                                    total_costo_envio += costo_envio_item
+                                                    logger.info(f"Arancel {arancel_porcentaje}% + envío ${costo_envio_item} para {producto.nombre}")
                                             except Exception as e:
-                                                logger.error(f"Error al calcular arancel para producto {producto.nombre}: {e}")
+                                                logger.error(f"Error al calcular arancel/envío para producto {producto.nombre}: {e}")
                                         
                                         # Agregar detalle de venta
                                         detalles_venta.append({
@@ -1442,21 +1586,20 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         producto.save()
                                         
                                         logger.info(f"Stock actualizado para {producto.nombre}: -{quantity} unidades (nuevo stock: {producto.stock})")
-                                        
-                                    except Producto.DoesNotExist:
-                                        logger.warning(f"Producto con ml_item_id {ml_item_id} no encontrado en el sistema")
-                                    except Exception as e:
-                                        logger.error(f"Error al procesar item {ml_item_id}: {e}")
+                                    else:
+                                        logger.warning(f"Producto con ml_item_id {ml_item_id} no encontrado y no se pudo importar desde ML")
                             
                             # Crear la venta en el sistema si hay detalles
                             if detalles_venta:
                                 try:
-                                    # Crear la venta
+                                    # Crear la venta (origen ML: arancel y costo envío descontados en métricas)
                                     venta = Venta.objects.create(
                                         tienda=tienda,
                                         metodo_pago=metodo_pago_ml.nombre,
                                         total=total_venta,
                                         arancel_total=total_arancel,
+                                        costo_envio_ml=total_costo_envio,
+                                        origen_mercadolibre=True,
                                         usuario=None,  # Venta automática desde ML
                                         fecha_venta=timezone.now()
                                     )
@@ -1473,7 +1616,82 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             subtotal=Decimal(str(detalle_data['subtotal']))
                                         )
                                     
-                                    logger.info(f"Venta de Mercado Libre registrada: ID {venta.id}, Total: ${total_venta}, Arancel: ${total_arancel}")
+                                    logger.info(f"Venta de Mercado Libre registrada: ID {venta.id}, Total: ${total_venta}, Arancel: ${total_arancel}, Envío: ${total_costo_envio}")
+                                    
+                                    # Facturación automática: intentar emitir factura para ventas de ML
+                                    if venta.tienda.tipo_facturacion and venta.tienda.tipo_facturacion != 'NINGUNA':
+                                        try:
+                                            # Datos del comprador desde la orden de ML (buyer, shipment)
+                                            buyer = order.get('buyer', {})
+                                            buyer_id = buyer.get('id')
+                                            cliente_nombre = 'Consumidor Final'
+                                            cliente_domicilio = ''
+                                            if buyer:
+                                                nickname = buyer.get('nickname', '')
+                                                if nickname:
+                                                    cliente_nombre = f"Comprador ML {nickname}"[:255]
+                                            # Intentar obtener domicilio del envío
+                                            shipment = order.get('shipment', {}) or order.get('shipping', {})
+                                            if isinstance(shipment, dict):
+                                                receiver_addr = shipment.get('receiver_address', {}) or shipment.get('address', {})
+                                                if isinstance(receiver_addr, dict):
+                                                    address_line = receiver_addr.get('address_line', '') or receiver_addr.get('street_name', '')
+                                                    city = receiver_addr.get('city', {}).get('name', '') if isinstance(receiver_addr.get('city'), dict) else ''
+                                                    if address_line or city:
+                                                        cliente_domicilio = f"{address_line} {city}".strip()[:255]
+                                            
+                                            cliente_data = {
+                                                'cliente_nombre': cliente_nombre,
+                                                'cliente_cuit': '',
+                                                'cliente_domicilio': cliente_domicilio or 'Sin especificar',
+                                                'cliente_tipo_documento': '99',
+                                                'cliente_condicion_iva': 'CF'
+                                            }
+                                            exito, datos_factura, error = FacturacionService(venta.tienda).emitir_factura(venta, cliente_data)
+                                            if exito:
+                                                Factura.objects.create(
+                                                    venta=venta,
+                                                    tienda=venta.tienda,
+                                                    numero_comprobante=datos_factura.get('numero_comprobante'),
+                                                    punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
+                                                    tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+                                                    cliente_nombre=cliente_data['cliente_nombre'],
+                                                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                                                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                                                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                                                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                                                    subtotal=datos_factura.get('subtotal', venta.total),
+                                                    impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+                                                    total=datos_factura.get('total', venta.total),
+                                                    estado='EMITIDA',
+                                                    sistema_facturacion=venta.tienda.tipo_facturacion,
+                                                    cae=datos_factura.get('cae'),
+                                                    fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+                                                    numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+                                                    respuesta_bruta=datos_factura.get('respuesta_bruta'),
+                                                )
+                                                venta.facturada = True
+                                                venta.cliente_nombre = cliente_data['cliente_nombre']
+                                                venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
+                                                venta.save()
+                                                logger.info(f"Factura emitida automáticamente para venta ML {venta.id}")
+                                            else:
+                                                Factura.objects.create(
+                                                    venta=venta,
+                                                    tienda=venta.tienda,
+                                                    punto_venta=venta.tienda.punto_venta,
+                                                    tipo_comprobante='B',
+                                                    cliente_nombre=cliente_data['cliente_nombre'],
+                                                    cliente_cuit='', cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                                                    cliente_tipo_documento='99', cliente_condicion_iva='CF',
+                                                    subtotal=venta.total, impuesto_iva=Decimal('0.00'), total=venta.total,
+                                                    estado='ERROR',
+                                                    sistema_facturacion=venta.tienda.tipo_facturacion,
+                                                    error_mensaje=error,
+                                                )
+                                                logger.warning(f"No se pudo facturar automáticamente venta ML {venta.id}: {error}")
+                                        except Exception as fact_err:
+                                            logger.warning(f"Error al facturar automáticamente venta ML {venta.id}: {fact_err}", exc_info=True)
                                     
                                 except Exception as e:
                                     logger.error(f"Error al crear venta desde orden ML {order_id}: {e}", exc_info=True)
@@ -2218,42 +2436,10 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filtra los métodos de pago según la integración de Mercado Libre.
-        Si la tienda no tiene integración ML, oculta el método 'Mercado Libre' del punto de venta.
-        Pero siempre lo muestra si es financiero (para configurar aranceles).
+        Retorna todos los métodos de pago activos.
+        Mercado Libre siempre se muestra para permitir ventas manuales con aranceles por producto.
         """
-        queryset = MetodoPago.objects.filter(activo=True)
-        
-        # Obtener la tienda del usuario
-        user = self.request.user
-        if user and not user.is_anonymous and hasattr(user, 'tienda') and user.tienda:
-            tienda = user.tienda
-            
-            # Verificar si la tienda tiene integración ML
-            tiene_ml = (
-                hasattr(tienda, 'plataforma_ecommerce') and
-                tienda.plataforma_ecommerce == 'MERCADO_LIBRE' and
-                hasattr(tienda, 'ml_access_token') and
-                tienda.ml_access_token
-            )
-            
-            # Solo excluir "Mercado Libre" si:
-            # 1. No tiene integración ML
-            # 2. Y el método NO es financiero (para permitir configurar aranceles)
-            # Si es financiero, siempre mostrarlo para que se pueda configurar el arancel
-            if not tiene_ml:
-                # Verificar si el método "Mercado Libre" existe y es financiero
-                # Buscar sin filtrar por activo primero, para verificar si existe
-                metodo_ml = MetodoPago.objects.filter(nombre='Mercado Libre').first()
-                
-                # Si existe y es financiero, NO excluirlo - siempre mostrarlo para configurar aranceles
-                # Si no existe o no es financiero, excluirlo del punto de venta
-                if not metodo_ml or not metodo_ml.es_financiero:
-                    # Solo excluirlo si NO es financiero o no existe
-                    queryset = queryset.exclude(nombre='Mercado Libre')
-                # Si existe y es financiero, no hacer nada (mostrarlo siempre)
-        
-        return queryset.order_by('nombre')
+        return MetodoPago.objects.filter(activo=True).order_by('nombre')
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
@@ -2399,8 +2585,47 @@ class CompraViewSet(viewsets.ModelViewSet):
         return super().list(request, *args, **kwargs)
 
 
-# VIEWSET: Aranceles Mercado Libre por Categoría
-# Solo definir si el modelo y los serializers existen
+# VIEWSET: Aranceles Mercado Libre por Producto (arancel % + costo envío por producto)
+# Reemplaza la configuración por categoría
+if ArancelMercadoLibreProducto is not None and ArancelMercadoLibreProductoSerializer is not None:
+    class ArancelMercadoLibreProductoViewSet(viewsets.ModelViewSet):
+        permission_classes = [permissions.IsAuthenticated]
+        
+        def get_serializer_class(self):
+            if self.action in ['create', 'update', 'partial_update']:
+                return ArancelMercadoLibreProductoCreateSerializer
+            return ArancelMercadoLibreProductoSerializer
+        
+        def get_queryset(self):
+            user = self.request.user
+            queryset = ArancelMercadoLibreProducto.objects.all().select_related('tienda', 'producto')
+            
+            if user.is_superuser:
+                tienda_slug = self.request.query_params.get('tienda_slug', None)
+                if tienda_slug:
+                    queryset = queryset.filter(tienda__nombre=tienda_slug)
+                return queryset.order_by('tienda__nombre', 'producto__nombre')
+            
+            elif user.tienda:
+                queryset = queryset.filter(tienda=user.tienda)
+                return queryset.order_by('producto__nombre')
+            
+            return ArancelMercadoLibreProducto.objects.none()
+        
+        def perform_create(self, serializer):
+            user = self.request.user
+            if not user.is_superuser and user.tienda:
+                serializer.save(tienda=user.tienda)
+            else:
+                serializer.save()
+        
+        def list(self, request, *args, **kwargs):
+            close_old_connections()
+            return super().list(request, *args, **kwargs)
+else:
+    ArancelMercadoLibreProductoViewSet = None
+
+# VIEWSET: Aranceles Mercado Libre por Categoría (legacy - se mantiene por compatibilidad)
 if ArancelMercadoLibre is not None and ArancelMercadoLibreSerializer is not None:
     class ArancelMercadoLibreViewSet(viewsets.ModelViewSet):
         permission_classes = [permissions.IsAuthenticated]
@@ -2411,32 +2636,25 @@ if ArancelMercadoLibre is not None and ArancelMercadoLibreSerializer is not None
             return ArancelMercadoLibreSerializer
         
         def get_queryset(self):
-            """
-            Filtra aranceles ML por tienda y solo muestra categorías que la tienda ha usado.
-            """
             if ArancelMercadoLibre is None:
                 from rest_framework.exceptions import NotFound
-                raise NotFound("ArancelMercadoLibre no está disponible. Aplica la migración 0019_arancel_mercado_libre.")
+                raise NotFound("ArancelMercadoLibre no está disponible.")
             
             user = self.request.user
             queryset = ArancelMercadoLibre.objects.all().select_related('tienda', 'categoria_ml')
             
             if user.is_superuser:
-                # Superusuarios ven todos los aranceles
                 tienda_slug = self.request.query_params.get('tienda_slug', None)
                 if tienda_slug:
                     queryset = queryset.filter(tienda__nombre=tienda_slug)
                 return queryset.order_by('tienda__nombre', 'categoria_ml__nombre')
             
             elif user.tienda:
-                # Usuarios staff solo ven aranceles de su tienda
-                # Filtrar solo categorías que la tienda ha usado (productos con ml_categoria_id)
                 from .models import Producto
                 categorias_usadas = Producto.objects.filter(
                     tienda=user.tienda,
                     ml_categoria_id__isnull=False
                 ).exclude(ml_categoria_id='').values_list('ml_categoria_id', flat=True).distinct()
-                
                 queryset = queryset.filter(
                     tienda=user.tienda,
                     categoria_ml__id__in=categorias_usadas
@@ -2446,19 +2664,16 @@ if ArancelMercadoLibre is not None and ArancelMercadoLibreSerializer is not None
             return ArancelMercadoLibre.objects.none()
         
         def perform_create(self, serializer):
-            """Asegurar que el arancel se crea para la tienda del usuario"""
             user = self.request.user
             if not user.is_superuser and user.tienda:
                 serializer.save(tienda=user.tienda)
             else:
                 serializer.save()
         
-        # FIX DE CONEXIÓN
         def list(self, request, *args, **kwargs):
             close_old_connections()
             return super().list(request, *args, **kwargs)
 else:
-    # Si el modelo no existe, definir una clase dummy para evitar errores de importación
     ArancelMercadoLibreViewSet = None
         
 
@@ -2810,9 +3025,15 @@ class MetricasAPIView(APIView):
             else:
                 total_arancel_ventas += venta.arancel_total or Decimal('0.00')
 
+        # Costo de envío ML: descontar de métricas (webhook + ventas manuales con pago ML)
+        total_costo_envio_ml = sum(
+            (v.costo_envio_ml or Decimal('0.00'))
+            for v in ventas_list
+            if v.id not in nota_credito_map and (v.costo_envio_ml or Decimal('0.00')) > Decimal('0.00')
+        )
 
-        # CAMBIO 11: La rentabilidad ahora resta el costo de los productos, los egresos Y los aranceles
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas
+        # CAMBIO 11: La rentabilidad resta costo productos, egresos, aranceles Y costo envío ML
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_costo_envio_ml
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         # Filtrar detalles que tienen producto (excluir notas de crédito y detalles sin producto)
@@ -2889,7 +3110,8 @@ class MetricasAPIView(APIView):
             'total_productos_vendidos_periodo': total_productos_vendidos_periodo,
             'total_costo_vendido_periodo': total_costo_vendido,
             'total_compras_periodo': total_compras_periodo,
-            'total_arancel_ventas': total_arancel_ventas, # NUEVA MÉTRICA
+            'total_arancel_ventas': total_arancel_ventas,
+            'total_costo_envio_ml': total_costo_envio_ml,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
             'productos_mas_vendidos': list(productos_mas_vendidos),

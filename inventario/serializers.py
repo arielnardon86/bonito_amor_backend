@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, Factura, CategoriaMercadoLibre
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -342,6 +342,35 @@ class ArancelMercadoLibreCreateSerializer(serializers.ModelSerializer):
         return data
 # ------------------------------------------------
 
+# SERIALIZER: Arancel Mercado Libre por Producto (arancel % + costo envío)
+class ArancelMercadoLibreProductoSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    
+    class Meta:
+        model = ArancelMercadoLibreProducto
+        fields = ['id', 'tienda', 'tienda_nombre', 'producto', 'producto_nombre', 'arancel_porcentaje', 'costo_envio', 'fecha_creacion', 'fecha_actualizacion']
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
+    tienda = serializers.SlugRelatedField(slug_field='nombre', queryset=Tienda.objects.all(), required=True, write_only=True)
+    producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all(), required=True)
+    
+    class Meta:
+        model = ArancelMercadoLibreProducto
+        fields = ['id', 'tienda', 'producto', 'arancel_porcentaje', 'costo_envio']
+    
+    def validate_arancel_porcentaje(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
+        return value
+    
+    def validate_costo_envio(self, value):
+        if value < 0:
+            raise serializers.ValidationError("El costo de envío no puede ser negativo")
+        return value
+# ------------------------------------------------
+
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True, allow_null=True) 
     
@@ -450,6 +479,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
+            'costo_envio_ml', 'origen_mercadolibre',
             'fecha_creacion', 'fecha_actualizacion', 'tiene_factura', 'facturada',
             'cambio_devolucion_nota_credito', 'cambio_devolucion_diferencia',
             'es_nota_credito', 'es_diferencia_pendiente'
@@ -467,6 +497,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=True
     )
+    arancel_total_ml = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
+        help_text="Arancel total calculado para ventas Mercado Libre (por producto)")
+    costo_envio_ml = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
+        help_text="Costo de envío total para ventas Mercado Libre (por producto)")
     cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
     
     def to_internal_value(self, data):
@@ -484,7 +518,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 
-            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'cambio_devolucion_id'
+            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'cambio_devolucion_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -568,8 +602,13 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             arancel_obj = None
 
         metodos_financieros = MetodoPago.objects.filter(es_financiero=True).values_list('nombre', flat=True)
+        # Mercado Libre usa aranceles por producto (arancel_total_ml, costo_envio_ml), no ArancelMetodoTienda
+        es_mercadolibre = data.get('metodo_pago') == 'Mercado Libre'
 
-        if data.get('metodo_pago') in metodos_financieros:
+        if es_mercadolibre:
+            data['arancel_total'] = data.pop('arancel_total_ml', None) or Decimal('0.00')
+            data['costo_envio_ml'] = data.pop('costo_envio_ml', None) or Decimal('0.00')
+        elif data.get('metodo_pago') in metodos_financieros:
             if not arancel_obj:
                  raise serializers.ValidationError({"arancel_aplicado_id": "Se requiere seleccionar un Plan/Arancel para este método de pago."})
 
@@ -579,7 +618,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             arancel_porcentaje = arancel_obj.arancel_porcentaje
             total_final = data['total']
             data['arancel_total'] = total_final * (arancel_porcentaje / Decimal('100'))
-            data['arancel_aplicado'] = arancel_obj # Guardamos el objeto para el create
+            data['arancel_aplicado'] = arancel_obj
 
         elif arancel_obj:
             raise serializers.ValidationError({"metodo_pago": "No se permite seleccionar un Arancel para el método de pago seleccionado."})
@@ -612,6 +651,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 logger.warning(f"No se pudo obtener el usuario de la BD: {e}. Usando None.")
                 user_obj = None
 
+        costo_envio_ml = validated_data.pop('costo_envio_ml', Decimal('0.00'))
+        
         venta = Venta.objects.create(
             total=validated_data['total'],
             usuario=user_obj,
@@ -621,7 +662,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
             recargo_porcentaje=validated_data.get('recargo_porcentaje', Decimal('0.00')),
             recargo_monto=validated_data.get('recargo_monto', Decimal('0.00')),
-            arancel_aplicado=arancel_aplicado, 
+            arancel_aplicado=arancel_aplicado,
+            costo_envio_ml=costo_envio_ml, 
             arancel_total=arancel_total,       
             fecha_venta=validated_data['fecha_venta'],
         )
