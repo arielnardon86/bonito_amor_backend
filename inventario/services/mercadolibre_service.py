@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 from inventario.models import Producto
 
 
+class MercadoLibreReconnectRequired(Exception):
+    """
+    Se lanza cuando el refresh_token ya no es válido (ej. cambió la cuenta o la App de ML).
+    La tienda debe volver a autorizar desde Configuración > Mercado Libre.
+    """
+    pass
+
+
 class MercadoLibreService:
     """
     Servicio para interactuar con la API de Mercado Libre
@@ -224,9 +232,37 @@ class MercadoLibreService:
             
             return token_data
             
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 400:
+                try:
+                    body = e.response.json()
+                    err = body.get('error', '') or ''
+                    msg = (body.get('message') or e.response.text or '')
+                    if err == 'invalid_grant' or 'client_id does not match' in msg:
+                        logger.warning(
+                            "Token de ML inválido (cuenta o App distinta). Limpiando tokens para tienda %s",
+                            self.tienda.nombre,
+                        )
+                        self.tienda.ml_access_token = None
+                        self.tienda.ml_refresh_token = None
+                        if hasattr(self.tienda, 'ml_token_expires_at'):
+                            self.tienda.ml_token_expires_at = None
+                        self.tienda.save()
+                        self.access_token = None
+                        self.refresh_token = None
+                        raise MercadoLibreReconnectRequired(
+                            "La cuenta o la aplicación de Mercado Libre no coinciden con la autorización guardada. "
+                            "Reconectá la integración desde Configuración > Mercado Libre."
+                        )
+                except (ValueError, KeyError):
+                    pass
+            logger.error(f"Error al renovar token: {e}")
+            if hasattr(e, 'response') and e.response is not None and hasattr(e.response, 'text'):
+                logger.error(f"Respuesta del servidor: {e.response.text}")
+            raise
         except requests.exceptions.RequestException as e:
             logger.error(f"Error al renovar token: {e}")
-            if hasattr(e.response, 'text'):
+            if hasattr(e, 'response') and e.response is not None and hasattr(e.response, 'text'):
                 logger.error(f"Respuesta del servidor: {e.response.text}")
             raise
     

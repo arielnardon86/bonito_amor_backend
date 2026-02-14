@@ -859,7 +859,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            from .services.mercadolibre_service import MercadoLibreService
+            from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
             
             ml_service = MercadoLibreService(tienda)
             
@@ -983,6 +983,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 'warning': f'Se procesaron {procesados} de {total_productos} productos' if procesados < total_productos else None
             })
             
+        except MercadoLibreReconnectRequired as e:
+            return Response(
+                {'error': str(e), 'reconnect_required': True},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error al sincronizar productos ML: {e}", exc_info=True)
             return Response(
@@ -1019,7 +1024,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            from .services.mercadolibre_service import MercadoLibreService
+            from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
             ml_service = MercadoLibreService(tienda)
             
             solo_nuevos = request.data.get('solo_nuevos', True)
@@ -1110,6 +1115,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 'errors': import_results['errors']
             })
             
+        except MercadoLibreReconnectRequired as e:
+            return Response(
+                {'error': str(e), 'reconnect_required': True},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error al importar productos desde ML: {e}", exc_info=True)
             return Response(
@@ -1117,6 +1127,28 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    @action(detail=True, methods=['post'], url_path='mercadolibre/disconnect')
+    def ml_disconnect(self, request, pk=None):
+        """
+        Desconecta la integración de Mercado Libre (borra tokens).
+        Después el usuario puede volver a autorizar con la misma o otra cuenta/App.
+        """
+        tienda = self.get_object()
+        if not self._ml_fields_exist(tienda):
+            return Response(
+                {'error': 'Los campos de Mercado Libre no están disponibles.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        tienda.ml_access_token = None
+        tienda.ml_refresh_token = None
+        if hasattr(tienda, 'ml_token_expires_at'):
+            tienda.ml_token_expires_at = None
+        tienda.save()
+        return Response({
+            'success': True,
+            'message': 'Integración de Mercado Libre desconectada. Podés volver a conectar desde Configuración > Mercado Libre.'
+        })
+
     @action(detail=True, methods=['get'], url_path='mercadolibre/categories', pagination_class=None)
     def ml_search_categories(self, request, pk=None):
         """
@@ -1269,7 +1301,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            from .services.mercadolibre_service import MercadoLibreService
+            from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
             
             ml_service = MercadoLibreService(tienda)
             
@@ -1381,6 +1413,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
             
             return Response(sync_results, status=status.HTTP_200_OK)
             
+        except MercadoLibreReconnectRequired as e:
+            return Response(
+                {'error': str(e), 'reconnect_required': True},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error al sincronizar stock: {e}", exc_info=True)
             return Response(
@@ -1467,7 +1504,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 order_id = resource.split('/orders/')[-1].split('?')[0]
                 
                 try:
-                    from .services.mercadolibre_service import MercadoLibreService
+                    from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
                     ml_service = MercadoLibreService(tienda)
                     
                     # Obtener información de la orden desde ML
@@ -1731,6 +1768,12 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             'message': 'Orden no encontrada o no se pudo obtener información'
                         }, status=status.HTTP_200_OK)
                         
+                except MercadoLibreReconnectRequired as e:
+                    logger.warning(f"Webhook ML: integración requiere reconexión (orden {order_id}): {e}")
+                    return Response({
+                        'status': 'error',
+                        'message': 'Integración de Mercado Libre desconectada. Reconectá desde Configuración.'
+                    }, status=status.HTTP_200_OK)
                 except Exception as e:
                     logger.error(f"Error al procesar orden de ML: {e}", exc_info=True)
                     # Retornar 200 para que ML no reenvíe la notificación
