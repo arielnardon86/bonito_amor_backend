@@ -1417,7 +1417,17 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             # Crear la venta en el sistema si hay detalles
                             if detalles_venta:
                                 try:
-                                    # Crear la venta (origen ML: arancel y costo envío descontados en métricas)
+                                    usuario_ml, created = User.objects.get_or_create(
+                                        username='mercadolibre',
+                                        defaults={
+                                            'first_name': 'Mercado Libre',
+                                            'is_staff': False,
+                                            'is_active': True,
+                                        }
+                                    )
+                                    if created:
+                                        usuario_ml.set_unusable_password()
+                                        usuario_ml.save()
                                     venta = Venta.objects.create(
                                         tienda=tienda,
                                         metodo_pago=metodo_pago_ml.nombre,
@@ -1425,7 +1435,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         arancel_total=total_arancel,
                                         costo_envio_ml=total_costo_envio,
                                         origen_mercadolibre=True,
-                                        usuario=None,  # Venta automática desde ML
+                                        usuario=usuario_ml,
                                         fecha_venta=timezone.now()
                                     )
                                     
