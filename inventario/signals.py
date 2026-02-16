@@ -13,96 +13,46 @@ logger = logging.getLogger(__name__)
 @receiver(post_save, sender=Producto)
 def sync_producto_to_mercadolibre(sender, instance, created, update_fields, **kwargs):
     """
-    Sincroniza automáticamente el producto con Mercado Libre cuando:
-    - El producto está marcado como sincronizado (ml_sincronizado=True)
-    - La tienda tiene habilitada la sincronización automática
-    - Se actualiza stock o precio (si está habilitado)
+    Sincroniza automáticamente el stock en Mercado Libre cuando cambia en Total Stock.
+    Se ejecuta en cada venta desde Total Stock, ajustes de stock, etc.
+    Requiere: producto con ml_item_id y tienda con ML configurado.
     """
-    # Evitar recursión infinita si el save es disparado por la propia sincronización
+    # Evitar recursión infinita
     if update_fields and ('ml_item_id' in update_fields or 'ml_sincronizado' in update_fields or 'ml_ultima_sincronizacion' in update_fields):
         return
-    
-    # Solo sincronizar si el producto ya está vinculado a ML
-    if not instance.ml_sincronizado or not instance.ml_item_id:
+
+    # Solo productos vinculados a ML (tienen ml_item_id)
+    if not getattr(instance, 'ml_item_id', None):
         return
-    
-    # Verificar que la tienda tenga ML configurado y sincronización habilitada
-    if not hasattr(instance.tienda, 'plataforma_ecommerce'):
+
+    # Tienda debe tener ML configurado
+    if not hasattr(instance.tienda, 'plataforma_ecommerce') or instance.tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
         return
-    
-    if instance.tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
-        return
-    
-    if not getattr(instance.tienda, 'ml_sync_habilitado', False):
-        return
-    
+
     if not getattr(instance.tienda, 'ml_access_token', None):
-        logger.warning(f"No hay token de acceso ML para tienda {instance.tienda.id}")
         return
-    
-    # Si el producto acaba de ser creado y sincronizado, no intentar actualizar inmediatamente
-    # ML puede tener restricciones temporales después de crear un item
-    # Solo actualizar si hay cambios específicos en stock o precio
+
     if created:
-        # Si es un producto nuevo que acaba de ser sincronizado, no hacer nada
-        # La sincronización inicial ya se hizo en sync_producto_to_ml
-        logger.debug(f"Producto {instance.id} acaba de ser creado, omitiendo actualización automática inmediata")
+        return  # Producto nuevo, no sincronizar (viene de importación ML)
+
+    # Sincronizar stock: siempre que cambie stock (ventas, ajustes manuales, etc.)
+    should_sync_stock = (update_fields is None) or ('stock' in update_fields)
+    if not should_sync_stock:
         return
-    
+
     try:
         from .services.mercadolibre_service import MercadoLibreService
-        
+
         ml_service = MercadoLibreService(instance.tienda)
-        
-        # Solo sincronizar si hay cambios específicos en stock o precio
-        # Si update_fields está disponible, solo sincronizar los campos que cambiaron
-        should_sync_stock = False
-        should_sync_price = False
-        
-        if update_fields:
-            should_sync_stock = 'stock' in update_fields and getattr(instance.tienda, 'ml_sincronizar_stock', True)
-            should_sync_price = 'precio' in update_fields and getattr(instance.tienda, 'ml_sincronizar_precios', True)
-        else:
-            # Si no hay update_fields, sincronizar ambos por seguridad
-            should_sync_stock = getattr(instance.tienda, 'ml_sincronizar_stock', True)
-            should_sync_price = getattr(instance.tienda, 'ml_sincronizar_precios', True)
-        
-        # Sincronizar stock si está habilitado y cambió
-        if should_sync_stock:
-            try:
-                ml_service.sync_stock(instance)
-                logger.info(f"Stock sincronizado automáticamente para producto {instance.id}")
-            except Exception as e:
-                # Si es un error 403, puede ser una restricción temporal de ML
-                error_msg = str(e)
-                if '403' in error_msg or 'UNAUTHORIZED' in error_msg:
-                    logger.warning(f"Error 403 al sincronizar stock para producto {instance.id}: {e}. Puede ser una restricción temporal de ML.")
-                else:
-                    logger.error(f"Error al sincronizar stock para producto {instance.id}: {e}")
-        
-        # Sincronizar precio si está habilitado y cambió
-        if should_sync_price:
-            try:
-                ml_service.sync_precio(instance)
-                logger.info(f"Precio sincronizado automáticamente para producto {instance.id}")
-            except Exception as e:
-                # Si es un error 403, puede ser una restricción temporal de ML
-                error_msg = str(e)
-                if '403' in error_msg or 'UNAUTHORIZED' in error_msg:
-                    logger.warning(f"Error 403 al sincronizar precio para producto {instance.id}: {e}. Puede ser una restricción temporal de ML.")
-                else:
-                    logger.error(f"Error al sincronizar precio para producto {instance.id}: {e}")
-        
-        # Actualizar fecha de última sincronización solo si hubo una sincronización exitosa
-        if should_sync_stock or should_sync_price:
-            instance.ml_ultima_sincronizacion = timezone.now()
-            # Usar update para evitar recursión infinita del signal
-            Producto.objects.filter(id=instance.id).update(
-                ml_ultima_sincronizacion=instance.ml_ultima_sincronizacion
-            )
-        
+        ml_service.sync_stock(instance)
+        logger.info(f"Stock sincronizado a ML: {instance.nombre} (stock={instance.stock})")
+        Producto.objects.filter(id=instance.id).update(ml_ultima_sincronizacion=timezone.now())
     except Exception as e:
-        logger.error(f"Error general al sincronizar producto {instance.id} con ML: {e}", exc_info=True)
+        error_msg = str(e)
+        if '403' in error_msg or 'UNAUTHORIZED' in error_msg:
+            logger.warning(f"Error 403 al sincronizar stock a ML para {instance.nombre}: {e}")
+        else:
+            logger.error(f"Error al sincronizar stock a ML para {instance.nombre}: {e}")
 
 
 @receiver(post_migrate)

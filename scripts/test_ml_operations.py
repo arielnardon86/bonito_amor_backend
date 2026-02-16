@@ -95,23 +95,6 @@ def test_ml_operations(tienda_id=None):
             traceback.print_exc()
         print()
         
-        # Prueba 3: Obtener categorías
-        print("-" * 70)
-        print("PRUEBA 3: Obtener categorías disponibles (MLA = Argentina)")
-        print("-" * 70)
-        try:
-            categories = ml_service.get_categories('MLA')
-            if categories and len(categories) > 0:
-                print(f"✅ Categorías obtenidas: {len(categories)} disponibles")
-                print(f"   Primeras 5 categorías:")
-                for cat in categories[:5]:
-                    print(f"     - {cat.get('name', 'N/A')} (ID: {cat.get('id', 'N/A')})")
-            else:
-                print("⚠️  No se pudieron obtener categorías")
-        except Exception as e:
-            print(f"❌ Error: {e}")
-        print()
-        
         print("=" * 70)
         print("✅ PRUEBAS COMPLETADAS")
         print("=" * 70)

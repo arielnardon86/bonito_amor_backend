@@ -831,177 +831,38 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    @action(detail=True, methods=['post'], url_path='mercadolibre/sync-products')
-    def ml_sync_products(self, request, pk=None):
+    @action(detail=True, methods=['get'], url_path='mercadolibre/items')
+    def ml_list_items(self, request, pk=None):
         """
-        Sincroniza productos con Mercado Libre
-        POST /api/tiendas/{id}/mercadolibre/sync-products/
-        Body: {"productos": [{"producto_id": "uuid", "categoria_ml_id": "MLA1574"}]}
+        Lista los productos/publicaciones del vendedor en Mercado Libre para selección.
+        GET /api/tiendas/{id}/mercadolibre/items/?limit=100&offset=0
         """
         try:
             tienda = self.get_object()
-            
-            if not self._ml_fields_exist(tienda):
-                return Response(
-                    {'error': 'Los campos de Mercado Libre no están disponibles. Por favor, aplica las migraciones primero.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            if not self._ml_configured(tienda):
-                return Response(
-                    {'error': 'La tienda no está configurada para Mercado Libre'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
+            if not self._ml_fields_exist(tienda) or not self._ml_configured(tienda):
+                return Response({'error': 'Integración ML no configurada'}, status=status.HTTP_400_BAD_REQUEST)
             if not getattr(tienda, 'ml_access_token', None):
-                return Response(
-                    {'error': 'No hay token de acceso configurado. Complete el flujo OAuth primero.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return Response({'error': 'Complete el flujo OAuth primero.'}, status=status.HTTP_400_BAD_REQUEST)
             
             from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
-            
             ml_service = MercadoLibreService(tienda)
-            
-            # Obtener parámetros del request
-            # Ahora esperamos un array de objetos con producto_id y categoria_ml_id (opcional)
-            productos_config = request.data.get('productos', None)  # Array de {producto_id, categoria_ml_id}
-            producto_ids = request.data.get('producto_ids', None)  # Por compatibilidad con version anterior
-            
-            # Si se proporciona productos_config, usar eso
-            if productos_config:
-                producto_ids = [p.get('producto_id') for p in productos_config if p.get('producto_id')]
-                # Mapa de producto_id -> categoria_ml_id
-                productos_categorias = {p.get('producto_id'): p.get('categoria_ml_id') for p in productos_config if p.get('categoria_ml_id')}
-            else:
-                productos_categorias = {}
-            
-            # Si no se proporciona producto_ids ni productos, sincronizar productos marcados con ml_sincronizar=True
-            if not producto_ids and not productos_config:
-                productos = Producto.objects.filter(tienda=tienda, ml_sincronizar=True)
-            elif producto_ids:
-                productos = Producto.objects.filter(tienda=tienda, id__in=producto_ids)
-            else:
-                productos = Producto.objects.filter(tienda=tienda, ml_sincronizar=True)
-            
-            sync_results = {
-                'success': 0,
-                'errors': 0,
-                'details': []
-            }
-            
-            # Sincronizar cada producto (limitar a 10 productos por vez para evitar timeouts)
-            productos_list = list(productos[:10])  # Limitar a 10 productos
-            if productos.count() > 10:
-                logger.warning(f"Se sincronizarán solo los primeros 10 de {productos.count()} productos para evitar timeout")
-            
-            for producto in productos_list:
-                try:
-                    # Usar la categoría del producto si está configurada, sino la del request o None
-                    categoria_ml_id_producto = producto.ml_categoria_id or productos_categorias.get(str(producto.id)) or None
-                    
-                    logger.info(f"Sincronizando producto: {producto.nombre} con categoría: {categoria_ml_id_producto or 'automática'}")
-                    ml_item = ml_service.sync_producto_to_ml(
-                        producto, 
-                        categoria_ml_id=categoria_ml_id_producto
-                    )
-                    
-                    sync_results['success'] += 1
-                    
-                    # Refrescar el producto desde la base de datos para obtener el ml_item_id actualizado
-                    producto.refresh_from_db()
-                    
-                    # Actualizar el producto: marcar como sincronizado y guardar categoría si fue proporcionada
-                    # El ml_item_id ya fue guardado por sync_producto_to_ml, solo actualizamos otros campos
-                    update_fields = ['ml_sincronizado', 'ml_ultima_sincronizacion', 'ml_sincronizar']
-                    producto.ml_sincronizado = True
-                    producto.ml_ultima_sincronizacion = timezone.now()
-                    if categoria_ml_id_producto:
-                        producto.ml_categoria_id = categoria_ml_id_producto
-                        update_fields.append('ml_categoria_id')
-                    # Desmarcar ml_sincronizar después de sincronizar exitosamente
-                    producto.ml_sincronizar = False
-                    producto.save(update_fields=update_fields)
-                    
-                    # Obtener el ml_item_id del producto refrescado o del ml_item retornado
-                    ml_item_id = producto.ml_item_id or ml_item.get('id')
-                    
-                    sync_results['details'].append({
-                        'producto_id': str(producto.id),
-                        'nombre': producto.nombre,
-                        'ml_item_id': ml_item_id,
-                        'status': 'success',
-                        'message': 'Producto sincronizado exitosamente'
-                    })
-                    
-                    # Log para verificar que se guardó correctamente
-                    logger.info(f"Producto {producto.nombre} sincronizado. ML Item ID guardado: {ml_item_id}")
-                    
-                except Exception as e:
-                    sync_results['errors'] += 1
-                    error_msg = str(e)
-                    
-                    # Si es un ValueError, usar el mensaje directamente
-                    if isinstance(e, ValueError):
-                        error_msg = str(e)
-                    # Si tiene response, intentar extraer más detalles
-                    elif hasattr(e, 'response') and e.response is not None:
-                        try:
-                            error_data = e.response.json()
-                            if isinstance(error_data, dict):
-                                if 'message' in error_data:
-                                    error_msg = error_data['message']
-                                elif 'error' in error_data:
-                                    error_msg = error_data['error']
-                                elif 'cause' in error_data and isinstance(error_data['cause'], list):
-                                    error_msg = '; '.join([str(c.get('message', c)) for c in error_data['cause']])
-                        except:
-                            error_msg = f"{e.response.status_code}: {e.response.text[:200]}"
-                    
-                    # Acortar mensajes de error muy largos
-                    if len(error_msg) > 300:
-                        error_msg = error_msg[:300] + '...'
-                    
-                    sync_results['details'].append({
-                        'producto_id': str(producto.id),
-                        'nombre': producto.nombre,
-                        'status': 'error',
-                        'message': error_msg
-                    })
-                    logger.error(f"Error al sincronizar producto {producto.id}: {e}", exc_info=True)
-            
-            total_productos = productos.count()
-            procesados = len(productos_list)
-            
-            return Response({
-                'message': f'Sincronización completada: {sync_results["success"]} exitosos, {sync_results["errors"]} errores',
-                'results': sync_results,
-                'total': total_productos,
-                'procesados': procesados,
-                'success': sync_results['success'],
-                'errors': sync_results['errors'],
-                'warning': f'Se procesaron {procesados} de {total_productos} productos' if procesados < total_productos else None
-            })
-            
+            limit = min(int(request.query_params.get('limit', 100)), 200)
+            offset = int(request.query_params.get('offset', 0))
+            data = ml_service.get_items_with_details(limit=limit, offset=offset)
+            return Response(data, status=status.HTTP_200_OK)
         except MercadoLibreReconnectRequired as e:
-            return Response(
-                {'error': str(e), 'reconnect_required': True},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': str(e), 'reconnect_required': True}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.error(f"Error al sincronizar productos ML: {e}", exc_info=True)
-            return Response(
-                {'error': f'Error al sincronizar productos: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            logger.error(f"Error listando items ML: {e}", exc_info=True)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=True, methods=['post'], url_path='mercadolibre/import-products')
     def ml_import_products(self, request, pk=None):
         """
         Importa productos desde Mercado Libre hacia Total Stock (sincronización inversa).
-        Crea productos en el sistema para los items que ya existen en tu tienda de ML.
         POST /api/tiendas/{id}/mercadolibre/import-products/
-        Body opcional: {"solo_nuevos": true} - si true, solo importa productos no vinculados
+        Body: {"solo_nuevos": true} - si true, solo importa no vinculados
+              {"ml_item_ids": ["MLA123", ...]} - importar solo los items seleccionados
         """
         try:
             tienda = self.get_object()
@@ -1028,28 +889,30 @@ class TiendaViewSet(viewsets.ModelViewSet):
             ml_service = MercadoLibreService(tienda)
             
             solo_nuevos = request.data.get('solo_nuevos', True)
+            ml_item_ids = request.data.get('ml_item_ids', None)
             
-            # Obtener items de ML (paginado)
-            all_item_ids = []
-            offset = 0
-            limit = 50
-            
-            while True:
-                items_data = ml_service.get_items(limit=limit, offset=offset)
-                results = items_data.get('results', [])
-                if not results:
-                    break
-                all_item_ids.extend(results)
-                offset += limit
-                if offset >= items_data.get('paging', {}).get('total', 0):
-                    break
+            if ml_item_ids:
+                all_item_ids = list(ml_item_ids)
+            else:
+                all_item_ids = []
+                offset = 0
+                limit = 50
+                while True:
+                    items_data = ml_service.get_items(limit=limit, offset=offset)
+                    results = items_data.get('results', [])
+                    if not results:
+                        break
+                    all_item_ids.extend(results)
+                    offset += limit
+                    if offset >= items_data.get('paging', {}).get('total', 0):
+                        break
             
             import_results = {'success': 0, 'errors': 0, 'details': [], 'actualizados': 0}
             
             for ml_item_id in all_item_ids:
                 try:
-                    # Si solo_nuevos y ya existe vinculado, omitir
-                    if solo_nuevos and Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).exists():
+                    # Si solo_nuevos (y no es importación por selección) y ya existe vinculado, omitir
+                    if not ml_item_ids and solo_nuevos and Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).exists():
                         continue
                     
                     # Obtener datos completos del item
@@ -1127,6 +990,54 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    @action(detail=True, methods=['post'], url_path='mercadolibre/update-existing-products')
+    def ml_update_existing_products(self, request, pk=None):
+        """
+        Actualiza precio y stock de productos que ya están vinculados con ML (desde ML hacia Total Stock).
+        POST /api/tiendas/{id}/mercadolibre/update-existing-products/
+        """
+        try:
+            tienda = self.get_object()
+            if not self._ml_fields_exist(tienda) or not self._ml_configured(tienda):
+                return Response({'error': 'Integración ML no configurada'}, status=status.HTTP_400_BAD_REQUEST)
+            if not getattr(tienda, 'ml_access_token', None):
+                return Response({'error': 'Complete el flujo OAuth primero.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
+            ml_service = MercadoLibreService(tienda)
+            
+            productos = Producto.objects.filter(tienda=tienda, ml_item_id__isnull=False).exclude(ml_item_id='')
+            results = {'success': 0, 'errors': 0, 'details': []}
+            
+            for producto in productos[:50]:
+                try:
+                    item_data = ml_service.get_item(producto.ml_item_id)
+                    if not item_data:
+                        results['errors'] += 1
+                        results['details'].append({'nombre': producto.nombre, 'status': 'error', 'message': 'No se pudo obtener item'})
+                        continue
+                    out = ml_service.create_producto_from_ml_item(tienda, item_data)
+                    if out:
+                        results['success'] += 1
+                        results['details'].append({'nombre': producto.nombre, 'status': 'success', 'message': 'Actualizado'})
+                    else:
+                        results['errors'] += 1
+                        results['details'].append({'nombre': producto.nombre, 'status': 'error', 'message': 'Falló'})
+                except Exception as e:
+                    results['errors'] += 1
+                    results['details'].append({'nombre': producto.nombre, 'status': 'error', 'message': str(e)[:150]})
+            
+            return Response({
+                'success': results['success'],
+                'errors': results['errors'],
+                'details': results['details']
+            }, status=status.HTTP_200_OK)
+        except MercadoLibreReconnectRequired as e:
+            return Response({'error': str(e), 'reconnect_required': True}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error actualizando productos existentes: {e}", exc_info=True)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
     @action(detail=True, methods=['post'], url_path='mercadolibre/disconnect')
     def ml_disconnect(self, request, pk=None):
         """
@@ -1149,130 +1060,6 @@ class TiendaViewSet(viewsets.ModelViewSet):
             'message': 'Integración de Mercado Libre desconectada. Podés volver a conectar desde Configuración > Mercado Libre.'
         })
 
-    @action(detail=True, methods=['get'], url_path='mercadolibre/categories', pagination_class=None)
-    def ml_search_categories(self, request, pk=None):
-        """
-        Busca categorías de Mercado Libre con un buscador
-        GET /api/tiendas/{id}/mercadolibre/categories/?search=mesa&site_id=MLA
-        
-        Ahora usa las categorías almacenadas en la base de datos en lugar de consultar la API
-        """
-        try:
-            tienda = self.get_object()
-            
-            if tienda.plataforma_ecommerce != 'MERCADO_LIBRE':
-                return Response(
-                    {'error': 'La tienda no está configurada para Mercado Libre'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            from inventario.models import CategoriaMercadoLibre
-            
-            # Obtener parámetros de búsqueda
-            search_query = request.query_params.get('search', '').strip()
-            site_id = request.query_params.get('site_id', 'MLA')
-            parent_id = request.query_params.get('parent_id', None)
-            limit = int(request.query_params.get('limit', 15000))  # Límite alto por defecto para cargar todas las categorías
-            
-            # Usar categorías de la base de datos en lugar de consultar la API
-            # Esto evita errores 403 y es mucho más rápido
-            if search_query:
-                # Buscar categorías por nombre en la base de datos
-                query_lower = search_query.lower()
-                # Buscar en el nombre y también en path_from_root para encontrar mejor coincidencias
-                # Primero buscar coincidencias exactas o que empiecen con el término
-                from django.db.models import Case, When
-                categorias_db = CategoriaMercadoLibre.objects.filter(
-                    site_id=site_id,
-                    is_leaf=True  # Solo categorías hoja
-                ).filter(
-                    Q(nombre__icontains=query_lower) | 
-                    Q(path_from_root__icontains=query_lower)
-                ).order_by(
-                    # Priorizar categorías cuyo nombre empiece con el término de búsqueda
-                    Case(
-                        When(nombre__istartswith=query_lower, then=0),
-                        default=1
-                    ),
-                    'nombre'
-                )[:limit]
-                
-                categories = [{
-                    'id': cat.id,
-                    'name': cat.nombre,
-                    'total_items_in_this_category': cat.total_items,
-                    'path_from_root': cat.path_from_root
-                } for cat in categorias_db]
-                
-                logger.info(f"Búsqueda '{search_query}': encontradas {len(categories)} categorías hoja en BD")
-                
-                return Response({
-                    'categories': categories,
-                    'count': len(categories),
-                    'search': search_query
-                })
-                
-            elif parent_id:
-                # Obtener categorías hijas de una categoría específica
-                categorias_db = CategoriaMercadoLibre.objects.filter(
-                    site_id=site_id,
-                    parent_id=parent_id,
-                    is_leaf=True  # Solo categorías hoja
-                ).order_by('nombre')[:limit]
-                
-                categories = [{
-                    'id': cat.id,
-                    'name': cat.nombre,
-                    'total_items_in_this_category': cat.total_items,
-                    'path_from_root': cat.path_from_root
-                } for cat in categorias_db]
-                
-                logger.info(f"Parent {parent_id}: encontradas {len(categories)} categorías hoja en BD")
-                
-                return Response({
-                    'categories': categories,
-                    'count': len(categories),
-                    'parent_id': parent_id
-                })
-                
-            else:
-                # Sin búsqueda, devolver categorías hoja más populares
-                # Priorizar categorías con más items
-                categorias_db = CategoriaMercadoLibre.objects.filter(
-                    site_id=site_id,
-                    is_leaf=True
-                ).order_by('-total_items', 'nombre')[:limit]
-                
-                # Si no hay categorías en la BD, mostrar mensaje
-                if categorias_db.count() == 0:
-                    return Response({
-                        'categories': [],
-                        'count': 0,
-                        'warning': 'No hay categorías disponibles. Por favor, ejecuta: python manage.py actualizar_categorias_ml',
-                        'error': 'No hay categorías en la base de datos'
-                    }, status=status.HTTP_200_OK)
-                
-                categories = [{
-                    'id': cat.id,
-                    'name': cat.nombre,
-                    'total_items_in_this_category': cat.total_items,
-                    'path_from_root': cat.path_from_root
-                } for cat in categorias_db]
-                
-                logger.info(f"Devolviendo {len(categories)} categorías hoja desde BD")
-                
-                return Response({
-                    'categories': categories,
-                    'count': len(categories)
-                })
-                
-        except Exception as e:
-            logger.error(f"Error en ml_search_categories: {e}", exc_info=True)
-            return Response(
-                {'error': f'Error: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
     @action(detail=True, methods=['post'], url_path='mercadolibre/sync-stock')
     def ml_sync_stock(self, request, pk=None):
         """
