@@ -1679,7 +1679,7 @@ class MercadoLibreService:
         Args:
             limit: Cantidad de órdenes a retornar (máx 50)
             offset: Offset para paginación
-            status: Estado de las órdenes a filtrar (opcional). Ej: 'confirmed', 'payment_required', 'payment_in_process'
+            status: Estado de las órdenes a filtrar (opcional). Ej: 'confirmed', 'payment_required', 'payment_in_process', 'paid'
             
         Returns:
             dict con las órdenes y metadata de paginación, o None si hay error

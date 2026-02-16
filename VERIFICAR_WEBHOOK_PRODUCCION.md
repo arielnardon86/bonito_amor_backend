@@ -101,7 +101,7 @@ Cuando Mercado Libre envíe una notificación:
    - Si no está sincronizado, el webhook no puede actualizar su stock
 
 2. **Verifica que la orden esté en estado válido:**
-   - Solo se procesan órdenes en: `confirmed`, `payment_required`, `payment_in_process`
+   - Solo se procesan órdenes en: `confirmed`, `payment_required`, `payment_in_process`, `paid`
    - Órdenes canceladas o pendientes no actualizan stock
 
 3. **Revisa los logs:**

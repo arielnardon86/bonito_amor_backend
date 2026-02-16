@@ -1515,8 +1515,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         order_status = order.get('status', '')
                         
                         # Solo procesar órdenes confirmadas o pagadas
-                        if order_status in ['confirmed', 'payment_required', 'payment_in_process']:
-                            order_items = order.get('order_items', [])
+                        # paid = venta confirmada y cobrada (estado típico tras cobro)
+                        if order_status in ['confirmed', 'payment_required', 'payment_in_process', 'paid']:
+                            order_items = order.get('order_items') or order.get('items') or []
                             
                             # Obtener el método de pago "Mercado Libre"
                             try:
@@ -1755,6 +1756,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     
                                 except Exception as e:
                                     logger.error(f"Error al crear venta desde orden ML {order_id}: {e}", exc_info=True)
+                        else:
+                            logger.info(f"Orden {order_id} con estado '{order_status}' no procesada (solo: confirmed, payment_required, payment_in_process, paid)")
                         
                         return Response({
                             'status': 'success',

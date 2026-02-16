@@ -109,7 +109,7 @@ El webhook procesará la notificación y:
 
 1. **Extraerá el ID de la orden** del campo `resource`
 2. **Obtendrá la información de la orden** desde la API de Mercado Libre
-3. **Verificará el estado de la orden** (solo procesa órdenes en estados: `confirmed`, `payment_required`, `payment_in_process`)
+3. **Verificará el estado de la orden** (solo procesa órdenes en estados: `confirmed`, `payment_required`, `payment_in_process`, `paid`)
 4. **Creará una venta** en el sistema con el método de pago "Mercado Libre"
 5. **Calculará el arancel** según la categoría del producto
 6. **Actualizará el stock** de los productos vendidos
@@ -174,7 +174,7 @@ Los productos vendidos deberían tener su stock actualizado automáticamente.
 
 **Posibles causas**:
 1. **La orden no existe en Mercado Libre**: El ID de orden que estás probando no existe
-2. **La orden no está en un estado válido**: Solo se procesan órdenes en estados `confirmed`, `payment_required`, `payment_in_process`
+2. **La orden no está en un estado válido**: Solo se procesan órdenes en estados `confirmed`, `payment_required`, `payment_in_process`, `paid`
 3. **El producto no está sincronizado**: El producto en la orden no tiene `ml_item_id` configurado en el sistema
 4. **Token de acceso inválido**: El token de Mercado Libre puede haber expirado
 
@@ -186,7 +186,7 @@ Los productos vendidos deberían tener su stock actualizado automáticamente.
 
 ## 📝 Notas Importantes
 
-1. **Solo se procesan órdenes válidas**: El webhook solo procesa órdenes que estén en estados específicos (`confirmed`, `payment_required`, `payment_in_process`)
+1. **Solo se procesan órdenes válidas**: El webhook solo procesa órdenes que estén en estados específicos (`confirmed`, `payment_required`, `payment_in_process`, `paid`)
 
 2. **El webhook siempre responde 200 OK**: Incluso si hay errores, el webhook responde con `200 OK` para evitar que Mercado Libre reenvíe la notificación. Los errores se registran en los logs.
 

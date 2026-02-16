@@ -115,6 +115,7 @@ El webhook solo procesa órdenes en estos estados:
 - ✅ `confirmed` - Orden confirmada
 - ✅ `payment_required` - Pago requerido
 - ✅ `payment_in_process` - Pago en proceso
+- ✅ `paid` - Venta cobrada (estado típico tras pago acreditado)
 
 Si la orden está en otro estado (como `cancelled`, `closed`, etc.), el webhook la omitirá.
 

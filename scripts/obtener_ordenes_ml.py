@@ -70,7 +70,7 @@ def obtener_ordenes_ml(tienda_id=None, limit=10):
             data = ml_service.get_orders(
                 limit=limit,
                 offset=0,
-                status='confirmed,payment_required,payment_in_process'
+                status='confirmed,payment_required,payment_in_process,paid'
             )
             
             if not data:

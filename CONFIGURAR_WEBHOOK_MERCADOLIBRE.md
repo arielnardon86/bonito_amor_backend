@@ -202,7 +202,18 @@ curl -X POST https://[TU-DOMINIO]/api/tiendas/[ID-TIENDA]/mercadolibre/webhook/ 
 
 1. **Verifica que el producto tenga `ml_item_id`**: Solo los productos sincronizados con ML tienen este campo
 2. **Verifica los logs**: Busca errores al obtener la orden o actualizar el stock
-3. **Verifica que la orden esté en estado válido**: Solo se procesan órdenes en estado `confirmed`, `payment_required`, o `payment_in_process`
+3. **Verifica que la orden esté en estado válido**: Solo se procesan órdenes en estado `confirmed`, `payment_required`, `payment_in_process` o `paid` (venta cobrada)
+
+### Venta en Mercado Libre no se refleja en Total Stock
+
+**Checklist de verificación:**
+
+1. ☐ **Webhook registrado en ML**: [Mis Aplicaciones](https://applications.mercadolibre.com.ar) → tu app → Webhooks → URL correcta
+2. ☐ **Topic `orders` seleccionado** en la configuración del webhook
+3. ☐ **URL exacta**: `https://[TU-DOMINIO]/api/tiendas/[UUID-TIENDA]/mercadolibre/webhook/`
+4. ☐ **Productos con `ml_item_id`**: Los items de la orden deben estar sincronizados (importados desde ML)
+5. ☐ **Logs en Render**: Busca `INFO: Notificación recibida de ML` o `Orden X con estado 'paid'` para ver si llegaron notificaciones
+6. ☐ **Token vigente**: Renová la conexión ML en Configuración si hay errores 401
 
 ### Error 404 al recibir notificación
 
