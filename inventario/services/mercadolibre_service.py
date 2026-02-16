@@ -6,6 +6,7 @@ Proporciona métodos para autenticación OAuth y sincronización de productos
 import requests
 import json
 import re
+from decimal import Decimal
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.conf import settings
@@ -1727,6 +1728,72 @@ class MercadoLibreService:
         except Exception as e:
             logger.error(f"Error inesperado al obtener órdenes: {e}")
             return None
+    
+    def create_producto_from_ml_item(self, tienda, ml_item_data):
+        """
+        Crea o actualiza un producto en Total Stock a partir de los datos de un item de Mercado Libre.
+        
+        Args:
+            tienda: Instancia del modelo Tienda
+            ml_item_data: dict con los datos del item de ML (de get_item o de order_items)
+            
+        Returns:
+            Producto: La instancia del producto creada o actualizada, o None si falla
+        """
+        ml_item_id = ml_item_data.get('id') or (ml_item_data.get('item', {}).get('id') if isinstance(ml_item_data.get('item'), dict) else None)
+        if not ml_item_id:
+            logger.error("No se pudo obtener ml_item_id de los datos del item")
+            return None
+        
+        # Obtener datos del item - puede venir de get_item (completo) o de order_items (parcial)
+        if 'item' in ml_item_data and isinstance(ml_item_data.get('item'), dict):
+            item_info = ml_item_data.get('item', {})
+        else:
+            item_info = ml_item_data
+        
+        nombre = item_info.get('title') or item_info.get('name') or f"Producto ML {ml_item_id}"
+        precio = float(item_info.get('price', 0))
+        stock = int(item_info.get('available_quantity', 0))
+        categoria_ml_id = item_info.get('category_id')
+        descripcion = None
+        if isinstance(item_info.get('description'), dict):
+            descripcion = item_info.get('description', {}).get('plain_text', '')
+        elif isinstance(item_info.get('description'), str):
+            descripcion = item_info.get('description', '')
+        
+        # Buscar si ya existe el producto vinculado
+        producto_existente = Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).first()
+        
+        if producto_existente:
+            # Actualizar producto existente
+            producto_existente.nombre = nombre[:200]
+            producto_existente.precio = precio if precio > 0 else producto_existente.precio
+            producto_existente.stock = stock
+            if descripcion:
+                producto_existente.descripcion = descripcion[:5000]
+            if categoria_ml_id:
+                producto_existente.ml_categoria_id = categoria_ml_id
+            producto_existente.ml_sincronizado = True
+            producto_existente.ml_ultima_sincronizacion = timezone.now()
+            producto_existente.save()
+            logger.info(f"Producto actualizado desde ML: {producto_existente.nombre} (ml_item_id: {ml_item_id})")
+            return producto_existente
+        
+        # Crear nuevo producto (nombre + sufijo ML para unicidad con unique_together)
+        nombre_final = f"{nombre[:185]} (ML-{ml_item_id})" if len(nombre) > 185 else f"{nombre} (ML-{ml_item_id})"
+        producto = Producto.objects.create(
+            tienda=tienda,
+            nombre=nombre_final,
+            descripcion=descripcion[:5000] if descripcion else None,
+            precio=Decimal(str(precio)) if precio > 0 else Decimal('0.01'),
+            stock=max(0, stock),
+            ml_item_id=ml_item_id,
+            ml_sincronizado=True,
+            ml_ultima_sincronizacion=timezone.now(),
+            ml_categoria_id=categoria_ml_id or None
+        )
+        logger.info(f"Producto creado desde ML: {producto.nombre} (ml_item_id: {ml_item_id})")
+        return producto
     
     def get_order(self, order_id):
         """
