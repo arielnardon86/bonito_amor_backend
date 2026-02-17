@@ -1280,18 +1280,32 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 }, status=status.HTTP_200_OK)
             
             # Mercado Libre envía notificaciones en formato JSON
-            # La estructura típica es: {"resource": "/orders/123456", "topic": "orders"}
+            # Topic "orders" (legacy) o "orders_v2" (recomendado desde 2019+)
+            # Estructura: {"resource": "/orders/123456", "topic": "orders_v2"}
             resource = request.data.get('resource', '')
             topic = request.data.get('topic', '')
             
+            # Aceptar ambos topics: orders (legacy) y orders_v2 (recomendado por ML)
+            topic_orders = topic in ('orders', 'orders_v2')
+            
             logger.info(f"Notificación recibida de ML: topic={topic}, resource={resource}")
             
-            if topic == 'orders' and resource.startswith('/orders/'):
-                # Extraer el ID de la orden
-                order_id = resource.split('/orders/')[-1].split('?')[0]
+            if topic_orders and resource and '/orders/' in resource:
+                # Extraer el ID de la orden (soporta /orders/123 o /orders/123?params)
+                order_id = resource.split('/orders/')[-1].split('?')[0].strip()
                 
                 try:
                     from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
+                    
+                    # Evitar procesar la misma orden dos veces
+                    if Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).exists():
+                        logger.info(f"Orden {order_id} ya procesada anteriormente, omitiendo")
+                        return Response({
+                            'status': 'success',
+                            'message': 'Orden ya procesada',
+                            'order_id': order_id
+                        }, status=status.HTTP_200_OK)
+                    
                     ml_service = MercadoLibreService(tienda)
                     
                     # Obtener información de la orden desde ML
@@ -1435,6 +1449,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         arancel_total=total_arancel,
                                         costo_envio_ml=total_costo_envio,
                                         origen_mercadolibre=True,
+                                        ml_order_id=order_id,
                                         usuario=usuario_ml,
                                         fecha_venta=timezone.now()
                                     )

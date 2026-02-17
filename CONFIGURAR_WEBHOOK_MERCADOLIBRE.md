@@ -81,9 +81,12 @@ https://totalstock.onrender.com/api/tiendas/31551735-b173-4831-9c4a-3b8d5196dbd5
 1. Haz clic en **"Agregar Webhook"** o **"Crear Notificación"**
 2. Ingresa la URL completa del webhook (la que construiste arriba)
 3. Selecciona los **Topics** (temas) que quieres recibir:
-   - ✅ **`orders`** - Para recibir notificaciones cuando se crean órdenes/pedidos
+   - ✅ **`orders_v2`** - **Recomendado** - Para órdenes (creación y cambios en ventas confirmadas)
+   - ✅ **`orders`** - (Legacy, alternativo) Si no aparece orders_v2
    - ✅ **`items`** - (Opcional) Para recibir notificaciones sobre cambios en items
    - ✅ **`payments`** - (Opcional) Para recibir notificaciones sobre pagos
+
+   **Importante:** Mercado Libre recomienda `orders_v2` desde 2019. Si solo tenés `orders` configurado y las ventas no entran, agregá o cambiá a `orders_v2`.
 
 ### Paso 3: Verificar el Webhook
 
@@ -209,7 +212,7 @@ curl -X POST https://[TU-DOMINIO]/api/tiendas/[ID-TIENDA]/mercadolibre/webhook/ 
 **Checklist de verificación:**
 
 1. ☐ **Webhook registrado en ML**: [Mis Aplicaciones](https://applications.mercadolibre.com.ar) → tu app → Webhooks → URL correcta
-2. ☐ **Topic `orders` seleccionado** en la configuración del webhook
+2. ☐ **Topic `orders_v2` o `orders` seleccionado**: ML recomienda `orders_v2`. Si solo tenés `orders` y las ventas no entran, agregá `orders_v2`.
 3. ☐ **URL exacta**: `https://[TU-DOMINIO]/api/tiendas/[UUID-TIENDA]/mercadolibre/webhook/`
 4. ☐ **Productos con `ml_item_id`**: Los items de la orden deben estar sincronizados (importados desde ML)
 5. ☐ **Logs en Render**: Busca `INFO: Notificación recibida de ML` o `Orden X con estado 'paid'` para ver si llegaron notificaciones

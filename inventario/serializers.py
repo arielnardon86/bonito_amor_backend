@@ -479,7 +479,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'metodo_pago', 'metodo_pago_nombre', 
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
-            'costo_envio_ml', 'origen_mercadolibre',
+            'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
             'fecha_creacion', 'fecha_actualizacion', 'tiene_factura', 'facturada',
             'cambio_devolucion_nota_credito', 'cambio_devolucion_diferencia',
             'es_nota_credito', 'es_diferencia_pendiente'
