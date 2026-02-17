@@ -859,7 +859,16 @@ class MercadoLibreService:
             item_info = ml_item_data
         
         nombre = item_info.get('title') or item_info.get('name') or f"Producto ML {ml_item_id}"
-        precio = float(item_info.get('price', 0))
+        # Preferir sale_price (precio con descuento) sobre price (precio base)
+        precio = None
+        sale_data = self.get_sale_price(ml_item_id)
+        if sale_data is not None and sale_data.get('amount') is not None:
+            try:
+                precio = float(sale_data['amount'])
+            except (TypeError, ValueError):
+                pass
+        if precio is None or precio <= 0:
+            precio = float(item_info.get('price', 0))
         stock = int(item_info.get('available_quantity', 0))
         categoria_ml_id = item_info.get('category_id')
         descripcion = None
