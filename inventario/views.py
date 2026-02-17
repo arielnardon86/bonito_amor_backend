@@ -1342,28 +1342,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                 ml_item_id = item.get('item', {}).get('id')
                                 quantity = item.get('quantity', 0)
                                 
-                                # Obtener precio unitario de la orden (ML puede devolverlo en diferentes campos)
-                                # Primero intentar unit_price, luego item.price, luego calcular desde el total del item
+                                # Precio real de venta: unit_price es "después de descuentos" (ML)
+                                # NO usar full_unit_price ni item.price como prioritario (son precio original)
                                 unit_price = Decimal(str(item.get('unit_price', 0)))
-                                if unit_price == 0:
-                                    # Intentar obtener el precio del item
+                                if unit_price <= 0:
+                                    # Fallback: total pagado por este ítem / cantidad
+                                    item_total = Decimal(str(item.get('total_amount', 0)))
+                                    if item_total > 0 and quantity > 0:
+                                        unit_price = item_total / quantity
+                                if unit_price <= 0:
                                     item_data = item.get('item', {})
                                     unit_price = Decimal(str(item_data.get('price', 0)))
-                                    
-                                    # Si aún no hay precio, intentar calcular desde el total del item
-                                    if unit_price == 0:
-                                        item_total = Decimal(str(item.get('total_amount', 0)))
-                                        if item_total > 0 and quantity > 0:
-                                            unit_price = item_total / quantity
-                                        else:
-                                            # Último recurso: usar el precio del producto en nuestro sistema
-                                            try:
-                                                producto_temp = Producto.objects.get(tienda=tienda, ml_item_id=ml_item_id)
-                                                unit_price = producto_temp.precio
-                                                logger.warning(f"Precio no encontrado en orden ML, usando precio del sistema: ${unit_price} para {producto_temp.nombre}")
-                                            except Producto.DoesNotExist:
-                                                unit_price = Decimal('0.00')
-                                                logger.error(f"No se pudo obtener precio para item {ml_item_id}")
+                                if unit_price <= 0:
+                                    try:
+                                        producto_temp = Producto.objects.get(tienda=tienda, ml_item_id=ml_item_id)
+                                        unit_price = producto_temp.precio
+                                        logger.warning(f"Precio no en orden ML, usando sistema: ${unit_price} para {producto_temp.nombre}")
+                                    except Producto.DoesNotExist:
+                                        unit_price = Decimal('0.00')
+                                        logger.error(f"No se pudo obtener precio para item {ml_item_id}")
                                 
                                 if ml_item_id and unit_price > 0:
                                     # Buscar el producto en nuestro sistema por ml_item_id

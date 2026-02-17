@@ -388,15 +388,24 @@ class MercadoLibreService:
                     for r in batch:
                         if r.get('code') == 200 and r.get('body'):
                             b = r['body']
+                            item_id = b.get('id')
                             thumb = ''
                             if b.get('thumbnail'):
                                 thumb = b['thumbnail']
                             elif b.get('pictures') and len(b['pictures']) > 0:
                                 thumb = b['pictures'][0].get('url', b['pictures'][0].get('secure_url', ''))
+                            # Preferir sale_price (precio con descuento/promoción) sobre price (precio base)
+                            price_val = float(b.get('price', 0))
+                            sale_data = self.get_sale_price(item_id)
+                            if sale_data is not None and sale_data.get('amount') is not None:
+                                try:
+                                    price_val = float(sale_data['amount'])
+                                except (TypeError, ValueError):
+                                    pass
                             items_with_details.append({
-                                'id': b.get('id'),
+                                'id': item_id,
                                 'title': b.get('title', ''),
-                                'price': float(b.get('price', 0)),
+                                'price': price_val,
                                 'available_quantity': int(b.get('available_quantity', 0)),
                                 'thumbnail': thumb
                             })
