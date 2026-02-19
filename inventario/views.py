@@ -1465,6 +1465,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     
                                     logger.info(f"Venta de Mercado Libre registrada: ID {venta.id}, Total: ${total_venta}, Arancel: ${total_arancel}, Envío: ${total_costo_envio}")
                                     
+                                    # Enviar notificación push (igual que en ventas manuales)
+                                    try:
+                                        from .services.notificaciones_service import NotificacionesService
+                                        NotificacionesService.enviar_notificacion_venta(venta)
+                                    except Exception as notif_err:
+                                        logger.warning(f"Error al enviar notificación push por venta ML {venta.id}: {notif_err}")
+                                    
                                     # Facturación automática: intentar emitir factura para ventas de ML
                                     if venta.tienda.tipo_facturacion and venta.tienda.tipo_facturacion != 'NINGUNA':
                                         try:
@@ -1473,17 +1480,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             cliente_domicilio = ''
                                             cliente_cuit_dni = ''
                                             billing = ml_service.get_order_billing_info(order_id)
-                                            if billing:
-                                                first = (billing.get('name') or billing.get('first_name') or '').strip()
-                                                last = (billing.get('last_name') or '').strip()
+                                            # API ML v2: datos están en buyer.billing_info (name, last_name, identification, address)
+                                            bi = {}
+                                            if billing and isinstance(billing, dict):
+                                                bi = billing.get('buyer', {}) or {}
+                                                if isinstance(bi, dict):
+                                                    bi = bi.get('billing_info', {}) or {}
+                                            if not isinstance(bi, dict):
+                                                bi = {}
+                                            if bi:
+                                                first = (bi.get('name') or bi.get('first_name') or '').strip()
+                                                last = (bi.get('last_name') or '').strip()
                                                 if first or last:
                                                     cliente_nombre = f"{first} {last}".strip()[:255] or cliente_nombre
-                                                ident = billing.get('identification', {})
+                                                ident = bi.get('identification', {})
                                                 if isinstance(ident, dict):
                                                     cliente_cuit_dni = (ident.get('number') or '').strip()
                                                 elif isinstance(ident, str):
                                                     cliente_cuit_dni = ident.strip()
-                                                addr = billing.get('address', {})
+                                                addr = bi.get('address', {})
                                                 if isinstance(addr, dict):
                                                     street = (addr.get('street_name') or addr.get('address_line') or '')
                                                     number = (addr.get('street_number') or '')
@@ -1542,6 +1557,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                                 )
                                                 venta.facturada = True
                                                 venta.cliente_nombre = cliente_data['cliente_nombre']
+                                                venta.cliente_cuit = cliente_data.get('cliente_cuit', '') or None
                                                 venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
                                                 venta.save()
                                                 logger.info(f"Factura emitida automáticamente para venta ML {venta.id}")
