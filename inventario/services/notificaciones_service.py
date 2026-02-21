@@ -76,18 +76,20 @@ def _enviar_v1(venta, tokens, titulo, mensaje, data):
 
     for token_obj in tokens:
         try:
-            # Mensaje data-only: sin payload "notification" para que FCM no lo maneje
-            # automáticamente en background y siempre pase por el service worker.
-            # Usamos notif_title/notif_body en lugar de title/body para evitar que
-            # FCM los interprete como campos de notificación y los saque de payload.data.
-            data_with_notif = dict(data_str)
-            data_with_notif['notif_title'] = titulo
-            data_with_notif['notif_body'] = mensaje
+            # Usamos WebpushConfig.notification para que FCM incluya título y cuerpo
+            # correctamente en el payload web push. Así funciona tanto en background
+            # (FCM lo muestra automáticamente) como en foreground (onMessage lo recibe
+            # en payload.notification). Los datos extra van en WebpushConfig.data.
             message = messaging.Message(
                 token=token_obj.token,
-                data=data_with_notif,
                 webpush=messaging.WebpushConfig(
                     headers={'Urgency': 'high'},
+                    notification=messaging.WebpushNotification(
+                        title=titulo,
+                        body=mensaje,
+                        icon='/logo192.png',
+                    ),
+                    data=data_str,
                 ),
             )
             msg_id = messaging.send(message)
