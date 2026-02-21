@@ -78,10 +78,11 @@ def _enviar_v1(venta, tokens, titulo, mensaje, data):
         try:
             # Mensaje data-only: sin payload "notification" para que FCM no lo maneje
             # automáticamente en background y siempre pase por el service worker.
-            # El SW lee title/body desde data['title'] y data['body'].
+            # Usamos notif_title/notif_body en lugar de title/body para evitar que
+            # FCM los interprete como campos de notificación y los saque de payload.data.
             data_with_notif = dict(data_str)
-            data_with_notif.setdefault('title', titulo)
-            data_with_notif.setdefault('body', mensaje)
+            data_with_notif['notif_title'] = titulo
+            data_with_notif['notif_body'] = mensaje
             message = messaging.Message(
                 token=token_obj.token,
                 data=data_with_notif,
