@@ -76,13 +76,18 @@ def _enviar_v1(venta, tokens, titulo, mensaje, data):
 
     for token_obj in tokens:
         try:
+            # Mensaje data-only: sin payload "notification" para que FCM no lo maneje
+            # automáticamente en background y siempre pase por el service worker.
+            # El SW lee title/body desde data['title'] y data['body'].
+            data_with_notif = dict(data_str)
+            data_with_notif.setdefault('title', titulo)
+            data_with_notif.setdefault('body', mensaje)
             message = messaging.Message(
                 token=token_obj.token,
-                notification=messaging.Notification(
-                    title=titulo,
-                    body=mensaje,
+                data=data_with_notif,
+                webpush=messaging.WebpushConfig(
+                    headers={'Urgency': 'high'},
                 ),
-                data=data_str,
             )
             msg_id = messaging.send(message)
             resultados['exitosos'] += 1
