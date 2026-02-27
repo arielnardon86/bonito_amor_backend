@@ -1291,13 +1291,29 @@ class TiendaViewSet(viewsets.ModelViewSet):
             logger.info(f"Notificación recibida de ML: topic={topic}, resource={resource}")
             
             if topic_orders and resource and '/orders/' in resource:
-                # Extraer el ID de la orden (soporta /orders/123 o /orders/123?params)
-                order_id = resource.split('/orders/')[-1].split('?')[0].strip()
+                # Extraer solo el ID numérico de la orden: /orders/123 y /orders/123/shipments → "123"
+                # Así evitamos procesar dos veces la misma orden cuando ML notifica retiro/entrega (resource con /shipments)
+                raw_suffix = resource.split('/orders/')[-1].split('?')[0].strip()
+                order_id = raw_suffix.split('/')[0].strip() if raw_suffix else ''
+                is_shipment_update = '/shipments' in resource or raw_suffix.startswith('shipments')
+                
+                if not order_id:
+                    logger.warning(f"Webhook ML: no se pudo extraer order_id de resource={resource}")
+                    return Response({'status': 'ok', 'message': 'Resource sin order_id'}, status=status.HTTP_200_OK)
                 
                 try:
                     from .services.mercadolibre_service import MercadoLibreService, MercadoLibreReconnectRequired
                     
-                    # Evitar procesar la misma orden dos veces
+                    # Notificaciones de envío/retiro: no crear nueva venta ni facturar; la venta ya existe
+                    if is_shipment_update:
+                        logger.info(f"Webhook ML: actualización de envío para orden {order_id}, no se crea nueva venta")
+                        return Response({
+                            'status': 'success',
+                            'message': 'Actualización de envío, orden ya procesada',
+                            'order_id': order_id
+                        }, status=status.HTTP_200_OK)
+                    
+                    # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + retiro)
                     if Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).exists():
                         logger.info(f"Orden {order_id} ya procesada anteriormente, omitiendo")
                         return Response({
