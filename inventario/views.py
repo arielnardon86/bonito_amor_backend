@@ -1542,8 +1542,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     except Exception as notif_err:
                                         logger.warning(f"Error al enviar notificación push por venta ML {venta.id}: {notif_err}")
                                     
-                                    # Facturación automática: intentar emitir factura para ventas de ML
-                                    if venta.tienda.tipo_facturacion and venta.tienda.tipo_facturacion != 'NINGUNA':
+                                    # Facturación automática: solo si está habilitado para ML (sino solo recibo)
+                                    if getattr(venta.tienda, 'ml_facturar_ventas', True) and venta.tienda.tipo_facturacion and venta.tienda.tipo_facturacion != 'NINGUNA':
                                         try:
                                             # Preferir datos de facturación de ML (nombre, DNI, dirección) si existe el endpoint
                                             cliente_nombre = 'Consumidor Final'

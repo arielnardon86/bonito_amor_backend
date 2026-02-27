@@ -139,6 +139,12 @@ class Tienda(models.Model):
         help_text="Usar ambiente de testing/sandbox de Mercado Libre (True) o producción (False)"
     )
     
+    # Ventas automáticas: facturación
+    ml_facturar_ventas = models.BooleanField(
+        default=True,
+        help_text="Si está activo, las ventas procesadas por el webhook de Mercado Libre se facturan automáticamente (AFIP/ARCA). Si está desactivado, solo se emite recibo (no se genera factura electrónica)."
+    )
+    
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
