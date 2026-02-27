@@ -184,14 +184,8 @@ class NotificacionesService:
             .select_related('user')
             .order_by('user_id', '-fecha_actualizacion')
         )
-        # Un solo token por usuario (el más reciente) para no duplicar notificaciones
-        seen_users = set()
-        tokens = []
-        for t in tokens_qs:
-            if t.user_id in seen_users:
-                continue
-            seen_users.add(t.user_id)
-            tokens.append(t)
+        # Enviar a todos los tokens activos de los usuarios de la tienda
+        tokens = list(tokens_qs)
 
         if not tokens:
             logger.info(
