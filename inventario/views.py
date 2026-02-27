@@ -1313,7 +1313,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             'order_id': order_id
                         }, status=status.HTTP_200_OK)
                     
-                    # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + retiro)
+                    # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + entrega)
                     if Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).exists():
                         logger.info(f"Orden {order_id} ya procesada anteriormente, omitiendo")
                         return Response({
@@ -1323,13 +1323,51 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         }, status=status.HTTP_200_OK)
                     
                     ml_service = MercadoLibreService(tienda)
-                    
-                    # Obtener información de la orden desde ML
                     order = ml_service.get_order(order_id)
                     
                     if order:
-                        # Procesar la orden y actualizar stock
                         order_status = order.get('status', '')
+                        order_total = Decimal(str(order.get('total_amount', 0)))
+                        order_date_str = order.get('date_created') or order.get('date_closed') or ''
+                        order_date = None
+                        if order_date_str:
+                            try:
+                                order_date = timezone.datetime.fromisoformat(
+                                    str(order_date_str).replace('Z', '+00:00')
+                                )
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Ventas antiguas sin ml_order_id: detectar por total + fecha para evitar refacturar
+                        venta_existente = None
+                        if order_total and order_status in ('paid', 'confirmed', 'delivered'):
+                            ventas_ml_sin_order = Venta.objects.filter(
+                                tienda=tienda,
+                                origen_mercadolibre=True,
+                                ml_order_id__isnull=True
+                            ).filter(
+                                total=order_total
+                            )
+                            if order_date:
+                                desde = order_date - timedelta(days=30)
+                                hasta = order_date + timedelta(days=2)
+                                ventas_ml_sin_order = ventas_ml_sin_order.filter(
+                                    fecha_venta__date__gte=desde.date(),
+                                    fecha_venta__date__lte=hasta.date()
+                                )
+                            venta_existente = ventas_ml_sin_order.first()
+                        
+                        if venta_existente:
+                            venta_existente.ml_order_id = order_id
+                            venta_existente.save()
+                            logger.info(f"Orden {order_id} ya procesada (venta antigua sin ml_order_id), backfill y omitiendo")
+                            return Response({
+                                'status': 'success',
+                                'message': 'Orden ya procesada',
+                                'order_id': order_id
+                            }, status=status.HTTP_200_OK)
+                        
+                        # Procesar la orden y actualizar stock
                         
                         # Solo procesar órdenes confirmadas o pagadas
                         # paid = venta confirmada y cobrada (estado típico tras cobro)
@@ -1455,17 +1493,33 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     if created:
                                         usuario_ml.set_unusable_password()
                                         usuario_ml.save()
-                                    venta = Venta.objects.create(
-                                        tienda=tienda,
-                                        metodo_pago=metodo_pago_ml.nombre,
-                                        total=total_venta,
-                                        arancel_total=total_arancel,
-                                        costo_envio_ml=total_costo_envio,
-                                        origen_mercadolibre=True,
-                                        ml_order_id=order_id,
-                                        usuario=usuario_ml,
-                                        fecha_venta=timezone.now()
-                                    )
+                                    try:
+                                        venta = Venta.objects.create(
+                                            tienda=tienda,
+                                            metodo_pago=metodo_pago_ml.nombre,
+                                            total=total_venta,
+                                            arancel_total=total_arancel,
+                                            costo_envio_ml=total_costo_envio,
+                                            origen_mercadolibre=True,
+                                            ml_order_id=order_id,
+                                            usuario=usuario_ml,
+                                            fecha_venta=timezone.now()
+                                        )
+                                    except Exception as create_err:
+                                        from django.db import IntegrityError
+                                        err_str = str(create_err).lower()
+                                        if isinstance(create_err, IntegrityError) and (
+                                            'unique_ml_order_per_tienda' in err_str or
+                                            'duplicate key' in err_str or
+                                            'unique constraint' in err_str
+                                        ):
+                                            logger.info(f"Orden {order_id} ya creada por otro request (race), omitiendo")
+                                            return Response({
+                                                'status': 'success',
+                                                'message': 'Orden ya procesada',
+                                                'order_id': order_id
+                                            }, status=status.HTTP_200_OK)
+                                        raise
                                     
                                     # Crear los detalles de venta
                                     for detalle_data in detalles_venta:

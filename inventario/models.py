@@ -410,6 +410,13 @@ class Venta(models.Model):
         verbose_name = "Venta"
         verbose_name_plural = "Ventas"
         ordering = ['-fecha_venta']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tienda', 'ml_order_id'],
+                condition=models.Q(ml_order_id__isnull=False),
+                name='unique_ml_order_per_tienda'
+            )
+        ]
 
     def __str__(self):
         return f"Venta {self.id} - Total: ${self.total} - Tienda: {self.tienda.nombre}"
