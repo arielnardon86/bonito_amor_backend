@@ -1,6 +1,8 @@
 # inventario/views.py - CÓDIGO COMPLETO Y CORREGIDO
 # BONITO_AMOR/backend/inventario/views.py
+import base64
 import logging
+import re
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
@@ -454,6 +456,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
         elif self.action == 'ml_webhook':
             # El webhook debe ser accesible sin autenticación para que Mercado Libre pueda validarlo
             permission_classes = [permissions.AllowAny]
+        elif self.action in ['facturacion_test']:
+            # Probar configuración de facturación: requiere usuario autenticado (staff/admin recomendado)
+            permission_classes = [permissions.IsAuthenticated]
         else:
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
@@ -483,6 +488,267 @@ class TiendaViewSet(viewsets.ModelViewSet):
         if not self._ml_fields_exist(tienda):
             return False
         return getattr(tienda, 'plataforma_ecommerce', 'NINGUNA') == 'MERCADO_LIBRE'
+
+    # ========== FACTURACIÓN ELECTRÓNICA ==========
+
+    @action(detail=True, methods=['post'], url_path='facturacion/generar-csr')
+    def facturacion_generar_csr(self, request, pk=None):
+        """
+        Genera automáticamente la clave privada RSA y el CSR (Certificate Signing Request)
+        para AFIP con los datos de la tienda. La clave privada se guarda en base64 en la tienda.
+        El usuario debe subir el CSR a AFIP, obtener el .crt y cargar el certificado en base64.
+
+        DN del certificado (por diseño AFIP): SERIALNUMBER=CUIT nnnnnnnnnnn, CN=alias
+        Body opcional: { "alias": "MiAlias", "razon_social": "Mi Empresa S.A." }
+        """
+        tienda = self.get_object()
+
+        if not tienda.cuit or not tienda.cuit.strip():
+            return Response(
+                {'success': False, 'message': 'La tienda debe tener CUIT configurado para generar el CSR.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cuit_limpio = re.sub(r'[^0-9]', '', tienda.cuit.strip())
+        if len(cuit_limpio) != 11:
+            return Response(
+                {'success': False, 'message': 'El CUIT debe tener 11 dígitos.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        alias = (request.data.get('alias') or '').strip() or 'TotalStock'
+        razon_social = (request.data.get('razon_social') or '').strip() or (tienda.nombre or 'Empresa')
+        # Sanear para subject: evitar caracteres que rompan el DN
+        for char in ['/', ',', '+', '=', '\n', '\r']:
+            alias = alias.replace(char, ' ')
+        alias = ' '.join(alias.split())[:64] or 'TotalStock'
+        for char in ['/', ',', '+', '=', '\n', '\r']:
+            razon_social = razon_social.replace(char, ' ')
+        razon_social = ' '.join(razon_social.split())[:128] or 'Empresa'
+
+        try:
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.backends import default_backend
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+        except ImportError:
+            return Response(
+                {'success': False, 'message': 'El paquete cryptography no está instalado.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            # Generar clave privada RSA 2048 bits
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+                backend=default_backend(),
+            )
+
+            # Subject: /C=AR/O=NombreEmpresa/CN=alias/serialNumber=CUITnnnnnnnnnnn
+            name = x509.Name([
+                x509.NameAttribute(NameOID.COUNTRY_NAME, 'AR'),
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, razon_social),
+                x509.NameAttribute(NameOID.COMMON_NAME, alias),
+                x509.NameAttribute(NameOID.SERIAL_NUMBER, f'CUIT {cuit_limpio}'),
+            ])
+
+            csr = x509.CertificateSigningRequestBuilder().subject_name(name).sign(
+                private_key, hashes.SHA256(), default_backend()
+            )
+
+            # Serializar clave privada a PEM y luego a base64
+            key_pem = private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+            key_b64 = base64.b64encode(key_pem).decode('ascii')
+
+            # CSR en PEM (para que el usuario lo descargue y suba a AFIP)
+            csr_pem = csr.public_bytes(serialization.Encoding.PEM)
+
+            # Guardar clave privada en la tienda (solo si el modelo tiene el campo)
+            if hasattr(tienda, 'clave_privada_afip'):
+                tienda.clave_privada_afip = key_b64
+                tienda.save(update_fields=['clave_privada_afip'])
+
+            return Response(
+                {
+                    'success': True,
+                    'message': 'Clave privada generada y guardada. Subí el CSR a AFIP y luego cargá el certificado (.crt) en base64.',
+                    'csr_base64': base64.b64encode(csr_pem).decode('ascii'),
+                    'csr_pem': csr_pem.decode('utf-8'),
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception('Error al generar CSR para tienda %s: %s', tienda.id, e)
+            return Response(
+                {'success': False, 'message': f'Error al generar clave o CSR: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=['post'], url_path='facturacion/test')
+    def facturacion_test(self, request, pk=None):
+        """
+        Prueba la configuración de facturación electrónica de la tienda
+        emitiendo una factura de prueba por $1.
+
+        - Usa el tipo de facturación configurado en la tienda (AFIP o ARCA).
+        - Crea una venta de prueba de $1 y emite la factura.
+        - Devuelve feedback claro: éxito (con datos de la factura) o mensaje de error.
+        """
+        tienda = self.get_object()
+
+        if not tienda.tipo_facturacion or tienda.tipo_facturacion == 'NINGUNA':
+            return Response(
+                {
+                    'success': False,
+                    'message': 'La tienda no tiene configurado un tipo de facturación (AFIP / ARCA).',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if tienda.tipo_facturacion != 'AFIP':
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Por el momento, la prueba automática de facturación está disponible solo para AFIP.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        missing_fields = []
+        if not tienda.cuit:
+            missing_fields.append('cuit')
+        if not tienda.punto_venta:
+            missing_fields.append('punto_venta')
+
+        # Campos específicos AFIP
+        if not getattr(tienda, 'certificado_afip', None):
+            missing_fields.append('certificado_afip')
+        if not getattr(tienda, 'clave_privada_afip', None):
+            missing_fields.append('clave_privada_afip')
+
+        if missing_fields:
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Faltan datos obligatorios para configurar la facturación.',
+                    'missing_fields': missing_fields,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Crear una venta de prueba por $1
+        try:
+            usuario = request.user if request.user.is_authenticated else None
+            venta_prueba = Venta.objects.create(
+                tienda=tienda,
+                usuario=usuario,
+                total=Decimal('1.00'),
+                metodo_pago='PRUEBA FACTURADOR',
+                cliente_nombre='Consumidor Final',
+                cliente_tipo_documento='99',
+                cliente_domicilio='Sin especificar',
+            )
+
+            # Crear un detalle mínimo para la venta (sin afectar stock de productos)
+            DetalleVenta.objects.create(
+                venta=venta_prueba,
+                producto=None,
+                cantidad=1,
+                precio_unitario=Decimal('1.00'),
+                costo_unitario=None,
+                subtotal=Decimal('1.00'),
+            )
+
+            cliente_data = {
+                'cliente_nombre': 'Consumidor Final',
+                'cliente_cuit': '',
+                'cliente_domicilio': 'Sin especificar',
+                'cliente_tipo_documento': '99',
+                'cliente_condicion_iva': 'CF',
+            }
+
+            facturacion_service = FacturacionService(tienda)
+            exito, datos_factura, error = facturacion_service.emitir_factura(venta_prueba, cliente_data)
+
+            if not exito:
+                # Registrar factura con error para trazabilidad
+                factura_error = Factura.objects.create(
+                    venta=venta_prueba,
+                    tienda=tienda,
+                    punto_venta=tienda.punto_venta,
+                    tipo_comprobante='B',
+                    cliente_nombre=cliente_data['cliente_nombre'],
+                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                    subtotal=venta_prueba.total,
+                    impuesto_iva=Decimal('0.00'),
+                    total=venta_prueba.total,
+                    estado='ERROR',
+                    sistema_facturacion=tienda.tipo_facturacion,
+                    error_mensaje=error,
+                )
+                return Response(
+                    {
+                        'success': False,
+                        'message': error or 'No se pudo emitir la factura de prueba.',
+                        'factura_id': str(factura_error.id),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Registrar factura exitosa
+            factura_ok = Factura.objects.create(
+                venta=venta_prueba,
+                tienda=tienda,
+                numero_comprobante=datos_factura.get('numero_comprobante'),
+                punto_venta=datos_factura.get('punto_venta', tienda.punto_venta),
+                tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+                cliente_nombre=cliente_data['cliente_nombre'],
+                cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                subtotal=datos_factura.get('subtotal', venta_prueba.total),
+                impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+                total=datos_factura.get('total', venta_prueba.total),
+                estado='EMITIDA',
+                sistema_facturacion=tienda.tipo_facturacion,
+                cae=datos_factura.get('cae'),
+                fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+                numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+                respuesta_bruta=datos_factura.get('respuesta_bruta'),
+            )
+            venta_prueba.facturada = True
+            venta_prueba.save()
+
+            return Response(
+                {
+                    'success': True,
+                    'message': 'Factura de prueba emitida correctamente.',
+                    'factura_id': str(factura_ok.id),
+                    'numero_comprobante': factura_ok.numero_comprobante,
+                    'punto_venta': factura_ok.punto_venta,
+                    'tipo_comprobante': factura_ok.tipo_comprobante,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception(f"Error al probar configuración de facturación para tienda {tienda.id}: {e}")
+            return Response(
+                {
+                    'success': False,
+                    'message': f'Error inesperado al emitir la factura de prueba: {e}',
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
     
     @action(detail=True, methods=['get'], url_path='mercadolibre/status')
     def ml_status(self, request, pk=None):
