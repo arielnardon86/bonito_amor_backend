@@ -3774,7 +3774,7 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             # Continuar con la lógica normal
             user = self.request.user
             queryset = CambioDevolucion.objects.all().select_related(
-                'venta_original', 'tienda', 'usuario', 'factura_nota_credito'
+                'venta_original', 'tienda', 'usuario', 'venta_nota_credito', 'venta_diferencia_pendiente'
             ).prefetch_related('detalles').order_by('-fecha_creacion')
             
             tienda_slug = self.request.query_params.get('tienda_slug', None)
@@ -3835,7 +3835,7 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             # Verificar permisos
             user = self.request.user
             if not user.is_superuser and user.tienda != venta_original.tienda:
-                raise serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
+                raise drf_serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
             
             # Calcular montos
             monto_devolucion = Decimal('0.00')
@@ -3854,10 +3854,11 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             # Procesar cada detalle
             for detalle_data in detalles_data:
                 accion = detalle_data['accion']
-                cantidad = detalle_data['cantidad']
+                cantidad = int(detalle_data['cantidad']) if detalle_data.get('cantidad') is not None else 1
                 detalle_venta_original_id = detalle_data.get('detalle_venta_original_id')
                 producto_nuevo_id = detalle_data.get('producto_nuevo_id')
-                precio_unitario_nuevo = detalle_data.get('precio_unitario_nuevo')
+                precio_unitario_nuevo_raw = detalle_data.get('precio_unitario_nuevo')
+                precio_unitario_nuevo = Decimal(str(precio_unitario_nuevo_raw)) if precio_unitario_nuevo_raw is not None else None
                 
                 detalle_venta_original = None
                 producto_nuevo = None
@@ -3965,7 +3966,7 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                     # Reducir stock del producto nuevo
                     if producto_nuevo:
                         if producto_nuevo.stock < cantidad:
-                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                            raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
                         producto_nuevo.stock -= cantidad
                         producto_nuevo.save()
                 
@@ -3973,156 +3974,154 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                     # Reducir stock del producto nuevo
                     if producto_nuevo:
                         if producto_nuevo.stock < cantidad:
-                            raise serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
+                            raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
                         producto_nuevo.stock -= cantidad
                         producto_nuevo.save()
-                
-                # Calcular monto de diferencia
-                monto_diferencia = monto_nuevo - monto_devolucion
-                
-                # Calcular saldo a favor (si monto_devolucion > monto_nuevo)
-                saldo_a_favor = Decimal('0.00')
-                if monto_diferencia < 0:
-                    saldo_a_favor = abs(monto_diferencia)
-                
-                cambio_devolucion.monto_devolucion = monto_devolucion
-                cambio_devolucion.monto_nuevo = monto_nuevo
-                cambio_devolucion.monto_diferencia = monto_diferencia
-                cambio_devolucion.saldo_a_favor = saldo_a_favor
-                
-                # Guardar primero el cambio_devolucion para tener el ID
-                cambio_devolucion.save()
-                
-                # Si hay saldo a favor, generar automáticamente recibo/nota de crédito
-                if saldo_a_favor > 0:
-                    try:
-                        venta_nota_credito = Venta.objects.create(
-                            total=saldo_a_favor,
-                            tienda=venta_original.tienda,
-                            usuario=user,
-                            metodo_pago='Nota de Crédito',
-                            fecha_venta=timezone.now(),
-                            facturada=False,
-                            descuento_monto=saldo_a_favor,
-                            descuento_porcentaje=Decimal('0.00'),
-                            recargo_monto=Decimal('0.00'),
-                            recargo_porcentaje=Decimal('0.00'),
-                        )
-                        
-                        DetalleVenta.objects.create(
-                            venta=venta_nota_credito,
-                            producto=None,
-                            cantidad=1,
-                            precio_unitario=saldo_a_favor,
-                            subtotal=saldo_a_favor,
-                            costo_unitario=Decimal('0.00'),
-                        )
-                        
-                        cambio_devolucion.nota_credito_generada = True
-                        cambio_devolucion.venta_nota_credito = venta_nota_credito
-                        cambio_devolucion.save()
-                        logger.info(f"✅ Nota de crédito generada automáticamente: {venta_nota_credito.id} por ${saldo_a_favor}")
-                    except Exception as e:
-                        logger.error(f"Error al generar nota de crédito automática: {str(e)}", exc_info=True)
-                        raise serializers.ValidationError({
-                            "error": f"No se pudo generar la nota de crédito: {str(e)}. Detalles: {repr(e)}"
-                        })
-                
-                # Si hay diferencia a pagar, crear venta pendiente para completar desde el flujo normal
-                if monto_diferencia > 0:
-                    try:
-                        venta_diferencia = Venta.objects.create(
-                            total=monto_diferencia,
-                            tienda=venta_original.tienda,
-                            usuario=user,
-                            metodo_pago='Pendiente',
-                            fecha_venta=timezone.now(),
-                            facturada=False,
-                        )
-                        
-                        cambio_devolucion.diferencia_pendiente = True
-                        cambio_devolucion.venta_diferencia_pendiente = venta_diferencia
-                        cambio_devolucion.save()
-                        logger.info(f"✅ Venta pendiente creada para diferencia: {venta_diferencia.id} por ${monto_diferencia}")
-                    except Exception as e:
-                        logger.error(f"Error al crear venta pendiente para diferencia: {str(e)}", exc_info=True)
-                        raise serializers.ValidationError({
-                            "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
-                        })
-                
-                return cambio_devolucion
             
-            @action(detail=True, methods=['get'])
-            def obtener_venta_diferencia(self, request, pk=None):
-                cambio_devolucion = get_object_or_404(CambioDevolucion, pk=pk)
-                
-                if not cambio_devolucion.diferencia_pendiente or not cambio_devolucion.venta_diferencia_pendiente:
-                    return Response(
-                        {"error": "No hay venta pendiente para la diferencia."},
-                        status=status.HTTP_404_NOT_FOUND
+            # Después de procesar todos los detalles: calcular montos totales y generar nota de crédito/venta pendiente
+            monto_diferencia = monto_nuevo - monto_devolucion
+            saldo_a_favor = abs(monto_diferencia) if monto_diferencia < 0 else Decimal('0.00')
+            
+            cambio_devolucion.monto_devolucion = monto_devolucion
+            cambio_devolucion.monto_nuevo = monto_nuevo
+            cambio_devolucion.monto_diferencia = monto_diferencia
+            cambio_devolucion.saldo_a_favor = saldo_a_favor
+            cambio_devolucion.save()
+            
+            # Si hay saldo a favor, generar automáticamente recibo/nota de crédito (una sola vez)
+            if saldo_a_favor > 0:
+                try:
+                    venta_nota_credito = Venta.objects.create(
+                        total=saldo_a_favor,
+                        tienda=venta_original.tienda,
+                        usuario=user,
+                        metodo_pago='Nota de Crédito',
+                        fecha_venta=timezone.now(),
+                        facturada=False,
+                        descuento_monto=saldo_a_favor,
+                        descuento_porcentaje=Decimal('0.00'),
+                        recargo_monto=Decimal('0.00'),
+                        recargo_porcentaje=Decimal('0.00'),
                     )
+                    DetalleVenta.objects.create(
+                        venta=venta_nota_credito,
+                        producto=None,
+                        cantidad=1,
+                        precio_unitario=saldo_a_favor,
+                        subtotal=saldo_a_favor,
+                        costo_unitario=Decimal('0.00'),
+                    )
+                    cambio_devolucion.nota_credito_generada = True
+                    cambio_devolucion.venta_nota_credito = venta_nota_credito
+                    cambio_devolucion.save()
+                    logger.info(f"✅ Nota de crédito generada automáticamente: {venta_nota_credito.id} por ${saldo_a_favor}")
+                except Exception as e:
+                    logger.error(f"Error al generar nota de crédito automática: {str(e)}", exc_info=True)
+                    raise drf_serializers.ValidationError({
+                        "error": f"No se pudo generar la nota de crédito: {str(e)}. Detalles: {repr(e)}"
+                    })
+            
+            # Si hay diferencia a pagar, crear venta pendiente para completar desde el flujo normal (una sola vez)
+            if monto_diferencia > 0:
+                try:
+                    venta_diferencia = Venta.objects.create(
+                        total=monto_diferencia,
+                        tienda=venta_original.tienda,
+                        usuario=user,
+                        metodo_pago='Pendiente',
+                        fecha_venta=timezone.now(),
+                        facturada=False,
+                    )
+                    DetalleVenta.objects.create(
+                        venta=venta_diferencia,
+                        producto=None,
+                        cantidad=1,
+                        precio_unitario=monto_diferencia,
+                        subtotal=monto_diferencia,
+                        costo_unitario=Decimal('0.00'),
+                    )
+                    cambio_devolucion.diferencia_pendiente = True
+                    cambio_devolucion.venta_diferencia_pendiente = venta_diferencia
+                    cambio_devolucion.save()
+                    logger.info(f"✅ Venta pendiente creada para diferencia: {venta_diferencia.id} por ${monto_diferencia}")
+                except Exception as e:
+                    logger.error(f"Error al crear venta pendiente para diferencia: {str(e)}", exc_info=True)
+                    raise drf_serializers.ValidationError({
+                        "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
+                    })
+            
+            return cambio_devolucion
+        
+        @action(detail=True, methods=['get'], url_path='obtener-venta-diferencia')
+        def obtener_venta_diferencia(self, request, pk=None):
+            cambio_devolucion = get_object_or_404(CambioDevolucion, pk=pk)
+            
+            if not cambio_devolucion.diferencia_pendiente or not cambio_devolucion.venta_diferencia_pendiente:
+                return Response(
+                    {"error": "No hay venta pendiente para la diferencia."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            venta_serializer = VentaSerializer(cambio_devolucion.venta_diferencia_pendiente)
+            return Response({
+                "venta": venta_serializer.data,
+                "monto_diferencia": cambio_devolucion.monto_diferencia,
+                "message": "Esta venta puede ser completada desde el flujo normal de ventas."
+            })
+        
+        def update(self, request, *args, **kwargs):
+            cambio_devolucion = self.get_object()
+            
+            if cambio_devolucion.estado == 'CANCELADO':
+                return Response(
+                    {"error": "Este cambio/devolución ya está cancelado."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            nuevo_estado = request.data.get('estado')
+            if nuevo_estado == 'CANCELADO':
+                for detalle in cambio_devolucion.detalles.all():
+                    if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
+                        if detalle.detalle_venta_original.producto:
+                            producto = detalle.detalle_venta_original.producto
+                            producto.stock -= detalle.cantidad
+                            producto.save()
+                            
+                            if detalle.detalle_venta_original.anulado_individualmente:
+                                detalle.detalle_venta_original.anulado_individualmente = False
+                                detalle.detalle_venta_original.cantidad += detalle.cantidad
+                                detalle.detalle_venta_original.subtotal = detalle.detalle_venta_original.precio_unitario * detalle.detalle_venta_original.cantidad
+                                detalle.detalle_venta_original.save()
+                    
+                    if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
+                        producto = detalle.producto_nuevo
+                        producto.stock += detalle.cantidad
+                        producto.save()
                 
-                venta_serializer = VentaSerializer(cambio_devolucion.venta_diferencia_pendiente)
+                cambio_devolucion.estado = 'CANCELADO'
+                cambio_devolucion.save()
+                logger.info(f"✅ Cambio/Devolución {cambio_devolucion.id} cancelado. Stock revertido.")
+                
                 return Response({
-                    "venta": venta_serializer.data,
-                    "monto_diferencia": cambio_devolucion.monto_diferencia,
-                    "message": "Esta venta puede ser completada desde el flujo normal de ventas."
+                    "message": "Cambio/Devolución cancelado con éxito. Los cambios de stock han sido revertidos.",
+                    "estado": "CANCELADO"
                 })
             
-            def update(self, request, *args, **kwargs):
-                cambio_devolucion = self.get_object()
-                
-                if cambio_devolucion.estado == 'CANCELADO':
-                    return Response(
-                        {"error": "Este cambio/devolución ya está cancelado."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                nuevo_estado = request.data.get('estado')
-                if nuevo_estado == 'CANCELADO':
-                    for detalle in cambio_devolucion.detalles.all():
-                        if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
-                            if detalle.detalle_venta_original.producto:
-                                producto = detalle.detalle_venta_original.producto
-                                producto.stock -= detalle.cantidad
-                                producto.save()
-                                
-                                if detalle.detalle_venta_original.anulado_individualmente:
-                                    detalle.detalle_venta_original.anulado_individualmente = False
-                                    detalle.detalle_venta_original.cantidad += detalle.cantidad
-                                    detalle.detalle_venta_original.subtotal = detalle.detalle_venta_original.precio_unitario * detalle.detalle_venta_original.cantidad
-                                    detalle.detalle_venta_original.save()
-                        
-                        if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
-                            producto = detalle.producto_nuevo
-                            producto.stock += detalle.cantidad
-                            producto.save()
-                    
-                    cambio_devolucion.estado = 'CANCELADO'
-                    cambio_devolucion.save()
-                    logger.info(f"✅ Cambio/Devolución {cambio_devolucion.id} cancelado. Stock revertido.")
-                    
-                    return Response({
-                        "message": "Cambio/Devolución cancelado con éxito. Los cambios de stock han sido revertidos.",
-                        "estado": "CANCELADO"
-                    })
-                
-                return super().update(request, *args, **kwargs)
-            
-            def list(self, request, *args, **kwargs):
-                # Verificar modelos antes de listar
-                global CambioDevolucion, DetalleCambioDevolucion
-                if CambioDevolucion is None or DetalleCambioDevolucion is None:
-                    try:
-                        CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
-                    except Exception as e:
-                        logger.error(f"❌ Error obteniendo modelos en list: {e}", exc_info=True)
-                        from django.core.exceptions import ImproperlyConfigured
-                        raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
-                
-                if CambioDevolucion is None or DetalleCambioDevolucion is None:
+            return super().update(request, *args, **kwargs)
+        
+        def list(self, request, *args, **kwargs):
+            global CambioDevolucion, DetalleCambioDevolucion
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                try:
+                    CambioDevolucion, DetalleCambioDevolucion = _get_cambio_devolucion_models()
+                except Exception as e:
+                    logger.error(f"❌ Error obteniendo modelos en list: {e}", exc_info=True)
                     from django.core.exceptions import ImproperlyConfigured
                     raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
-                
-                close_old_connections()
-                return super().list(request, *args, **kwargs)
+            
+            if CambioDevolucion is None or DetalleCambioDevolucion is None:
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured("CambioDevolucion models not available. Please run migrations and restart the server.")
+            
+            close_old_connections()
+            return super().list(request, *args, **kwargs)
