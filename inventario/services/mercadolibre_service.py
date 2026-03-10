@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # Importar Producto para poder actualizar los registros
 from inventario.models import Producto
 
+# User-Agent identificando la app (ML/CloudFront pueden bloquear requests sin él)
+ML_USER_AGENT = 'TotalStock/1.0 (https://github.com/arielnardon86/bonito_amor_backend)'
+
 
 class MercadoLibreReconnectRequired(Exception):
     """
@@ -81,6 +84,7 @@ class MercadoLibreService:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
+            'User-Agent': ML_USER_AGENT,
         }
         
         if include_auth and self.access_token:
@@ -147,13 +151,15 @@ class MercadoLibreService:
         }
         
         # IMPORTANTE: OAuth requiere application/x-www-form-urlencoded, NO JSON
+        # User-Agent evita 403 de CloudFront (requests sin identificador se bloquean como bots)
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
+            'User-Agent': ML_USER_AGENT,
         }
         
         try:
-            response = requests.post(self.token_url, data=data, headers=headers)
+            response = requests.post(self.token_url, data=data, headers=headers, timeout=30)
             response.raise_for_status()
             
             token_data = response.json()
@@ -205,10 +211,11 @@ class MercadoLibreService:
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
+            'User-Agent': ML_USER_AGENT,
         }
         
         try:
-            response = requests.post(self.token_url, data=data, headers=headers)
+            response = requests.post(self.token_url, data=data, headers=headers, timeout=30)
             response.raise_for_status()
             
             token_data = response.json()
@@ -927,7 +934,8 @@ class MercadoLibreService:
             url = f"{self.base_url}/orders/{order_id}"
             headers = {
                 'Authorization': f'Bearer {self.tienda.ml_access_token}',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'User-Agent': ML_USER_AGENT,
             }
             
             response = requests.get(url, headers=headers, timeout=10)
@@ -949,7 +957,8 @@ class MercadoLibreService:
                     try:
                         headers = {
                             'Authorization': f'Bearer {self.tienda.ml_access_token}',
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'User-Agent': ML_USER_AGENT,
                         }
                         response = requests.get(url, headers=headers, timeout=10)
                         response.raise_for_status()
@@ -981,6 +990,7 @@ class MercadoLibreService:
                 'Authorization': f'Bearer {self.tienda.ml_access_token}',
                 'Content-Type': 'application/json',
                 'x-version': '2',
+                'User-Agent': ML_USER_AGENT,
             }
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
