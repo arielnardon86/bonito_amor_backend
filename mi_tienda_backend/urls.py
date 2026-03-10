@@ -15,12 +15,18 @@ except (ImportError, AttributeError) as e:
     ArancelMercadoLibreViewSet = None
     ArancelMercadoLibreProductoViewSet = None
     print(f"⚠️ Warning: No se pudo importar ViewSets ML: {e}")
-# Importación condicional del callback público de ML
+# Importación condicional del callback público de ML y endpoints Worker
 try:
-    from inventario.views import ml_oauth_callback_public_view
+    from inventario.views import (
+        ml_oauth_callback_public_view,
+        ml_oauth_worker_credentials,
+        ml_oauth_worker_save_tokens,
+    )
 except (ImportError, AttributeError) as e:
     ml_oauth_callback_public_view = None
-    print(f"⚠️ Warning: No se pudo importar ml_oauth_callback_public_view: {e}")
+    ml_oauth_worker_credentials = None
+    ml_oauth_worker_save_tokens = None
+    print(f"⚠️ Warning: No se pudo importar vistas ML OAuth: {e}")
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from inventario.views import verificar_database_config, registrar_token_fcm, eliminar_token_fcm
@@ -66,6 +72,13 @@ if ml_oauth_callback_public_view is not None:
     )
 else:
     print("⚠️ Warning: ml_oauth_callback_public_view no disponible, la ruta /api/tiendas/mercadolibre/callback/ no estará disponible")
+
+# Endpoints internos para Cloudflare Worker (proxy OAuth 403)
+if ml_oauth_worker_credentials is not None and ml_oauth_worker_save_tokens is not None:
+    urlpatterns += [
+        path('api/internal/ml-oauth-credentials/', ml_oauth_worker_credentials, name='ml-oauth-worker-credentials'),
+        path('api/internal/ml-oauth-save-tokens/', ml_oauth_worker_save_tokens, name='ml-oauth-worker-save-tokens'),
+    ]
 
 # Agregar el resto de las rutas
 urlpatterns += [

@@ -2,6 +2,7 @@
 # BONITO_AMOR/backend/inventario/views.py
 import base64
 import logging
+import secrets
 import re
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
@@ -242,6 +243,75 @@ class CategoriaViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         close_old_connections()
         return super().list(request, *args, **kwargs)
+
+# Endpoints internos para Cloudflare Worker (proxy OAuth cuando Render da 403)
+def _verify_ml_worker_secret(request):
+    """Verifica el header X-ML-OAuth-Proxy-Key contra ML_OAUTH_WORKER_SECRET."""
+    import os
+    secret = os.environ.get('ML_OAUTH_WORKER_SECRET', '').strip()
+    if not secret:
+        return False
+    provided = request.headers.get('X-ML-OAuth-Proxy-Key', '')
+    return secrets.compare_digest(secret, provided)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def ml_oauth_worker_credentials(request):
+    """
+    Devuelve client_id y client_secret para el Worker.
+    Solo si ML_OAUTH_WORKER_SECRET está configurado y el header coincide.
+    """
+    import os
+    if not _verify_ml_worker_secret(request):
+        return Response({'error': 'Unauthorized'}, status=401)
+    state = request.query_params.get('state')
+    if not state:
+        return Response({'error': 'state required'}, status=400)
+    tienda_id = state.split(':')[0] if ':' in state else state
+    try:
+        tienda = Tienda.objects.get(id=tienda_id)
+    except Tienda.DoesNotExist:
+        return Response({'error': 'Tienda not found'}, status=404)
+    if getattr(tienda, 'plataforma_ecommerce', '') != 'MERCADO_LIBRE':
+        return Response({'error': 'Tienda not configured for ML'}, status=400)
+    worker_url = os.environ.get('ML_OAUTH_WORKER_URL', '').strip()
+    if not worker_url:
+        return Response({'error': 'ML_OAUTH_WORKER_URL not configured'}, status=500)
+    # worker_url = URL completa del callback del Worker (ej. https://xxx.workers.dev/callback)
+    return Response({
+        'client_id': tienda.ml_app_id,
+        'client_secret': tienda.ml_client_secret,
+        'redirect_uri': worker_url.rstrip('/'),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def ml_oauth_worker_save_tokens(request):
+    """
+    Guarda los tokens que el Worker obtuvo de ML.
+    """
+    import os
+    from django.utils import timezone
+    if not _verify_ml_worker_secret(request):
+        return Response({'error': 'Unauthorized'}, status=401)
+    state = request.data.get('state')
+    if not state:
+        return Response({'error': 'state required'}, status=400)
+    tienda_id = state.split(':')[0] if ':' in state else state
+    try:
+        tienda = Tienda.objects.get(id=tienda_id)
+    except Tienda.DoesNotExist:
+        return Response({'error': 'Tienda not found'}, status=404)
+    tienda.ml_access_token = request.data.get('access_token')
+    tienda.ml_refresh_token = request.data.get('refresh_token')
+    tienda.ml_user_id = request.data.get('user_id')
+    expires_in = request.data.get('expires_in', 21600)
+    tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+    tienda.save(update_fields=['ml_access_token', 'ml_refresh_token', 'ml_user_id', 'ml_token_expires_at'])
+    return Response({'ok': True, 'tienda_id': str(tienda.id), 'nombre': tienda.nombre})
+
 
 # Vista independiente para el callback público de Mercado Libre (fuera del ViewSet)
 @api_view(['GET', 'POST'])
@@ -812,19 +882,22 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadolibre_service import MercadoLibreService
         ml_service = MercadoLibreService(tienda)
         
-        # Obtener la URL de redirección desde el request o usar la URL fija configurada
+        # Obtener la URL de redirección desde el request o usar la configurada
+        import os
         redirect_uri = request.query_params.get('redirect_uri')
         if not redirect_uri:
-            # Usar la URL fija configurada en Mercado Libre (sin tienda_id)
-            from django.conf import settings
-            if not settings.DEBUG:
-                # Producción: usar bonito-amor-backend.onrender.com
-                redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadolibre/callback/'
+            worker_url = os.environ.get('ML_OAUTH_WORKER_URL', '').strip()
+            if worker_url:
+                # Usar Cloudflare Worker como proxy (evita 403 CloudFront desde Render)
+                redirect_uri = worker_url.rstrip('/')
             else:
-                # Desarrollo: construirla dinámicamente
-                scheme = request.scheme  # http o https
-                host = request.get_host()  # dominio del servidor
-                redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
+                from django.conf import settings
+                if not settings.DEBUG:
+                    redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadolibre/callback/'
+                else:
+                    scheme = request.scheme
+                    host = request.get_host()
+                    redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
         
         # Usar el tienda_id como state para poder identificarlo en el callback
         state = str(pk)

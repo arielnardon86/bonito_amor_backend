@@ -353,21 +353,61 @@ Headers: Authorization: Bearer {token}
 
 Si al conectar con Mercado Libre recibís **403 Forbidden** en el callback OAuth (mensaje "Request blocked" de CloudFront), suele deberse a que CloudFront bloquea la IP de tu servidor (p. ej. Render, Railway).
 
-### Opciones
+### Solución recomendada: Cloudflare Worker (proxy OAuth)
 
-1. **Variable de entorno ML_OAUTH_PROXY** (recomendado si tenés un proxy residencial):
+Desplegando un Worker en Cloudflare, el exchange de tokens se hace desde la red de Cloudflare en lugar de Render, evitando el bloqueo.
+
+#### 1. Desplegar el Worker
+
+```bash
+cd cloudflare/ml-oauth-worker
+npm init -y  # si no existe package.json
+npx wrangler deploy
+```
+
+#### 2. Configurar secrets
+
+```bash
+npx wrangler secret put ML_OAUTH_BACKEND_URL
+# Ingresar: https://totalstock.onrender.com (o tu dominio backend)
+
+npx wrangler secret put ML_OAUTH_WORKER_SECRET
+# Ingresar: una clave aleatoria larga (ej. openssl rand -hex 32)
+```
+
+#### 3. Configurar en Render (o tu host)
+
+Variables de entorno del backend:
+
+- `ML_OAUTH_WORKER_URL` = `https://ml-oauth-proxy.TU-SUBDOMINIO.workers.dev/callback`
+- `ML_OAUTH_WORKER_SECRET` = **la misma clave** que en el Worker
+
+#### 4. Agregar Redirect URI en Mercado Libre DevCenter
+
+En tu aplicación ML → Redirect URIs, agregar:
+
+```
+https://ml-oauth-proxy.TU-SUBDOMINIO.workers.dev/callback
+```
+
+(Reemplazá por la URL real que te da `wrangler deploy`)
+
+#### 5. Re-deploy del backend
+
+Con las variables configuradas, el auth-url usará automáticamente el Worker como redirect_uri.
+
+---
+
+### Otras opciones
+
+1. **ML_OAUTH_PROXY** (proxy HTTP residencial):
    ```bash
    ML_OAUTH_PROXY=http://usuario:contraseña@proxy-ejemplo.com:8080
    ```
-   Las peticiones a `api.mercadolibre.com/oauth/token` pasarán por ese proxy. Útil con proxies residenciales (Bright Data, Oxylabs, etc.).
 
-2. **Contactar a Mercado Libre**:
-   - Incluí el **Request ID** de CloudFront que aparece en el error (ej. `2b1a7EO87EI9EOiNZt7jnHf4r1zERh6VxZP5QsqP5kmQnE2qKx9DCQ==`)
-   - Abrí un ticket en [soporte developers](https://developers.mercadolibre.com.ar/)
-   - Pedí que whitelisteen la IP de tu servidor o que ajusten las reglas del WAF para el endpoint OAuth
+2. **Contactar a Mercado Libre** con el Request ID del error para pedir whitelist de IP
 
-3. **Probar desde otra IP**:
-   Ejecutá el flujo OAuth desde tu máquina local (con ngrok o similar) para confirmar si el bloqueo es por IP del servidor.
+3. **Probar desde otra IP** (ngrok local) para confirmar que es bloqueo por IP
 
 ## Próximos Pasos
 
