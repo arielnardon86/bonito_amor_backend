@@ -349,6 +349,26 @@ Headers: Authorization: Bearer {token}
 - `certificado_afip`
 - `clave_privada_afip`
 
+## Solución de problemas: Error 403 en OAuth
+
+Si al conectar con Mercado Libre recibís **403 Forbidden** en el callback OAuth (mensaje "Request blocked" de CloudFront), suele deberse a que CloudFront bloquea la IP de tu servidor (p. ej. Render, Railway).
+
+### Opciones
+
+1. **Variable de entorno ML_OAUTH_PROXY** (recomendado si tenés un proxy residencial):
+   ```bash
+   ML_OAUTH_PROXY=http://usuario:contraseña@proxy-ejemplo.com:8080
+   ```
+   Las peticiones a `api.mercadolibre.com/oauth/token` pasarán por ese proxy. Útil con proxies residenciales (Bright Data, Oxylabs, etc.).
+
+2. **Contactar a Mercado Libre**:
+   - Incluí el **Request ID** de CloudFront que aparece en el error (ej. `2b1a7EO87EI9EOiNZt7jnHf4r1zERh6VxZP5QsqP5kmQnE2qKx9DCQ==`)
+   - Abrí un ticket en [soporte developers](https://developers.mercadolibre.com.ar/)
+   - Pedí que whitelisteen la IP de tu servidor o que ajusten las reglas del WAF para el endpoint OAuth
+
+3. **Probar desde otra IP**:
+   Ejecutá el flujo OAuth desde tu máquina local (con ngrok o similar) para confirmar si el bloqueo es por IP del servidor.
+
 ## Próximos Pasos
 
 1. **Interfaz Frontend**: Crear componente React para configurar la integración

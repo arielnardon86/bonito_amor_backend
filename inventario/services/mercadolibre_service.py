@@ -3,6 +3,7 @@
 Servicio de integración con Mercado Libre API
 Proporciona métodos para autenticación OAuth y sincronización de productos
 """
+import os
 import requests
 import json
 import re
@@ -25,6 +26,33 @@ ML_USER_AGENT = (
     '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 )
 ML_USER_AGENT_API = 'TotalStock/1.0 (https://github.com/arielnardon86/bonito_amor_backend)'
+
+
+def _get_oauth_headers():
+    """Headers tipo navegador para OAuth. CloudFront WAF bloquea requests de datacenter/bot."""
+    return {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': ML_USER_AGENT,
+        'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://auth.mercadolibre.com.ar/',
+        'Origin': 'https://auth.mercadolibre.com.ar',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-site',
+    }
+
+
+def _get_oauth_proxies():
+    """
+    Proxy opcional para OAuth. Si ML_OAUTH_PROXY está definido (ej. http://user:pass@host:port),
+    las peticiones a /oauth/token pasan por ahí. Útil si CloudFront bloquea la IP del servidor.
+    """
+    url = os.environ.get('ML_OAUTH_PROXY', '').strip()
+    if url:
+        return {'http': url, 'https': url}
+    return None
 
 
 class MercadoLibreReconnectRequired(Exception):
@@ -157,16 +185,14 @@ class MercadoLibreService:
         }
         
         # IMPORTANTE: OAuth requiere application/x-www-form-urlencoded, NO JSON
-        # CloudFront WAF bloquea UA tipo bot. Usamos UA navegador + Accept-Language.
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'User-Agent': ML_USER_AGENT,
-            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
-        }
+        headers = _get_oauth_headers()
+        proxies = _get_oauth_proxies()
+        req_kw = {'data': data, 'headers': headers, 'timeout': 30}
+        if proxies:
+            req_kw['proxies'] = proxies
         
         try:
-            response = requests.post(self.token_url, data=data, headers=headers, timeout=30)
+            response = requests.post(self.token_url, **req_kw)
             response.raise_for_status()
             
             token_data = response.json()
@@ -215,16 +241,14 @@ class MercadoLibreService:
         }
         
         # IMPORTANTE: OAuth requiere application/x-www-form-urlencoded, NO JSON
-        # CloudFront WAF bloquea UA tipo bot. Usamos UA navegador + Accept-Language.
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'User-Agent': ML_USER_AGENT,
-            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
-        }
+        headers = _get_oauth_headers()
+        proxies = _get_oauth_proxies()
+        req_kw = {'data': data, 'headers': headers, 'timeout': 30}
+        if proxies:
+            req_kw['proxies'] = proxies
         
         try:
-            response = requests.post(self.token_url, data=data, headers=headers, timeout=30)
+            response = requests.post(self.token_url, **req_kw)
             response.raise_for_status()
             
             token_data = response.json()
