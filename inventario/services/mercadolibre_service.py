@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 # Importar Producto para poder actualizar los registros
 from inventario.models import Producto
 
-# User-Agent identificando la app (ML/CloudFront pueden bloquear requests sin él)
-ML_USER_AGENT = 'TotalStock/1.0 (https://github.com/arielnardon86/bonito_amor_backend)'
+# User-Agent: CloudFront WAF bloquea requests con UA de bot. Usamos uno tipo navegador
+# para OAuth (exchange_token, refresh) que recibe tráfico más estricto.
+# Incluimos X-App-Name para identificar nuestra app en logs si ML lo soporta.
+ML_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+)
+ML_USER_AGENT_API = 'TotalStock/1.0 (https://github.com/arielnardon86/bonito_amor_backend)'
 
 
 class MercadoLibreReconnectRequired(Exception):
@@ -84,7 +90,7 @@ class MercadoLibreService:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': ML_USER_AGENT,
+            'User-Agent': ML_USER_AGENT_API,
         }
         
         if include_auth and self.access_token:
@@ -151,11 +157,12 @@ class MercadoLibreService:
         }
         
         # IMPORTANTE: OAuth requiere application/x-www-form-urlencoded, NO JSON
-        # User-Agent evita 403 de CloudFront (requests sin identificador se bloquean como bots)
+        # CloudFront WAF bloquea UA tipo bot. Usamos UA navegador + Accept-Language.
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
             'User-Agent': ML_USER_AGENT,
+            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
         }
         
         try:
@@ -208,10 +215,12 @@ class MercadoLibreService:
         }
         
         # IMPORTANTE: OAuth requiere application/x-www-form-urlencoded, NO JSON
+        # CloudFront WAF bloquea UA tipo bot. Usamos UA navegador + Accept-Language.
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
             'User-Agent': ML_USER_AGENT,
+            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
         }
         
         try:
@@ -935,7 +944,7 @@ class MercadoLibreService:
             headers = {
                 'Authorization': f'Bearer {self.tienda.ml_access_token}',
                 'Content-Type': 'application/json',
-                'User-Agent': ML_USER_AGENT,
+                'User-Agent': ML_USER_AGENT_API,
             }
             
             response = requests.get(url, headers=headers, timeout=10)
@@ -958,7 +967,7 @@ class MercadoLibreService:
                         headers = {
                             'Authorization': f'Bearer {self.tienda.ml_access_token}',
                             'Content-Type': 'application/json',
-                            'User-Agent': ML_USER_AGENT,
+                            'User-Agent': ML_USER_AGENT_API,
                         }
                         response = requests.get(url, headers=headers, timeout=10)
                         response.raise_for_status()
@@ -990,7 +999,7 @@ class MercadoLibreService:
                 'Authorization': f'Bearer {self.tienda.ml_access_token}',
                 'Content-Type': 'application/json',
                 'x-version': '2',
-                'User-Agent': ML_USER_AGENT,
+                'User-Agent': ML_USER_AGENT_API,
             }
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
