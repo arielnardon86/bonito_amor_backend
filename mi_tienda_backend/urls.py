@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
-    VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet,
+    VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
     ArancelMetodoTiendaViewSet, FacturaViewSet
 )
@@ -47,6 +47,7 @@ router.register(r'ventas', VentaViewSet, basename='ventas')
 router.register(r'detalles-venta', DetalleVentaViewSet, basename='detalles-venta')
 router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
 router.register(r'compras', CompraViewSet, basename='compras')
+router.register(r'compras-stock', CompraStockViewSet, basename='compras-stock')
 router.register(r'aranceles-tienda', ArancelMetodoTiendaViewSet, basename='aranceles-tienda') # NUEVA RUTA
 # Aranceles ML por PRODUCTO (arancel % + costo envío) - nueva API principal
 if ArancelMercadoLibreProductoViewSet is not None:

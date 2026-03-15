@@ -21,6 +21,7 @@ from rest_framework import filters
 from django.db.models import DecimalField 
 from django.db import close_old_connections, models # <-- Importado para el fix de conexión y búsqueda de categorías
 from django.http import HttpResponse
+from django.core.cache import cache
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, CategoriaMercadoLibre, Factura
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -111,7 +112,7 @@ from .serializers import (
     ProductoSerializer, CategoriaSerializer, TiendaSerializer, UserSerializer,
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
-    CompraSerializer, CompraCreateSerializer, ArancelMetodoTiendaSerializer,
+    CompraSerializer, CompraCreateSerializer, CompraStockSerializer, CompraStockCreateSerializer, ArancelMetodoTiendaSerializer,
     FacturaSerializer, EmitirFacturaSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer
@@ -255,6 +256,32 @@ def _verify_ml_worker_secret(request):
     return secrets.compare_digest(secret, provided)
 
 
+def _resolve_tienda_id_from_state(state):
+    """
+    Devuelve el tienda_id validado desde el cache para el state dado.
+    Si el state no existe en cache retorna None (puede ser inválido o expirado).
+    """
+    tienda_id = cache.get(f"ml_oauth_state_{state}")
+    if tienda_id:
+        return tienda_id
+    # Fallback para states generados antes de implementar la validación por cache
+    if ':' in state:
+        return state.split(':')[0]
+    if len(state) > 30:
+        return state
+    return None
+
+
+def _check_rate_limit(key, max_requests=20, window=60):
+    """Rate limiter simple usando Django cache. Retorna False si se excedió el límite."""
+    cache_key = f"ratelimit_{key}"
+    count = cache.get(cache_key, 0)
+    if count >= max_requests:
+        return False
+    cache.set(cache_key, count + 1, timeout=window)
+    return True
+
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def ml_oauth_worker_credentials(request):
@@ -263,12 +290,17 @@ def ml_oauth_worker_credentials(request):
     Solo si ML_OAUTH_WORKER_SECRET está configurado y el header coincide.
     """
     import os
+    ip = request.META.get('HTTP_CF_CONNECTING_IP') or request.META.get('REMOTE_ADDR', 'unknown')
+    if not _check_rate_limit(f"ml_creds_{ip}", max_requests=20, window=60):
+        return Response({'error': 'Too many requests'}, status=429)
     if not _verify_ml_worker_secret(request):
         return Response({'error': 'Unauthorized'}, status=401)
     state = request.query_params.get('state')
     if not state:
         return Response({'error': 'state required'}, status=400)
-    tienda_id = state.split(':')[0] if ':' in state else state
+    tienda_id = _resolve_tienda_id_from_state(state)
+    if not tienda_id:
+        return Response({'error': 'Invalid or expired state'}, status=400)
     try:
         tienda = Tienda.objects.get(id=tienda_id)
     except Tienda.DoesNotExist:
@@ -299,7 +331,9 @@ def ml_oauth_worker_save_tokens(request):
     state = request.data.get('state')
     if not state:
         return Response({'error': 'state required'}, status=400)
-    tienda_id = state.split(':')[0] if ':' in state else state
+    tienda_id = _resolve_tienda_id_from_state(state)
+    if not tienda_id:
+        return Response({'error': 'Invalid or expired state'}, status=400)
     try:
         tienda = Tienda.objects.get(id=tienda_id)
     except Tienda.DoesNotExist:
@@ -310,6 +344,8 @@ def ml_oauth_worker_save_tokens(request):
     expires_in = request.data.get('expires_in', 21600)
     tienda.ml_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
     tienda.save(update_fields=['ml_access_token', 'ml_refresh_token', 'ml_user_id', 'ml_token_expires_at'])
+    # Invalidar el state para que no pueda reutilizarse
+    cache.delete(f"ml_oauth_state_{state}")
     return Response({'ok': True, 'tienda_id': str(tienda.id), 'nombre': tienda.nombre})
 
 
@@ -335,25 +371,23 @@ def ml_oauth_callback_public_view(request):
     
     # Manejar GET (redirección desde Mercado Libre con code en query params)
     if request.method == 'GET':
-        state = request.query_params.get('state')  # El state puede contener tienda_id
-        
-        # PRIORIDAD 1: Si viene state, extraer tienda_id de ahí (es lo más confiable)
+        state = request.query_params.get('state')
+
+        # PRIORIDAD 1: Resolver tienda_id desde state validado en cache
         if state:
-            try:
-                # El state puede venir en formato "tienda_id:numero" (ej: "uuid:1")
-                # Extraer solo la parte del UUID (antes del primer :)
-                if ':' in state:
-                    # Dividir por ':' y tomar la primera parte (el UUID)
-                    tienda_id = state.split(':')[0]
-                elif len(state) > 30:  # Probablemente es un UUID sin separador
-                    tienda_id = state
-                
-                if tienda_id:
+            resolved = _resolve_tienda_id_from_state(state)
+            if resolved:
+                tienda_id = resolved
+                try:
                     tienda = Tienda.objects.get(id=tienda_id)
-                    logger.info(f"Tienda identificada desde state: {tienda_id}")
-            except (ValueError, Tienda.DoesNotExist) as e:
-                logger.warning(f"No se pudo extraer tienda_id del state '{state}': {e}")
-    
+                    logger.info(f"Tienda identificada desde state validado: {tienda_id}")
+                    # Invalidar state después de usarlo (flujo directo sin Worker)
+                    cache.delete(f"ml_oauth_state_{state}")
+                except Tienda.DoesNotExist:
+                    logger.warning(f"State válido pero tienda no encontrada: {tienda_id}")
+            else:
+                logger.warning(f"State inválido o expirado: '{state}'")
+
     # Si aún no tenemos tienda, intentar otras formas
     if not tienda:
         if tienda_id:
@@ -370,7 +404,7 @@ def ml_oauth_callback_public_view(request):
             tiendas_ml = Tienda.objects.filter(
                 plataforma_ecommerce='MERCADO_LIBRE'
             ).exclude(ml_app_id__isnull=True).exclude(ml_app_id='')
-            
+
             if tiendas_ml.count() == 1:
                 tienda = tiendas_ml.first()
                 logger.info(f"Tienda identificada automáticamente (única configurada): {tienda.id}")
@@ -384,14 +418,14 @@ def ml_oauth_callback_public_view(request):
                     {'error': 'No se pudo determinar la tienda. Múltiples tiendas configuradas. Proporciona tienda_id en el request o usa el parámetro state.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-    
+
     # Si llegamos aquí sin tienda, es un error
     if not tienda:
         return Response(
             {'error': 'No se pudo determinar la tienda'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     # Verificar si ML está configurado
     if not hasattr(tienda, 'plataforma_ecommerce') or getattr(tienda, 'plataforma_ecommerce', 'NINGUNA') != 'MERCADO_LIBRE':
         return Response(
@@ -820,6 +854,146 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
     
+    # ========== AFIP: ESTADO, CONFIGURAR, CARGAR CERTIFICADO ==========
+
+    @action(detail=True, methods=['get'], url_path='facturacion/estado')
+    def facturacion_estado(self, request, pk=None):
+        """
+        Devuelve el estado de cada paso del wizard de configuración AFIP.
+        Usado por el frontend para mostrar qué pasos están completos.
+        """
+        tienda = self.get_object()
+        tiene_cuit = bool(getattr(tienda, 'cuit', None) and str(tienda.cuit).strip())
+        tiene_punto_venta = bool(getattr(tienda, 'punto_venta', None))
+        tiene_tipo_facturacion = getattr(tienda, 'tipo_facturacion', 'NINGUNA') not in ('NINGUNA', '', None)
+        tiene_clave_privada = bool(getattr(tienda, 'clave_privada_afip', None))
+        tiene_certificado = bool(getattr(tienda, 'certificado_afip', None))
+        return Response({
+            'paso1_config': tiene_cuit and tiene_punto_venta and tiene_tipo_facturacion,
+            'paso2_csr': tiene_clave_privada,
+            'paso4_cert': tiene_certificado,
+            'cuit': tienda.cuit if tiene_cuit else '',
+            'punto_venta': tienda.punto_venta if tiene_punto_venta else 1,
+            'tipo_facturacion': getattr(tienda, 'tipo_facturacion', 'NINGUNA'),
+            'condicion_iva_emisor': getattr(tienda, 'condicion_iva_emisor', 'MT'),
+            'modo_test_afip': getattr(tienda, 'modo_test_afip', True),
+        })
+
+    @action(detail=True, methods=['post'], url_path='facturacion/configurar')
+    def facturacion_configurar(self, request, pk=None):
+        """
+        Guarda la configuración básica de AFIP: CUIT, punto de venta,
+        tipo_facturacion, condicion_iva_emisor, modo_test_afip.
+        """
+        tienda = self.get_object()
+        allowed = ['cuit', 'punto_venta', 'tipo_facturacion', 'condicion_iva_emisor', 'modo_test_afip']
+        update_fields = []
+
+        cuit = request.data.get('cuit', '').strip()
+        if cuit:
+            cuit_digits = re.sub(r'\D', '', cuit)
+            if len(cuit_digits) != 11:
+                return Response({'error': 'El CUIT debe tener exactamente 11 dígitos.'}, status=400)
+            tienda.cuit = cuit
+            update_fields.append('cuit')
+
+        punto_venta = request.data.get('punto_venta')
+        if punto_venta is not None:
+            try:
+                tienda.punto_venta = int(punto_venta)
+                update_fields.append('punto_venta')
+            except (ValueError, TypeError):
+                return Response({'error': 'Punto de venta inválido.'}, status=400)
+
+        tipo = request.data.get('tipo_facturacion')
+        if tipo:
+            opciones_validas = ['AFIP', 'ARCA', 'NINGUNA']
+            if tipo not in opciones_validas:
+                return Response({'error': f'tipo_facturacion debe ser uno de: {opciones_validas}'}, status=400)
+            tienda.tipo_facturacion = tipo
+            update_fields.append('tipo_facturacion')
+
+        condicion = request.data.get('condicion_iva_emisor')
+        if condicion:
+            tienda.condicion_iva_emisor = condicion
+            update_fields.append('condicion_iva_emisor')
+
+        modo_test = request.data.get('modo_test_afip')
+        if modo_test is not None:
+            tienda.modo_test_afip = bool(modo_test)
+            update_fields.append('modo_test_afip')
+
+        if update_fields:
+            tienda.save(update_fields=update_fields)
+            logger.info(f"Configuración AFIP actualizada para tienda {tienda.id}: {update_fields}")
+
+        return Response({
+            'success': True,
+            'message': 'Configuración guardada correctamente.',
+            'campos_actualizados': update_fields,
+        })
+
+    @action(detail=True, methods=['post'], url_path='facturacion/cargar-certificado')
+    def facturacion_cargar_certificado(self, request, pk=None):
+        """
+        Acepta el certificado AFIP en dos formatos:
+        - Archivo .crt/.pem subido (multipart/form-data, campo 'certificado_file')
+        - Texto base64 en el campo 'certificado_base64'
+        Valida el formato y lo guarda en tienda.certificado_afip.
+        """
+        import base64 as b64lib
+        tienda = self.get_object()
+
+        certificado_b64 = None
+
+        # Opción 1: archivo subido
+        archivo = request.FILES.get('certificado_file')
+        if archivo:
+            contenido = archivo.read()
+            # Si viene como PEM (texto), extraer el DER y re-encodear a base64 limpio
+            try:
+                texto = contenido.decode('utf-8', errors='replace').strip()
+                if '-----BEGIN CERTIFICATE-----' in texto:
+                    # Extraer el bloque base64 del PEM
+                    lineas = texto.splitlines()
+                    b64_lineas = [l for l in lineas if not l.startswith('-----')]
+                    certificado_b64 = ''.join(b64_lineas).strip()
+                else:
+                    # Asumir que es DER binario → convertir a base64
+                    certificado_b64 = b64lib.b64encode(contenido).decode('utf-8')
+            except Exception as e:
+                return Response({'error': f'No se pudo procesar el archivo: {e}'}, status=400)
+
+        # Opción 2: base64 en el body
+        if not certificado_b64:
+            cert_raw = request.data.get('certificado_base64', '').strip()
+            if not cert_raw:
+                return Response({'error': 'Enviá el certificado como archivo (.crt/.pem) o en base64.'}, status=400)
+            # Limpiar el PEM si lo pegaron completo
+            if '-----BEGIN CERTIFICATE-----' in cert_raw:
+                lineas = cert_raw.splitlines()
+                b64_lineas = [l for l in lineas if not l.startswith('-----')]
+                certificado_b64 = ''.join(b64_lineas).strip()
+            else:
+                certificado_b64 = cert_raw
+
+        # Validar que sea base64 válido y decodificable
+        certificado_b64_clean = re.sub(r'\s+', '', certificado_b64)
+        if not re.match(r'^[A-Za-z0-9+/=]+$', certificado_b64_clean):
+            return Response({'error': 'El certificado no parece ser base64 válido.'}, status=400)
+        try:
+            decoded = b64lib.b64decode(certificado_b64_clean)
+            if len(decoded) < 100:
+                return Response({'error': 'El certificado parece demasiado corto. Verificá que sea correcto.'}, status=400)
+        except Exception:
+            return Response({'error': 'No se pudo decodificar el base64 del certificado.'}, status=400)
+
+        tienda.certificado_afip = certificado_b64_clean
+        tienda.save(update_fields=['certificado_afip'])
+        logger.info(f"Certificado AFIP cargado para tienda {tienda.id} ({len(decoded)} bytes)")
+
+        return Response({'success': True, 'message': 'Certificado guardado correctamente.'})
+
     @action(detail=True, methods=['get'], url_path='mercadolibre/status')
     def ml_status(self, request, pk=None):
         """Verifica el estado de la conexión con Mercado Libre"""
@@ -899,9 +1073,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     host = request.get_host()
                     redirect_uri = f"{scheme}://{host}/api/tiendas/mercadolibre/callback/"
         
-        # Usar el tienda_id como state para poder identificarlo en el callback
-        state = str(pk)
-        
+        # Generar state aleatorio y asociarlo al tienda_id en cache (10 min)
+        import uuid
+        state = f"{pk}:{uuid.uuid4().hex}"
+        cache.set(f"ml_oauth_state_{state}", str(pk), timeout=600)
+
         try:
             auth_url = ml_service.get_authorization_url(redirect_uri, state=state)
             return Response({'auth_url': auth_url})
@@ -992,25 +1168,22 @@ class TiendaViewSet(viewsets.ModelViewSet):
         
         # Manejar GET (redirección desde Mercado Libre con code en query params)
         if request.method == 'GET':
-            state = request.query_params.get('state')  # El state puede contener tienda_id
-            
-            # PRIORIDAD 1: Si viene state, extraer tienda_id de ahí (es lo más confiable)
+            state = request.query_params.get('state')
+
+            # PRIORIDAD 1: Resolver tienda_id desde state validado en cache
             if state:
-                try:
-                    # El state puede venir en formato "tienda_id:numero" (ej: "uuid:1")
-                    # Extraer solo la parte del UUID (antes del primer :)
-                    if ':' in state:
-                        # Dividir por ':' y tomar la primera parte (el UUID)
-                        tienda_id = state.split(':')[0]
-                    elif len(state) > 30:  # Probablemente es un UUID sin separador
-                        tienda_id = state
-                    
-                    if tienda_id:
+                resolved = _resolve_tienda_id_from_state(state)
+                if resolved:
+                    tienda_id = resolved
+                    try:
                         tienda = Tienda.objects.get(id=tienda_id)
-                        logger.info(f"Tienda identificada desde state: {tienda_id}")
-                except (ValueError, Tienda.DoesNotExist) as e:
-                    logger.warning(f"No se pudo extraer tienda_id del state '{state}': {e}")
-        
+                        logger.info(f"Tienda identificada desde state validado: {tienda_id}")
+                        cache.delete(f"ml_oauth_state_{state}")
+                    except Tienda.DoesNotExist:
+                        logger.warning(f"State válido pero tienda no encontrada: {tienda_id}")
+                else:
+                    logger.warning(f"State inválido o expirado: '{state}'")
+
         # Si aún no tenemos tienda, intentar otras formas
         if not tienda:
             if tienda_id:
@@ -1027,7 +1200,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 tiendas_ml = Tienda.objects.filter(
                     plataforma_ecommerce='MERCADO_LIBRE'
                 ).exclude(ml_app_id__isnull=True).exclude(ml_app_id='')
-                
+
                 if tiendas_ml.count() == 1:
                     tienda = tiendas_ml.first()
                     logger.info(f"Tienda identificada automáticamente (única configurada): {tienda.id}")
@@ -1041,7 +1214,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         {'error': 'No se pudo determinar la tienda. Múltiples tiendas configuradas. Proporciona tienda_id en el request o usa el parámetro state.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-        
+
         # Si llegamos aquí sin tienda, es un error
         if not tienda:
             return Response(
@@ -2883,6 +3056,45 @@ class CompraViewSet(viewsets.ModelViewSet):
         serializer.save(usuario=self.request.user)
 
     # FIX DE CONEXIÓN
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
+
+
+class CompraStockViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CompraStockCreateSerializer
+        return CompraStockSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = CompraStock.objects.all()
+        tienda_slug = self.request.query_params.get('tienda_slug')
+
+        if user.is_superuser:
+            if tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+        elif user.tienda:
+            queryset = queryset.filter(tienda=user.tienda)
+        else:
+            return CompraStock.objects.none()
+
+        # Filtros opcionales por fecha
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            queryset = queryset.filter(fecha_compra__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(fecha_compra__lte=date_to)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(usuario=self.request.user)
+
     def list(self, request, *args, **kwargs):
         close_old_connections()
         return super().list(request, *args, **kwargs)

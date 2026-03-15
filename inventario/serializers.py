@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -834,20 +834,63 @@ class CompraCreateSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
+        from datetime import datetime as dt, time as dt_time
         tienda_slug = validated_data.pop('tienda_slug')
-        fecha_compra_data = validated_data.pop('fecha_compra') 
+        fecha_compra_data = validated_data.pop('fecha_compra')
         tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
-        
+
+        # Convertir date a datetime timezone-aware para evitar el RuntimeWarning
+        fecha_compra_aware = timezone.make_aware(
+            dt.combine(fecha_compra_data, dt_time(12, 0, 0))
+        )
+
         compra_fields = {
             'total': validated_data.pop('total'),
             'proveedor': validated_data.pop('proveedor', None),
             'tienda': tienda_obj,
             'usuario': self.context['request'].user,
-            'fecha_compra': fecha_compra_data 
+            'fecha_compra': fecha_compra_aware,
         }
-        
+
         compra = Compra.objects.create(**compra_fields)
         return compra
+
+
+class CompraStockSerializer(serializers.ModelSerializer):
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+
+    class Meta:
+        model = CompraStock
+        fields = [
+            'id', 'tienda', 'tienda_nombre', 'fecha_compra', 'proveedor',
+            'monto', 'recibido', 'notas', 'usuario', 'usuario_username',
+            'fecha_creacion', 'fecha_actualizacion'
+        ]
+        read_only_fields = ['id', 'usuario', 'tienda', 'fecha_creacion', 'fecha_actualizacion']
+
+
+class CompraStockCreateSerializer(serializers.ModelSerializer):
+    tienda_slug = serializers.CharField(write_only=True)
+
+    class Meta:
+        model = CompraStock
+        fields = ['tienda_slug', 'fecha_compra', 'proveedor', 'monto', 'recibido', 'notas']
+        extra_kwargs = {
+            'monto': {'required': True},
+            'proveedor': {'required': False},
+            'notas': {'required': False},
+            'recibido': {'required': False},
+        }
+
+    def create(self, validated_data):
+        tienda_slug = validated_data.pop('tienda_slug')
+        tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        return CompraStock.objects.create(
+            tienda=tienda_obj,
+            **validated_data
+        )
+
 
 # Serializers para Cambio/Devolución (solo si los modelos existen)
 if CambioDevolucion is not None and DetalleCambioDevolucion is not None:

@@ -708,10 +708,38 @@ class FCMToken(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.device_info or 'Dispositivo desconocido'}"
 
+
+class CompraStock(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='compras_stock')
+    fecha_compra = models.DateField(default=timezone.now)
+    proveedor = models.CharField(max_length=255, blank=True)
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    recibido = models.BooleanField(default=False)
+    notas = models.TextField(blank=True)
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='compras_stock_registradas'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-fecha_compra', '-fecha_creacion']
+        verbose_name = "Compra de Stock"
+        verbose_name_plural = "Compras de Stock"
+
+    def __str__(self):
+        return f"{self.tienda.nombre} - {self.proveedor or 'Sin proveedor'} - ${self.monto}"
+
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
-    'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago', 
+    'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'CategoriaMercadoLibre',
-    'Venta', 'DetalleVenta', 'Compra', 
+    'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken'
 ]
