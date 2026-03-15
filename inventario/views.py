@@ -3063,6 +3063,7 @@ class CompraViewSet(viewsets.ModelViewSet):
 
 class CompraStockViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
 
     def get_serializer_class(self):
         if self.action == 'create':
