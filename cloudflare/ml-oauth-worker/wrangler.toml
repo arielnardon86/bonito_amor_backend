@@ -2,6 +2,7 @@ name = "ml-oauth-proxy"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
-# Secrets (configurar con: wrangler secret put ML_OAUTH_BACKEND_URL)
-# - ML_OAUTH_BACKEND_URL
-# - ML_OAUTH_WORKER_SECRET
+# Secrets (configurar con: wrangler secret put <NOMBRE>)
+# - ML_OAUTH_BACKEND_URL      : URL del backend (ej. https://bonito-amor-backend.onrender.com)
+# - ML_OAUTH_WORKER_SECRET    : clave compartida con el backend
+# - ML_OAUTH_FRONTEND_ORIGIN  : origen del frontend para postMessage (ej. https://bonitoamorstock.onrender.com)

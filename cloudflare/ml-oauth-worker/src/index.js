@@ -37,8 +37,12 @@ async function handleCallback(request, env) {
   const secret = env.ML_OAUTH_WORKER_SECRET;
 
   if (!backend || !secret) {
-    return htmlResponse(500, 'Worker no configurado: faltan ML_OAUTH_BACKEND_URL o ML_OAUTH_WORKER_SECRET');
+    console.error('[ml-oauth-worker] Faltan variables de entorno ML_OAUTH_BACKEND_URL o ML_OAUTH_WORKER_SECRET');
+    return htmlResponse(500, 'El worker no está configurado correctamente. Contactá al administrador.');
   }
+
+  // Origen permitido para postMessage (dominio del frontend)
+  const frontendOrigin = env.ML_OAUTH_FRONTEND_ORIGIN || backend;
 
   // 1. Obtener credenciales del backend
   const credRes = await fetch(`${backend}/api/internal/ml-oauth-credentials/?state=${encodeURIComponent(state)}`, {
@@ -47,7 +51,8 @@ async function handleCallback(request, env) {
 
   if (!credRes.ok) {
     const err = await credRes.text();
-    return htmlResponse(credRes.status, `Error al obtener credenciales: ${err}`);
+    console.error(`[ml-oauth-worker] Error obteniendo credenciales (${credRes.status}): ${err}`);
+    return htmlResponse(credRes.status, 'No se pudieron obtener las credenciales. Revisá la configuración de la tienda e intentá de nuevo.');
   }
 
   const cred = await credRes.json();
@@ -78,7 +83,8 @@ async function handleCallback(request, env) {
 
   if (!tokenRes.ok) {
     const errText = await tokenRes.text();
-    return htmlResponse(400, `Error de Mercado Libre (${tokenRes.status}): ${errText.slice(0, 300)}`);
+    console.error(`[ml-oauth-worker] Error exchange token ML (${tokenRes.status}): ${errText}`);
+    return htmlResponse(400, 'Mercado Libre rechazó la solicitud de autenticación. El código puede haber expirado. Intentá conectar de nuevo.');
   }
 
   const tokenData = await tokenRes.json();
@@ -101,7 +107,8 @@ async function handleCallback(request, env) {
 
   if (!saveRes.ok) {
     const err = await saveRes.text();
-    return htmlResponse(500, `Error al guardar tokens: ${err}`);
+    console.error(`[ml-oauth-worker] Error guardando tokens (${saveRes.status}): ${err}`);
+    return htmlResponse(500, 'La autenticación con Mercado Libre fue exitosa pero no se pudo guardar. Contactá al soporte.');
   }
 
   const saveData = await saveRes.json();
@@ -111,6 +118,7 @@ async function handleCallback(request, env) {
     tienda_id: saveData.tienda_id,
     nombre: saveData.nombre || 'Tienda',
     success: true,
+    frontendOrigin,
   });
 }
 
@@ -128,7 +136,7 @@ if (window.opener) {
     type: "ML_OAUTH_SUCCESS",
     tienda_id: "${successData.tienda_id}",
     message: "Autenticación exitosa"
-  }, "*");
+  }, "${successData.frontendOrigin}");
   setTimeout(function(){ window.close(); }, 2000);
 } else {
   setTimeout(function(){ window.close(); }, 3000);
