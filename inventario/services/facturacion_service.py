@@ -1421,6 +1421,9 @@ class FacturacionService:
 
             tipo_doc_cliente = factura.cliente_tipo_documento or '99'
             nro_doc_cliente  = (factura.cliente_cuit or '').replace('-', '') or '0'
+            # AFIP regla: Factura C < $10.000.000 con DocTipo=99 → DocNro debe ser 0
+            if str(tipo_doc_cliente) == '99' and total_nc < Decimal('10000000'):
+                nro_doc_cliente = '0'
 
             fecha_cbte = datetime.now()
 
