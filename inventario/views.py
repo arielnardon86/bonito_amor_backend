@@ -4036,13 +4036,14 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             nc = NotaCredito.objects.create(**campos_base, estado='ERROR', error_mensaje=error)
             return Response({'error': error, 'nc_id': str(nc.id)}, status=status.HTTP_400_BAD_REQUEST)
 
+        campos_base['punto_venta']      = datos_nc.get('punto_venta',      factura.tienda.punto_venta)
+        campos_base['tipo_comprobante'] = datos_nc.get('tipo_comprobante', factura.tipo_comprobante)
+        campos_base['monto']            = datos_nc.get('monto',            monto)
+        campos_base['impuesto_iva']     = datos_nc.get('impuesto_iva',     Decimal('0.00'))
+
         nc = NotaCredito.objects.create(
             **campos_base,
             numero_comprobante=datos_nc.get('numero_comprobante'),
-            punto_venta=datos_nc.get('punto_venta', factura.tienda.punto_venta),
-            tipo_comprobante=datos_nc.get('tipo_comprobante', factura.tipo_comprobante),
-            monto=datos_nc.get('monto', monto),
-            impuesto_iva=datos_nc.get('impuesto_iva', Decimal('0.00')),
             estado='EMITIDA',
             cae=datos_nc.get('cae'),
             fecha_vencimiento_cae=datos_nc.get('fecha_vencimiento_cae'),
