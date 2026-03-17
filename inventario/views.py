@@ -3684,6 +3684,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         if fecha_hasta:
             queryset = queryset.filter(fecha_emision__date__lte=fecha_hasta)
 
+        venta_anulada = self.request.query_params.get('venta_anulada', None)
+        if venta_anulada is not None:
+            queryset = queryset.filter(venta__anulada=venta_anulada.lower() == 'true')
+
         return queryset
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
