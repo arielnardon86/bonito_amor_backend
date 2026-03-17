@@ -3644,16 +3644,17 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet para consultar facturas emitidas"""
     serializer_class = FacturaSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['numero_comprobante', 'cliente_nombre', 'cliente_cuit', 'cae']
     ordering_fields = ['fecha_emision', 'numero_comprobante', 'total']
     ordering = ['-fecha_emision']
+
     def get_queryset(self):
         user = self.request.user
-        
+
         queryset = Factura.objects.select_related('venta', 'tienda').all()
-        
-        # Filtrar por tienda si no es superusuario
+
         if user.is_superuser:
             tienda_id = self.request.query_params.get('tienda', None)
             if tienda_id:
@@ -3661,22 +3662,28 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         elif user.tienda:
             queryset = queryset.filter(tienda=user.tienda)
         else:
-            queryset = Factura.objects.none()
-        
-        # Filtros opcionales
+            return Factura.objects.none()
+
         estado = self.request.query_params.get('estado', None)
         if estado:
             queryset = queryset.filter(estado=estado)
-        
+
         tipo_comprobante = self.request.query_params.get('tipo_comprobante', None)
         if tipo_comprobante:
             queryset = queryset.filter(tipo_comprobante=tipo_comprobante)
-        
-        # Filtrar por venta (UUID)
+
         venta_id = self.request.query_params.get('venta', None)
         if venta_id:
             queryset = queryset.filter(venta_id=venta_id)
-        
+
+        fecha_desde = self.request.query_params.get('fecha_desde', None)
+        if fecha_desde:
+            queryset = queryset.filter(fecha_emision__date__gte=fecha_desde)
+
+        fecha_hasta = self.request.query_params.get('fecha_hasta', None)
+        if fecha_hasta:
+            queryset = queryset.filter(fecha_emision__date__lte=fecha_hasta)
+
         return queryset
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
