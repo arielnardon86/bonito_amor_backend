@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -740,6 +740,34 @@ class FacturaSerializer(serializers.ModelSerializer):
             'numero_comprobante_afip', 'estado', 'error_mensaje',
             'fecha_emision', 'fecha_actualizacion'
         ]
+
+class NotaCreditoSerializer(serializers.ModelSerializer):
+    numero_nc_completo = serializers.ReadOnlyField()
+    factura_numero     = serializers.CharField(source='factura_origen.numero_factura_completo', read_only=True)
+    tienda_nombre      = serializers.CharField(source='tienda.nombre', read_only=True)
+
+    class Meta:
+        model  = NotaCredito
+        fields = [
+            'id', 'factura_origen', 'factura_numero', 'tienda', 'tienda_nombre',
+            'numero_comprobante', 'punto_venta', 'tipo_comprobante', 'numero_nc_completo',
+            'motivo', 'monto', 'impuesto_iva',
+            'cliente_nombre', 'cliente_cuit',
+            'estado', 'sistema_facturacion',
+            'cae', 'fecha_vencimiento_cae', 'numero_comprobante_afip',
+            'error_mensaje', 'fecha_emision',
+        ]
+        read_only_fields = [
+            'id', 'numero_comprobante', 'cae', 'fecha_vencimiento_cae',
+            'numero_comprobante_afip', 'estado', 'error_mensaje', 'fecha_emision',
+        ]
+
+
+class EmitirNotaCreditoSerializer(serializers.Serializer):
+    """Datos necesarios para emitir una nota de crédito vinculada a una factura."""
+    monto  = serializers.DecimalField(max_digits=10, decimal_places=2)
+    motivo = serializers.CharField(max_length=500, required=False, allow_blank=True, default='')
+
 
 class EmitirFacturaSerializer(serializers.Serializer):
     """Serializer para emitir una factura desde una venta"""

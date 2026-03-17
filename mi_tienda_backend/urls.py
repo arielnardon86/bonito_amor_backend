@@ -6,7 +6,7 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
-    ArancelMetodoTiendaViewSet, FacturaViewSet
+    ArancelMetodoTiendaViewSet, FacturaViewSet, NotaCreditoViewSet
 )
 # Importación condicional de ArancelMercadoLibreViewSet y ArancelMercadoLibreProductoViewSet
 try:
@@ -56,7 +56,8 @@ elif ArancelMercadoLibreViewSet is not None:
     router.register(r'aranceles-ml', ArancelMercadoLibreViewSet, basename='aranceles-ml')
 else:
     print("⚠️ Warning: ViewSets ML no disponibles. Aplica la migración 0022_arancel_ml_producto.")
-router.register(r'facturas', FacturaViewSet, basename='facturas') # NUEVA RUTA
+router.register(r'facturas', FacturaViewSet, basename='facturas')
+router.register(r'notas-credito', NotaCreditoViewSet, basename='notas-credito')
 # Registrar CambioDevolucionViewSet solo si existe (migración aplicada)
 if CambioDevolucionViewSet is not None:
     router.register(r'cambios-devoluciones', CambioDevolucionViewSet, basename='cambios-devoluciones') # NUEVA RUTA

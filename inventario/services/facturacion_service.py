@@ -1081,10 +1081,444 @@ class FacturacionService:
                 tienda=self.tienda,
                 punto_venta=self.tienda.punto_venta
             ).order_by('-numero_comprobante').first()
-            
+
             if ultima_factura and ultima_factura.numero_comprobante:
                 return ultima_factura.numero_comprobante + 1
             return 1
         except:
             return None
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Notas de Crédito
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _setup_wsfev1_afip(self):
+        """
+        Autentica con WSAA y devuelve un WSFEv1 listo para usar.
+
+        Returns:
+            (wsfev1, cert_path, key_path, modo) en éxito.
+            Lanza RuntimeError con el mensaje de error si falla.
+            El llamador es responsable de eliminar cert_path y key_path.
+        """
+        import os
+        import tempfile
+        import hashlib
+        import time
+
+        cert_path = None
+        key_path = None
+
+        try:
+            if not self.tienda.cuit:
+                raise RuntimeError("CUIT no configurado para la tienda")
+            if not self.tienda.certificado_afip or not self.tienda.clave_privada_afip:
+                raise RuntimeError("Certificados AFIP no configurados")
+
+            # ── Decodificar certificados ──────────────────────────────────
+            try:
+                cert_b64 = self.tienda.certificado_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+                key_b64  = self.tienda.clave_privada_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+
+                for hdr in ('-----BEGINCERTIFICATE-----', '-----ENDCERTIFICATE-----',
+                            '-----BEGIN CERTIFICATE-----', '-----END CERTIFICATE-----'):
+                    cert_b64 = cert_b64.replace(hdr, '')
+                for hdr in ('-----BEGINPRIVATEKEY-----', '-----ENDPRIVATEKEY-----',
+                            '-----BEGIN PRIVATE KEY-----', '-----END PRIVATE KEY-----',
+                            '-----BEGINRSAPRIVATEKEY-----', '-----ENDRSAPRIVATEKEY-----',
+                            '-----BEGIN RSA PRIVATE KEY-----', '-----END RSA PRIVATE KEY-----'):
+                    key_b64 = key_b64.replace(hdr, '')
+
+                import re as _re
+                b64_pattern = _re.compile(r'^[A-Za-z0-9+/=]+$')
+                if not b64_pattern.match(cert_b64):
+                    raise RuntimeError("El certificado AFIP no parece estar en formato base64 válido.")
+                if not b64_pattern.match(key_b64):
+                    raise RuntimeError("La clave privada AFIP no parece estar en formato base64 válido.")
+
+                try:
+                    cert_data = base64.b64decode(cert_b64, validate=True)
+                    key_data  = base64.b64decode(key_b64,  validate=True)
+                except base64.binascii.Error as e:
+                    raise RuntimeError(f"Error al decodificar certificados base64: {e}")
+
+                if not cert_data:
+                    raise RuntimeError("El certificado decodificado está vacío.")
+                if not key_data:
+                    raise RuntimeError("La clave privada decodificada está vacía.")
+
+                # Convertir DER → PEM si es necesario
+                cert_str = cert_data.decode('utf-8', errors='ignore')
+                key_str  = key_data.decode('utf-8', errors='ignore')
+
+                if not cert_str.strip().startswith('-----BEGIN'):
+                    try:
+                        from cryptography import x509
+                        from cryptography.hazmat.backends import default_backend
+                        from cryptography.hazmat.primitives import serialization
+                        cert_obj  = x509.load_der_x509_certificate(cert_data, default_backend())
+                        cert_data = cert_obj.public_bytes(serialization.Encoding.PEM)
+                    except Exception:
+                        pass
+
+                if not key_str.strip().startswith('-----BEGIN'):
+                    try:
+                        from cryptography.hazmat.primitives import serialization
+                        from cryptography.hazmat.backends import default_backend
+                        key_obj  = serialization.load_der_private_key(key_data, password=None, backend=default_backend())
+                        key_data = key_obj.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.PKCS8,
+                            encryption_algorithm=serialization.NoEncryption(),
+                        )
+                    except Exception:
+                        pass
+
+            except RuntimeError:
+                raise
+            except UnicodeDecodeError as e:
+                raise RuntimeError(f"Certificados no están en formato base64 válido: {e}")
+            except Exception as e:
+                raise RuntimeError(f"Error al procesar certificados: {e}")
+
+            if isinstance(cert_data, str):
+                cert_data = cert_data.encode('utf-8')
+            if isinstance(key_data, str):
+                key_data = key_data.encode('utf-8')
+
+            # ── Archivos temporales ───────────────────────────────────────
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.crt') as f:
+                f.write(cert_data)
+                f.flush()
+                cert_path = f.name
+                os.chmod(cert_path, 0o600)
+
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.key') as f:
+                f.write(key_data)
+                f.flush()
+                key_path = f.name
+                os.chmod(key_path, 0o600)
+
+            modo = 'testing' if self.tienda.modo_test_afip else 'prod'
+
+            if not os.path.exists(cert_path) or os.path.getsize(cert_path) == 0:
+                raise RuntimeError("El archivo de certificado no se creó correctamente")
+            if not os.path.exists(key_path) or os.path.getsize(key_path) == 0:
+                raise RuntimeError("El archivo de clave privada no se creó correctamente")
+
+            wsaa_url = (
+                "https://wsaahomo.afip.gov.ar/ws/services/LoginCms" if modo == 'testing'
+                else "https://wsaa.afip.gov.ar/ws/services/LoginCms"
+            )
+
+            logger.info(f"=== Preparando WSFEv1 (NC) — modo={modo}, CUIT={self.tienda.cuit} ===")
+
+            # ── Limpiar cache corrupto de pyafipws ───────────────────────
+            try:
+                import pyafipws
+                pyafipws_cache = os.path.join(os.path.dirname(pyafipws.__file__), 'cache')
+                if os.path.exists(pyafipws_cache):
+                    url_hash = hashlib.md5(wsaa_url.encode()).hexdigest()
+                    cf = os.path.join(pyafipws_cache, f"{url_hash}.xml")
+                    if os.path.exists(cf):
+                        with open(cf, 'r', encoding='utf-8', errors='ignore') as fh:
+                            head = fh.read(200)
+                        if '<h1>' in head or '<html' in head.lower():
+                            os.remove(cf)
+            except Exception:
+                pass
+
+            # ── Cache compartido por CUIT ─────────────────────────────────
+            cuit_hash    = hashlib.md5(self.tienda.cuit.encode()).hexdigest()[:8]
+            shared_cache = os.path.join(tempfile.gettempdir(), f"pyafipws_cache_shared_{cuit_hash}")
+            os.makedirs(shared_cache, exist_ok=True)
+
+            def _ta_del_cache(cache_dir):
+                try:
+                    ta_files = sorted(
+                        [f for f in os.listdir(cache_dir) if f.startswith('TA-') and f.endswith('.xml')],
+                        key=lambda f: os.path.getmtime(os.path.join(cache_dir, f)),
+                        reverse=True,
+                    )
+                    for ta_file in ta_files:
+                        try:
+                            with open(os.path.join(cache_dir, ta_file), 'r', encoding='utf-8') as fh:
+                                content = fh.read()
+                            if not content.strip():
+                                continue
+                            if '<wsdl:' in content or 'targetNamespace="https://wsaahomo' in content:
+                                continue
+                            if '<loginTicketResponse' in content or '<credentials' in content:
+                                return content
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+                return None
+
+            # ── WSAA auth con reintentos ──────────────────────────────────
+            wsaa = WSAA()
+            ta   = None
+
+            for intento in range(3):
+                try:
+                    ta = wsaa.Autenticar("wsfe", cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
+                    if ta:
+                        break
+                    raise Exception(wsaa.Excepcion or "Error desconocido al autenticar")
+                except Exception as auth_err:
+                    err_str = str(auth_err)
+                    if 'alreadyAuthenticated' in err_str or 'ya posee un TA valido' in err_str.lower():
+                        cached = _ta_del_cache(shared_cache)
+                        if cached:
+                            parts = cached.split('<?xml')
+                            ta = ('<?xml' + parts[1]) if len(parts) >= 2 else cached
+                            break
+                        if intento < 2:
+                            time.sleep((intento + 1) * 2)
+                            wsaa = WSAA()
+                        else:
+                            raise RuntimeError(f"Error temporal de autenticación AFIP: {err_str}")
+                    else:
+                        raise RuntimeError(f"Error al autenticar con AFIP: {err_str}")
+
+            if not ta:
+                raise RuntimeError("No se obtuvo ticket de acceso de AFIP")
+
+            # Limpiar TA
+            ta_clean = ta.strip()
+            m = re.search(r'(<\?xml.*?</loginTicketResponse>)', ta_clean, re.DOTALL)
+            if m:
+                ta_clean = m.group(1)
+            else:
+                m = re.search(r'(<\?xml.*?</ticket>)', ta_clean, re.DOTALL)
+                if m:
+                    ta_clean = m.group(1)
+
+            # ── WSFEv1 connect ────────────────────────────────────────────
+            wsfev1 = WSFEv1()
+            wsfev1.LanzarExcepciones = True
+
+            wsfev1_url = (
+                "https://wswhomo.afip.gov.ar/wsfev1/service.asmx" if modo == 'testing'
+                else "https://servicios1.afip.gov.ar/wsfev1/service.asmx"
+            )
+
+            try:
+                wsfev1.Conectar(cache="", wsdl=wsfev1_url)
+            except Exception as e:
+                raise RuntimeError(f"Error al conectar con WSFEv1: {e}")
+
+            if not (ta_clean.strip().startswith('<?xml') or ta_clean.strip().startswith('<')):
+                raise RuntimeError("El ticket de acceso no parece ser XML válido")
+
+            try:
+                wsfev1.SetTicketAcceso(ta_clean)
+            except Exception as e:
+                raise RuntimeError(f"Error al establecer ticket de acceso: {e}")
+
+            wsfev1.Cuit = self.tienda.cuit.replace('-', '')
+            logger.info(f"✅ WSFEv1 listo — CUIT={wsfev1.Cuit}")
+
+            return wsfev1, cert_path, key_path, modo
+
+        except RuntimeError:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+            raise
+        except Exception as e:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+            raise RuntimeError(f"Error al preparar conexión AFIP: {e}")
+
+    def emitir_nota_credito(self, factura, monto: Decimal, motivo: str = '') -> Tuple[bool, Dict, Optional[str]]:
+        """
+        Emite una Nota de Crédito electrónica vinculada a una factura existente.
+
+        Args:
+            factura: Instancia del modelo Factura (estado EMITIDA).
+            monto:   Monto total de la NC (≤ total de la factura original).
+            motivo:  Motivo descriptivo.
+
+        Returns:
+            (éxito: bool, datos_nc: dict, error: str|None)
+        """
+        if self.sistema == 'AFIP':
+            return self._emitir_nota_credito_afip(factura, monto, motivo)
+        elif self.sistema == 'ARCA':
+            return self._emitir_nota_credito_arca(factura, monto, motivo)
+        return False, {}, "Sistema de facturación no configurado para esta tienda"
+
+    def _emitir_nota_credito_afip(self, factura, monto: Decimal, motivo: str = '') -> Tuple[bool, Dict, Optional[str]]:
+        """Emite NC a través de AFIP WSFEv1."""
+        if not PYAFIPWS_AVAILABLE:
+            return False, {}, "pyafipws no está instalado. Instala con: pip install pyafipws"
+
+        import os
+
+        cert_path = None
+        key_path  = None
+
+        try:
+            wsfev1, cert_path, key_path, modo = self._setup_wsfev1_afip()
+        except RuntimeError as e:
+            return False, {}, str(e)
+
+        try:
+            # Mapeo tipo factura → tipo NC (CBT AFIP)
+            # Factura A(1)→NC A(3), B(6)→NC B(8), C(11)→NC C(13)
+            tipo_nc_map       = {'A': 3,  'B': 8,  'C': 13}
+            tipo_original_map = {'A': 1,  'B': 6,  'C': 11}
+            tipo_nc_letra_map = {3: 'A', 8: 'B', 13: 'C'}
+
+            tipo_nc       = tipo_nc_map.get(factura.tipo_comprobante, 8)
+            tipo_original = tipo_original_map.get(factura.tipo_comprobante, 6)
+            punto_venta   = self.tienda.punto_venta
+
+            logger.info(f"Emitiendo NC {tipo_nc_letra_map[tipo_nc]} (tipo {tipo_nc}) vinculada a Factura "
+                        f"{factura.tipo_comprobante} #{factura.numero_factura_completo}")
+
+            # Próximo número de NC del mismo tipo
+            try:
+                ultimo_nc = wsfev1.CompUltimoAutorizado(tipo_nc, punto_venta)
+                if ultimo_nc is None:
+                    ultimo_nc = 0
+                elif isinstance(ultimo_nc, str):
+                    try:
+                        ultimo_nc = int(ultimo_nc)
+                    except (ValueError, TypeError):
+                        ultimo_nc = 0
+                else:
+                    ultimo_nc = int(ultimo_nc)
+                nuevo_numero_nc = ultimo_nc + 1
+                logger.info(f"Último NC autorizado: {ultimo_nc} → Nuevo: {nuevo_numero_nc}")
+            except Exception as e:
+                return False, {}, f"Error al obtener último número de NC: {e}"
+
+            # Cálculo de IVA
+            monto_nc = monto.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            if tipo_nc == 13:  # NC C — sin IVA
+                subtotal_nc      = monto_nc
+                impuesto_iva_nc  = Decimal('0.00')
+                total_nc         = monto_nc
+            else:              # NC A o B — el monto ya incluye IVA 21%
+                subtotal_nc     = (monto_nc / Decimal('1.21')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                impuesto_iva_nc = (monto_nc - subtotal_nc).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                total_nc        = monto_nc
+
+            # Condición IVA del receptor
+            condicion_iva_codigo_map = {'RI': 1, 'EX': 4, 'CF': 5, 'MT': 6, 'NR': 0}
+            condicion_iva_codigo = condicion_iva_codigo_map.get(factura.cliente_condicion_iva, 5)
+
+            tipo_doc_cliente = factura.cliente_tipo_documento or '99'
+            nro_doc_cliente  = (factura.cliente_cuit or '').replace('-', '') or '0'
+
+            fecha_cbte = datetime.now()
+
+            logger.info(f"NC: tipo={tipo_nc}, nro={nuevo_numero_nc}, total={total_nc}, neto={subtotal_nc}, iva={impuesto_iva_nc}")
+
+            # Crear comprobante NC
+            wsfev1.CrearFactura(
+                concepto=1,
+                tipo_doc=tipo_doc_cliente,
+                nro_doc=nro_doc_cliente,
+                tipo_cbte=tipo_nc,
+                punto_vta=punto_venta,
+                cbt_desde=nuevo_numero_nc,
+                cbt_hasta=nuevo_numero_nc,
+                imp_total=float(total_nc),
+                imp_tot_conc=0.0,
+                imp_neto=float(subtotal_nc),
+                imp_iva=float(impuesto_iva_nc),
+                imp_trib=0.0,
+                imp_op_ex=0.0,
+                fecha_cbte=fecha_cbte.strftime('%Y%m%d'),
+                moneda_id='PES',
+                moneda_ctz=1.0,
+                condicion_iva_receptor_id=condicion_iva_codigo,
+            )
+
+            # Asociar al comprobante original (OBLIGATORIO)
+            wsfev1.AgregarCmpAsoc(
+                tipo=tipo_original,
+                pto_vta=factura.punto_venta,
+                nro=factura.numero_comprobante,
+                cuit=self.tienda.cuit.replace('-', ''),
+            )
+
+            # IVA solo para NC A y B
+            if tipo_nc != 13 and float(subtotal_nc) > 0 and float(impuesto_iva_nc) > 0:
+                wsfev1.AgregarIva(iva_id=5, base_imp=float(subtotal_nc), importe=float(impuesto_iva_nc))
+
+            # Solicitar CAE
+            logger.info("Solicitando CAE para NC...")
+            try:
+                wsfev1.CAESolicitar()
+            except Exception as e:
+                error_msg = f"Error al solicitar CAE para NC: {e}"
+                if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
+                    error_msg += f" | {wsfev1.Excepcion}"
+                if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
+                    error_msg += f" | {wsfev1.Errores}"
+                return False, {}, error_msg
+
+            if wsfev1.Resultado == 'A':
+                cae           = str(wsfev1.CAE)
+                fecha_venc    = datetime.strptime(wsfev1.Vencimiento, '%Y%m%d').date()
+                tipo_nc_letra = tipo_nc_letra_map[tipo_nc]
+
+                logger.info(f"✅ NC emitida — tipo={tipo_nc_letra}, nro={nuevo_numero_nc}, CAE={cae}")
+
+                return True, {
+                    'tipo_comprobante':       tipo_nc_letra,
+                    'numero_comprobante':     nuevo_numero_nc,
+                    'punto_venta':            punto_venta,
+                    'cae':                    cae,
+                    'fecha_vencimiento_cae':  fecha_venc,
+                    'numero_comprobante_afip': wsfev1.CbteNro,
+                    'subtotal':               subtotal_nc,
+                    'impuesto_iva':           impuesto_iva_nc,
+                    'monto':                  total_nc,
+                    'respuesta_bruta': json.dumps({
+                        'resultado':     wsfev1.Resultado,
+                        'cae':           cae,
+                        'observaciones': wsfev1.Obs or [],
+                    }),
+                }, None
+            else:
+                detalles = []
+                if hasattr(wsfev1, 'Obs') and wsfev1.Obs:
+                    detalles.append(f"Obs: {wsfev1.Obs}")
+                if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
+                    detalles.append(f"Excepción: {wsfev1.Excepcion}")
+                if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
+                    detalles.append(f"Errores: {wsfev1.Errores}")
+                error_msg = "AFIP rechazó la nota de crédito"
+                if detalles:
+                    error_msg += f": {' | '.join(str(d) for d in detalles)}"
+                return False, {}, error_msg
+
+        except Exception as e:
+            logger.error(f"Error al emitir NC AFIP: {e}", exc_info=True)
+            return False, {}, f"Error al emitir nota de crédito: {e}"
+        finally:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+
+    def _emitir_nota_credito_arca(self, factura, monto: Decimal, motivo: str = '') -> Tuple[bool, Dict, Optional[str]]:
+        """Stub ARCA — no implementado aún."""
+        return False, {}, "Notas de crédito vía ARCA no están implementadas aún."
 

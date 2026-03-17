@@ -550,6 +550,67 @@ class Factura(models.Model):
             return f"{self.punto_venta:04d}-{self.numero_comprobante:08d}"
         return f"{self.punto_venta:04d}-PENDIENTE"
 
+# Modelo de Nota de Crédito Electrónica
+class NotaCredito(models.Model):
+    TIPO_NC_CHOICES = [
+        ('A', 'Nota de Crédito A (Responsable Inscripto)'),
+        ('B', 'Nota de Crédito B (Consumidor Final)'),
+        ('C', 'Nota de Crédito C (Exento/Monotributo)'),
+    ]
+
+    ESTADO_CHOICES = [
+        ('PENDIENTE', 'Pendiente'),
+        ('EMITIDA', 'Emitida'),
+        ('ERROR', 'Error'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    factura_origen = models.ForeignKey(
+        'Factura', on_delete=models.CASCADE, related_name='notas_credito',
+        help_text="Factura electrónica original a la que se vincula esta nota de crédito"
+    )
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='notas_credito')
+
+    # Números de comprobante
+    numero_comprobante = models.IntegerField(blank=True, null=True)
+    punto_venta = models.IntegerField()
+    tipo_comprobante = models.CharField(max_length=1, choices=TIPO_NC_CHOICES, default='B')
+
+    # Motivo y monto
+    motivo = models.TextField(blank=True, null=True, help_text="Motivo de la nota de crédito")
+    monto = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monto total de la nota de crédito (incluye IVA si aplica)")
+    impuesto_iva = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    # Datos del cliente (heredados de la factura original)
+    cliente_nombre = models.CharField(max_length=255)
+    cliente_cuit = models.CharField(max_length=13, blank=True, null=True)
+
+    # Estado y respuesta AFIP/ARCA
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
+    sistema_facturacion = models.CharField(max_length=10, choices=Tienda.FACTURACION_CHOICES)
+    cae = models.CharField(max_length=14, blank=True, null=True)
+    fecha_vencimiento_cae = models.DateField(blank=True, null=True)
+    numero_comprobante_afip = models.BigIntegerField(blank=True, null=True)
+    respuesta_bruta = models.TextField(blank=True, null=True)
+    error_mensaje = models.TextField(blank=True, null=True)
+
+    fecha_emision = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Nota de Crédito"
+        verbose_name_plural = "Notas de Crédito"
+        ordering = ['-fecha_emision']
+
+    def __str__(self):
+        return f"NC {self.tipo_comprobante} {self.punto_venta:04d}-{self.numero_comprobante or 'PEND'} - ${self.monto}"
+
+    @property
+    def numero_nc_completo(self):
+        if self.numero_comprobante:
+            return f"{self.punto_venta:04d}-{self.numero_comprobante:08d}"
+        return f"{self.punto_venta:04d}-PENDIENTE"
+
+
 # Modelo de Cambio/Devolución
 class CambioDevolucion(models.Model):
     TIPO_CHOICES = [

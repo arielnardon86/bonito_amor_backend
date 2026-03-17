@@ -43,7 +43,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -114,6 +114,7 @@ from .serializers import (
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
     CompraSerializer, CompraCreateSerializer, CompraStockSerializer, CompraStockCreateSerializer, ArancelMetodoTiendaSerializer,
     FacturaSerializer, EmitirFacturaSerializer,
+    NotaCreditoSerializer, EmitirNotaCreditoSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer
 )
@@ -3967,6 +3968,113 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="factura_{factura.punto_venta:04d}-{factura.numero_comprobante:08d}.pdf"'
         
         return response
+
+    @action(detail=True, methods=['post'], url_path='emitir_nota_credito')
+    def emitir_nota_credito(self, request, pk=None):
+        """Emite una Nota de Crédito electrónica vinculada a esta factura."""
+        factura = self.get_object()
+        user    = request.user
+
+        if not user.is_superuser and user.tienda != factura.tienda:
+            return Response({'error': 'No tienes permiso para emitir NC de esta tienda.'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        if factura.estado != 'EMITIDA':
+            return Response({'error': 'Solo se pueden emitir notas de crédito para facturas en estado EMITIDA.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        if factura.tienda.tipo_facturacion == 'NINGUNA':
+            return Response({'error': 'La tienda no tiene configurado un sistema de facturación.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = EmitirNotaCreditoSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'error': 'Datos inválidos', 'detalles': serializer.errors},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        monto  = serializer.validated_data['monto']
+        motivo = serializer.validated_data.get('motivo', '')
+
+        if monto <= 0:
+            return Response({'error': 'El monto debe ser mayor a cero.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        if monto > factura.total:
+            return Response(
+                {'error': f'El monto (${monto}) no puede superar el total de la factura (${factura.total}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        facturacion_service = FacturacionService(factura.tienda)
+        exito, datos_nc, error = facturacion_service.emitir_nota_credito(factura, monto, motivo)
+
+        campos_base = dict(
+            factura_origen=factura,
+            tienda=factura.tienda,
+            punto_venta=factura.tienda.punto_venta,
+            tipo_comprobante=factura.tipo_comprobante,
+            motivo=motivo,
+            monto=monto,
+            impuesto_iva=Decimal('0.00'),
+            cliente_nombre=factura.cliente_nombre,
+            cliente_cuit=factura.cliente_cuit,
+            sistema_facturacion=factura.tienda.tipo_facturacion,
+        )
+
+        if not exito:
+            nc = NotaCredito.objects.create(**campos_base, estado='ERROR', error_mensaje=error)
+            return Response({'error': error, 'nc_id': str(nc.id)}, status=status.HTTP_400_BAD_REQUEST)
+
+        nc = NotaCredito.objects.create(
+            **campos_base,
+            numero_comprobante=datos_nc.get('numero_comprobante'),
+            punto_venta=datos_nc.get('punto_venta', factura.tienda.punto_venta),
+            tipo_comprobante=datos_nc.get('tipo_comprobante', factura.tipo_comprobante),
+            monto=datos_nc.get('monto', monto),
+            impuesto_iva=datos_nc.get('impuesto_iva', Decimal('0.00')),
+            estado='EMITIDA',
+            cae=datos_nc.get('cae'),
+            fecha_vencimiento_cae=datos_nc.get('fecha_vencimiento_cae'),
+            numero_comprobante_afip=datos_nc.get('numero_comprobante_afip'),
+            respuesta_bruta=datos_nc.get('respuesta_bruta'),
+        )
+
+        return Response(
+            {'mensaje': 'Nota de crédito emitida exitosamente', 'nota_credito': NotaCreditoSerializer(nc).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class NotaCreditoViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet para consultar notas de crédito emitidas."""
+    serializer_class    = NotaCreditoSerializer
+    permission_classes  = [permissions.IsAuthenticated]
+    pagination_class    = None
+    ordering            = ['-fecha_emision']
+
+    def get_queryset(self):
+        user     = self.request.user
+        queryset = NotaCredito.objects.select_related('factura_origen', 'tienda').all()
+
+        if user.is_superuser:
+            tienda_id = self.request.query_params.get('tienda')
+            if tienda_id:
+                queryset = queryset.filter(tienda_id=tienda_id)
+        elif user.tienda:
+            queryset = queryset.filter(tienda=user.tienda)
+        else:
+            return NotaCredito.objects.none()
+
+        factura_id = self.request.query_params.get('factura')
+        if factura_id:
+            queryset = queryset.filter(factura_origen_id=factura_id)
+
+        estado = self.request.query_params.get('estado')
+        if estado:
+            queryset = queryset.filter(estado=estado)
+
+        return queryset
+
 
 # Siempre definir CambioDevolucionViewSet, pero hacer que verifique los modelos dinámicamente
 # Intentar obtener los modelos dinámicamente - puede que Django no los haya cargado todavía en este punto
