@@ -3659,6 +3659,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             tienda_id = self.request.query_params.get('tienda', None)
             if tienda_id:
                 queryset = queryset.filter(tienda_id=tienda_id)
+            else:
+                tienda_nombre = self.request.query_params.get('tienda_nombre')
+                if tienda_nombre:
+                    queryset = queryset.filter(tienda__nombre=tienda_nombre)
         elif user.tienda:
             queryset = queryset.filter(tienda=user.tienda)
         else:
@@ -4072,6 +4076,10 @@ class NotaCreditoViewSet(viewsets.ReadOnlyModelViewSet):
             tienda_id = self.request.query_params.get('tienda')
             if tienda_id:
                 queryset = queryset.filter(tienda_id=tienda_id)
+            else:
+                tienda_nombre = self.request.query_params.get('tienda_nombre')
+                if tienda_nombre:
+                    queryset = queryset.filter(tienda__nombre=tienda_nombre)
         elif user.tienda:
             queryset = queryset.filter(tienda=user.tienda)
         else:
