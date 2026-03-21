@@ -122,6 +122,29 @@ class TiendaNubeService:
         """Obtiene los detalles de una orden."""
         return self._get(f"orders/{order_id}")
 
+    def _put(self, path, data):
+        resp = requests.put(self._url(path), headers=self._headers(), json=data, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_product(self, nombre, precio, stock, sku=None):
+        """
+        Crea un producto en Tienda Nube con una sola variante.
+        Devuelve (tn_product_id, tn_variant_id).
+        """
+        variant = {"price": str(precio), "stock": stock}
+        if sku:
+            variant["sku"] = sku
+        data = {
+            "name": {"es": nombre},
+            "variants": [variant],
+        }
+        result = self._post("products", data)
+        tn_product_id = str(result.get("id", ""))
+        variants = result.get("variants", [])
+        tn_variant_id = str(variants[0]["id"]) if variants else ""
+        return tn_product_id, tn_variant_id
+
     # ── Stock ────────────────────────────────────────────────────────────────
 
     def update_variant_stock(self, variant_id, quantity):

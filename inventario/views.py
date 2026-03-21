@@ -2430,6 +2430,50 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
         return Response({'status': 'ok', 'venta_id': str(venta.id)}, status=200)
 
+    # ── Exportar (publicar) productos de Total Stock → Tienda Nube ───────────
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/export-products', url_name='tn-export-products')
+    def tn_export_products(self, request, pk=None):
+        """
+        Publica en Tienda Nube los productos de Total Stock que aún no tienen
+        tn_variant_id. Si el producto ya tiene tn_variant_id se omite (ya existe).
+        """
+        tienda = self.get_object()
+        if not tienda.tn_access_token or not tienda.tn_store_id:
+            return Response({'error': 'Tienda Nube no conectada.'}, status=400)
+
+        from .services.tiendanube_service import TiendaNubeService
+        tn = TiendaNubeService(tienda)
+
+        productos = Producto.objects.filter(tienda=tienda).filter(
+            Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
+        )
+
+        if not productos.exists():
+            return Response({'mensaje': 'Todos los productos ya están publicados en Tienda Nube.'}, status=200)
+
+        publicados = 0
+        errores = []
+
+        for prod in productos:
+            try:
+                tn_product_id, tn_variant_id = tn.create_product(
+                    nombre=prod.nombre,
+                    precio=prod.precio,
+                    stock=prod.stock,
+                    sku=prod.codigo or None,
+                )
+                prod.tn_product_id   = tn_product_id
+                prod.tn_variant_id   = tn_variant_id
+                prod.tn_sincronizado = True
+                prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                publicados += 1
+            except Exception as e:
+                logger.error("Error publicando producto %s en TN: %s", prod.nombre, e)
+                errores.append(f"{prod.nombre}: {str(e)}")
+
+        return Response({'publicados': publicados, 'errores': errores}, status=200)
+
     # ── Importar productos desde Tienda Nube ─────────────────────────────────
 
     @action(detail=True, methods=['post'], url_path='tiendanube/import-products', url_name='tn-import-products')
