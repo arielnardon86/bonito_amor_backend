@@ -186,6 +186,7 @@ class NotificacionesService:
         )
         # Enviar a todos los tokens activos de los usuarios de la tienda
         tokens = list(tokens_qs)
+        logger.info("Enviando notificación de venta a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
 
         if not tokens:
             logger.info(
@@ -229,7 +230,25 @@ class NotificacionesService:
     def registrar_token(user, token, device_info=None):
         """
         Registra o actualiza un token FCM para un usuario.
+        Desactiva tokens anteriores del mismo usuario y categoría de dispositivo
+        para evitar notificaciones duplicadas cuando el token FCM rota.
         """
+        # Determinar categoría del dispositivo
+        categoria = None
+        if device_info:
+            if device_info.startswith('Móvil'):
+                categoria = 'Móvil'
+            elif device_info.startswith('Desktop'):
+                categoria = 'Desktop'
+
+        # Desactivar tokens anteriores del mismo usuario+categoría que ya no corresponden
+        if categoria:
+            FCMToken.objects.filter(
+                user=user,
+                activo=True,
+                device_info__startswith=categoria,
+            ).exclude(token=token).update(activo=False)
+
         fcm_token, created = FCMToken.objects.update_or_create(
             token=token,
             defaults={
