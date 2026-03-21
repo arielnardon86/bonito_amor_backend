@@ -2215,6 +2215,42 @@ class TiendaViewSet(viewsets.ModelViewSet):
         """True si la tienda tiene app_id y client_secret configurados."""
         return bool(getattr(tienda, 'tn_app_id', None) and getattr(tienda, 'tn_client_secret', None))
 
+    # ── Privacy webhooks (obligatorios para el panel de Partners de TN) ────────
+    # TN llama a estas URLs cuando: se desinstala la app, un cliente pide borrar datos,
+    # o pide una copia de sus datos. Deben devolver 200 OK.
+
+    @action(detail=False, methods=['post'],
+            url_path='tiendanube/privacy/store-redact',
+            url_name='tn-privacy-store-redact',
+            permission_classes=[permissions.AllowAny])
+    def tn_privacy_store_redact(self, request):
+        """Tienda Nube llama aquí cuando una tienda desinstala la app (GDPR store redact)."""
+        store_id = request.data.get('store_id') or request.data.get('user_id')
+        logger.info("TN privacy store_redact — store_id=%s", store_id)
+        return Response({'status': 'ok'}, status=200)
+
+    @action(detail=False, methods=['post'],
+            url_path='tiendanube/privacy/customers-redact',
+            url_name='tn-privacy-customers-redact',
+            permission_classes=[permissions.AllowAny])
+    def tn_privacy_customers_redact(self, request):
+        """Tienda Nube llama aquí cuando un cliente pide borrar sus datos."""
+        store_id   = request.data.get('store_id') or request.data.get('user_id')
+        customer   = request.data.get('customer', {})
+        logger.info("TN privacy customers_redact — store_id=%s customer=%s", store_id, customer.get('id'))
+        return Response({'status': 'ok'}, status=200)
+
+    @action(detail=False, methods=['post'],
+            url_path='tiendanube/privacy/customers-data-request',
+            url_name='tn-privacy-customers-data-request',
+            permission_classes=[permissions.AllowAny])
+    def tn_privacy_customers_data_request(self, request):
+        """Tienda Nube llama aquí cuando un cliente pide una copia de sus datos."""
+        store_id   = request.data.get('store_id') or request.data.get('user_id')
+        customer   = request.data.get('customer', {})
+        logger.info("TN privacy customers_data_request — store_id=%s customer=%s", store_id, customer.get('id'))
+        return Response({'status': 'ok'}, status=200)
+
     @action(detail=True, methods=['get'], url_path='tiendanube/status', url_name='tn-status')
     def tn_status(self, request, pk=None):
         """Estado de la integración con Tienda Nube."""
