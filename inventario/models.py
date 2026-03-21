@@ -144,7 +144,40 @@ class Tienda(models.Model):
         default=True,
         help_text="Si está activo, las ventas procesadas por el webhook de Mercado Libre se facturan automáticamente (AFIP/ARCA). Si está desactivado, solo se emite recibo (no se genera factura electrónica)."
     )
-    
+
+    # ── Tienda Nube ────────────────────────────────────────────────────────────
+    # Credenciales OAuth
+    tn_app_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="App ID de Tienda Nube (obtenido en el panel de partners)"
+    )
+    tn_client_secret = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Client Secret de Tienda Nube. No compartir públicamente."
+    )
+    tn_access_token = models.TextField(
+        blank=True, null=True,
+        help_text="Access Token de Tienda Nube (obtenido mediante OAuth). No expira."
+    )
+    tn_store_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de la tienda en Tienda Nube (user_id del token exchange)"
+    )
+    # ID del webhook registrado en TN (para poder borrarlo al desconectar)
+    tn_webhook_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID del webhook order/paid registrado en Tienda Nube"
+    )
+    # Configuración
+    tn_sync_habilitado = models.BooleanField(
+        default=False,
+        help_text="Habilitar procesamiento automático de ventas desde Tienda Nube"
+    )
+    tn_facturar_ventas = models.BooleanField(
+        default=True,
+        help_text="Facturar automáticamente ventas procesadas por webhook de Tienda Nube"
+    )
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -399,6 +432,8 @@ class Venta(models.Model):
     costo_envio_ml = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Costo total de envío (solo ventas Mercado Libre)")
     origen_mercadolibre = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Mercado Libre")
     ml_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Mercado Libre (para evitar duplicados)")
+    origen_tiendanube = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Tienda Nube")
+    tn_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Tienda Nube (para evitar duplicados)")
     
     # Campos para facturación
     facturada = models.BooleanField(default=False, help_text="Indica si esta venta ha sido facturada")
@@ -421,7 +456,12 @@ class Venta(models.Model):
                 fields=['tienda', 'ml_order_id'],
                 condition=models.Q(ml_order_id__isnull=False),
                 name='unique_ml_order_per_tienda'
-            )
+            ),
+            models.UniqueConstraint(
+                fields=['tienda', 'tn_order_id'],
+                condition=models.Q(tn_order_id__isnull=False),
+                name='unique_tn_order_per_tienda'
+            ),
         ]
 
     def __str__(self):

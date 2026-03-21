@@ -129,15 +129,18 @@ class TiendaSerializer(serializers.ModelSerializer):
                           'clave_privada_afip', 'modo_test_afip', 'api_key_arca', 'url_arca',
                           'condicion_iva_emisor']
         
-        # Campos de e-commerce (Mercado Libre)
+        # Campos de e-commerce (Mercado Libre + Tienda Nube)
         campos_ecommerce = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
                            'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
                            'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_user_id',
-                           'ml_token_expires_at']
-        
+                           'ml_token_expires_at',
+                           'tn_app_id', 'tn_store_id', 'tn_sync_habilitado', 'tn_facturar_ventas',
+                           'tn_webhook_id']
+
         # Campos sensibles que NO se deben exponer en el serializer
         campos_sensibles = ['ml_access_token', 'ml_refresh_token', 'certificado_afip',
-                           'clave_privada_afip', 'ml_client_secret']
+                           'clave_privada_afip', 'ml_client_secret',
+                           'tn_access_token', 'tn_client_secret']
         
         # Remover campos sensibles de la respuesta
         for campo in campos_sensibles:
@@ -161,8 +164,9 @@ class TiendaSerializer(serializers.ModelSerializer):
                 if campo == 'plataforma_ecommerce':
                     data[campo] = 'NINGUNA'
                 elif campo in ['ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
-                              'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas']:
-                    data[campo] = False if campo == 'ml_sync_habilitado' else True
+                              'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas',
+                              'tn_sync_habilitado', 'tn_facturar_ventas']:
+                    data[campo] = False if campo in ('ml_sync_habilitado', 'tn_sync_habilitado') else True
                 else:
                     data[campo] = None
         

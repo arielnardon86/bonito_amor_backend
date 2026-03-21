@@ -2207,6 +2207,272 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 'message': f'Error: {str(e)}'
             }, status=status.HTTP_200_OK)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # Tienda Nube — OAuth, Webhook, Configuración
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _tn_configured(self, tienda):
+        """True si la tienda tiene app_id y client_secret configurados."""
+        return bool(getattr(tienda, 'tn_app_id', None) and getattr(tienda, 'tn_client_secret', None))
+
+    @action(detail=True, methods=['get'], url_path='tiendanube/status', url_name='tn-status')
+    def tn_status(self, request, pk=None):
+        """Estado de la integración con Tienda Nube."""
+        tienda = self.get_object()
+        conectado = bool(getattr(tienda, 'tn_access_token', None) and getattr(tienda, 'tn_store_id', None))
+        return Response({
+            'connected':         conectado,
+            'has_app_id':        bool(getattr(tienda, 'tn_app_id', None)),
+            'has_client_secret': bool(getattr(tienda, 'tn_client_secret', None)),
+            'store_id':          getattr(tienda, 'tn_store_id', None),
+            'sync_habilitado':   getattr(tienda, 'tn_sync_habilitado', False),
+            'facturar_ventas':   getattr(tienda, 'tn_facturar_ventas', True),
+            'webhook_id':        getattr(tienda, 'tn_webhook_id', None),
+        })
+
+    @action(detail=True, methods=['get'], url_path='tiendanube/auth-url', url_name='tn-auth-url')
+    def tn_auth_url(self, request, pk=None):
+        """Devuelve la URL de autorización OAuth de Tienda Nube."""
+        tienda = self.get_object()
+        if not self._tn_configured(tienda):
+            return Response({'error': 'Configurá app_id y client_secret primero.'}, status=400)
+        from .services.tiendanube_service import TiendaNubeService
+        url = TiendaNubeService.get_authorization_url(tienda.tn_app_id)
+        return Response({'auth_url': url})
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/callback', url_name='tn-callback')
+    def tn_callback(self, request, pk=None):
+        """
+        Recibe el código OAuth y lo intercambia por access_token + store_id.
+        El frontend (popup) llama a este endpoint con el code recibido de TN.
+        """
+        tienda = self.get_object()
+        if not self._tn_configured(tienda):
+            return Response({'error': 'app_id y client_secret no configurados.'}, status=400)
+
+        code = request.data.get('code')
+        if not code:
+            return Response({'error': 'Falta el código de autorización.'}, status=400)
+
+        from .services.tiendanube_service import TiendaNubeService
+        try:
+            access_token, store_id = TiendaNubeService.exchange_code_for_token(
+                tienda.tn_app_id, tienda.tn_client_secret, code
+            )
+        except Exception as e:
+            logger.error("Error intercambiando código TN: %s", e)
+            return Response({'error': f'Error al obtener token: {e}'}, status=400)
+
+        tienda.tn_access_token  = access_token
+        tienda.tn_store_id      = store_id
+        tienda.tn_sync_habilitado = True
+        tienda.save(update_fields=['tn_access_token', 'tn_store_id', 'tn_sync_habilitado'])
+        logger.info("Tienda Nube conectada — tienda=%s store_id=%s", tienda.nombre, store_id)
+        return Response({'success': True, 'store_id': store_id})
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/register-webhook', url_name='tn-register-webhook')
+    def tn_register_webhook(self, request, pk=None):
+        """
+        Registra el webhook order/paid en Tienda Nube.
+        La URL del webhook es /api/tiendas/{id}/tiendanube/webhook/
+        """
+        tienda = self.get_object()
+        if not tienda.tn_access_token:
+            return Response({'error': 'La tienda no está conectada a Tienda Nube.'}, status=400)
+
+        from .services.tiendanube_service import TiendaNubeService
+        tn = TiendaNubeService(tienda)
+
+        # Construir URL del webhook
+        base = request.build_absolute_uri('/').rstrip('/')
+        webhook_url = f"{base}/api/tiendas/{tienda.id}/tiendanube/webhook/"
+
+        try:
+            # Si ya hay un webhook registrado, borrarlo primero
+            if tienda.tn_webhook_id:
+                tn.delete_webhook(tienda.tn_webhook_id)
+
+            webhook_id = tn.register_webhook('order/paid', webhook_url)
+            tienda.tn_webhook_id = webhook_id
+            tienda.save(update_fields=['tn_webhook_id'])
+            logger.info("Webhook TN registrado — id=%s url=%s", webhook_id, webhook_url)
+            return Response({'success': True, 'webhook_id': webhook_id, 'url': webhook_url})
+        except Exception as e:
+            logger.error("Error registrando webhook TN: %s", e)
+            return Response({'error': f'Error al registrar webhook: {e}'}, status=400)
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/disconnect', url_name='tn-disconnect')
+    def tn_disconnect(self, request, pk=None):
+        """Desconecta la integración con Tienda Nube."""
+        tienda = self.get_object()
+        if tienda.tn_access_token and tienda.tn_webhook_id:
+            from .services.tiendanube_service import TiendaNubeService
+            TiendaNubeService(tienda).delete_webhook(tienda.tn_webhook_id)
+
+        tienda.tn_access_token    = None
+        tienda.tn_store_id        = None
+        tienda.tn_webhook_id      = None
+        tienda.tn_sync_habilitado = False
+        tienda.save(update_fields=['tn_access_token', 'tn_store_id', 'tn_webhook_id', 'tn_sync_habilitado'])
+        return Response({'success': True})
+
+    @action(
+        detail=True, methods=['get', 'post'],
+        url_path='tiendanube/webhook', url_name='tn-webhook',
+        permission_classes=[permissions.AllowAny],
+    )
+    def tn_webhook(self, request, pk=None):
+        """
+        Endpoint público que recibe notificaciones de Tienda Nube.
+        GET  → validación de existencia (devuelve 200).
+        POST → procesa el evento order/paid.
+        """
+        if request.method == 'GET':
+            return Response({'status': 'ok'})
+
+        try:
+            tienda = Tienda.objects.get(pk=pk)
+        except Tienda.DoesNotExist:
+            return Response({'error': 'Tienda no encontrada'}, status=200)
+
+        # ── Verificar firma HMAC ──────────────────────────────────────────
+        from .services.tiendanube_service import TiendaNubeService
+        sig = request.META.get('HTTP_X_LINKEDSTORE_HMAC_SHA256', '')
+        if tienda.tn_client_secret and sig:
+            raw = request.body
+            if not TiendaNubeService.verify_signature(tienda.tn_client_secret, raw, sig):
+                logger.warning("Firma inválida en webhook TN para tienda %s", tienda.nombre)
+                return Response({'error': 'Firma inválida'}, status=200)
+
+        payload = request.data
+        event    = payload.get('event', '')
+        store_id = str(payload.get('store_id', ''))
+        order_id = str(payload.get('id', ''))
+
+        logger.info("Webhook TN recibido — event=%s store_id=%s order_id=%s tienda=%s",
+                    event, store_id, order_id, tienda.nombre)
+
+        if event != 'order/paid' or not order_id:
+            return Response({'status': 'ignored'}, status=200)
+
+        if not tienda.tn_sync_habilitado:
+            return Response({'status': 'sync_disabled'}, status=200)
+
+        # ── Deduplicación ─────────────────────────────────────────────────
+        if Venta.objects.filter(tienda=tienda, tn_order_id=order_id).exists():
+            logger.info("Orden TN %s ya procesada para tienda %s", order_id, tienda.nombre)
+            return Response({'status': 'already_processed'}, status=200)
+
+        try:
+            tn = TiendaNubeService(tienda)
+            order = tn.get_order(order_id)
+        except Exception as e:
+            logger.error("Error obteniendo orden TN %s: %s", order_id, e)
+            return Response({'status': 'error', 'detail': str(e)}, status=200)
+
+        try:
+            venta = _procesar_orden_tiendanube(tienda, order, order_id)
+        except Exception as e:
+            logger.error("Error procesando orden TN %s: %s", order_id, e, exc_info=True)
+            return Response({'status': 'error', 'detail': str(e)}, status=200)
+
+        # ── Facturación automática ────────────────────────────────────────
+        if tienda.tn_facturar_ventas:
+            try:
+                from .services.facturacion_service import FacturacionService
+                fs = FacturacionService(tienda)
+                fs.emitir_factura(venta)
+            except Exception as e:
+                logger.warning("Error al facturar venta TN %s: %s", venta.id, e)
+
+        # ── Notificación push ─────────────────────────────────────────────
+        try:
+            from .services.notificaciones_service import NotificacionesService
+            NotificacionesService.enviar_notificacion_venta(venta)
+        except Exception as e:
+            logger.warning("Error enviando notificación push venta TN: %s", e)
+
+        return Response({'status': 'ok', 'venta_id': str(venta.id)}, status=200)
+
+
+def _procesar_orden_tiendanube(tienda, order, order_id):
+    """
+    Crea una Venta a partir de una orden de Tienda Nube.
+    Descuenta stock de cada producto encontrado.
+    """
+    # Método de pago
+    gateway_name = order.get('gateway_name') or order.get('gateway') or 'Tienda Nube'
+    metodo_pago_obj, _ = MetodoPago.objects.get_or_create(
+        nombre='Tienda Nube',
+        defaults={'descripcion': 'Ventas realizadas a través de Tienda Nube', 'activo': True},
+    )
+
+    # Vendedor por defecto
+    user_tn, _ = User.objects.get_or_create(
+        username='tiendanube',
+        defaults={
+            'is_staff': False,
+            'is_active': True,
+            'tienda': tienda,
+            'first_name': 'Tienda',
+            'last_name': 'Nube',
+        },
+    )
+
+    total = Decimal(str(order.get('total', '0'))).quantize(Decimal('0.01'))
+
+    venta = Venta.objects.create(
+        tienda=tienda,
+        usuario=user_tn,
+        total=total,
+        metodo_pago=gateway_name,
+        origen_tiendanube=True,
+        tn_order_id=order_id,
+        cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
+    )
+
+    productos_orden = order.get('products', [])
+    for item in productos_orden:
+        sku      = item.get('sku') or ''
+        nombre   = item.get('name') or 'Producto'
+        cantidad = int(item.get('quantity', 1))
+        precio   = Decimal(str(item.get('price', '0'))).quantize(Decimal('0.01'))
+
+        producto = None
+        if sku:
+            producto = Producto.objects.filter(tienda=tienda, codigo=sku).first()
+        if not producto:
+            producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre).first()
+
+        if producto:
+            DetalleVenta.objects.create(
+                venta=venta,
+                producto=producto,
+                cantidad=cantidad,
+                precio_unitario=precio,
+                subtotal=precio * cantidad,
+            )
+            # Descontar stock
+            if producto.stock >= cantidad:
+                producto.stock -= cantidad
+                producto.save(update_fields=['stock'])
+            else:
+                logger.warning("Stock insuficiente para %s (pedido: %s, disponible: %s)",
+                               producto.nombre, cantidad, producto.stock)
+        else:
+            logger.warning("Producto no encontrado para orden TN: sku=%s nombre=%s", sku, nombre)
+            DetalleVenta.objects.create(
+                venta=venta,
+                producto=None,
+                cantidad=cantidad,
+                precio_unitario=precio,
+                subtotal=precio * cantidad,
+            )
+
+    logger.info("Venta TN creada — id=%s total=%s tienda=%s", venta.id, total, tienda.nombre)
+    return venta
+
+
 class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
     
