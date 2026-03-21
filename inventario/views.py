@@ -2461,7 +2461,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     nombre=prod.nombre,
                     precio=prod.precio,
                     stock=prod.stock,
-                    sku=prod.codigo or None,
+                    sku=prod.codigo_barras or None,
                 )
                 prod.tn_product_id   = tn_product_id
                 prod.tn_variant_id   = tn_variant_id
