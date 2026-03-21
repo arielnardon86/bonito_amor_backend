@@ -4,6 +4,7 @@ import base64
 import logging
 import secrets
 import re
+import threading
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
@@ -2436,43 +2437,63 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def tn_export_products(self, request, pk=None):
         """
         Publica en Tienda Nube los productos de Total Stock que aún no tienen
-        tn_variant_id. Si el producto ya tiene tn_variant_id se omite (ya existe).
+        tn_variant_id. Corre en background para evitar timeout en Render.
         """
         tienda = self.get_object()
         if not tienda.tn_access_token or not tienda.tn_store_id:
             return Response({'error': 'Tienda Nube no conectada.'}, status=400)
 
-        from .services.tiendanube_service import TiendaNubeService
-        tn = TiendaNubeService(tienda)
-
-        productos = Producto.objects.filter(tienda=tienda).filter(
+        total_pendientes = Producto.objects.filter(tienda=tienda).filter(
             Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
-        )
+        ).count()
 
-        if not productos.exists():
+        if total_pendientes == 0:
             return Response({'mensaje': 'Todos los productos ya están publicados en Tienda Nube.'}, status=200)
 
-        publicados = 0
-        errores = []
+        tienda_id = tienda.id
 
-        for prod in productos:
+        def _exportar():
+            from django.db import connection as db_conn
+            from .services.tiendanube_service import TiendaNubeService
             try:
-                tn_product_id, tn_variant_id = tn.create_product(
-                    nombre=prod.nombre,
-                    precio=prod.precio,
-                    stock=prod.stock,
-                    sku=prod.codigo_barras or None,
+                t = Tienda.objects.get(id=tienda_id)
+                tn = TiendaNubeService(t)
+                productos = Producto.objects.filter(tienda=t).filter(
+                    Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
                 )
-                prod.tn_product_id   = tn_product_id
-                prod.tn_variant_id   = tn_variant_id
-                prod.tn_sincronizado = True
-                prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
-                publicados += 1
+                publicados = 0
+                errores = 0
+                for prod in productos:
+                    try:
+                        tn_product_id, tn_variant_id = tn.create_product(
+                            nombre=prod.nombre,
+                            precio=prod.precio,
+                            stock=prod.stock,
+                            sku=prod.codigo_barras or None,
+                        )
+                        prod.tn_product_id   = tn_product_id
+                        prod.tn_variant_id   = tn_variant_id
+                        prod.tn_sincronizado = True
+                        prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                        publicados += 1
+                    except Exception as e:
+                        logger.error("Error publicando producto %s en TN: %s", prod.nombre, e)
+                        errores += 1
+                logger.info("TN export finalizado — tienda=%s publicados=%s errores=%s", t.nombre, publicados, errores)
             except Exception as e:
-                logger.error("Error publicando producto %s en TN: %s", prod.nombre, e)
-                errores.append(f"{prod.nombre}: {str(e)}")
+                logger.error("Error en hilo export TN tienda=%s: %s", tienda_id, e, exc_info=True)
+            finally:
+                db_conn.close()
 
-        return Response({'publicados': publicados, 'errores': errores}, status=200)
+        t = threading.Thread(target=_exportar, daemon=True)
+        t.start()
+
+        return Response({
+            'mensaje': f'Publicación iniciada para {total_pendientes} producto(s). '
+                       'El proceso corre en segundo plano, puede tardar unos minutos. '
+                       'Revisá los logs o recargá los productos para verificar.',
+            'pendientes': total_pendientes,
+        }, status=202)
 
     # ── Importar productos desde Tienda Nube ─────────────────────────────────
 
