@@ -83,6 +83,7 @@ class TiendaNubeService:
                 "client_id":     app_id,
                 "client_secret": client_secret,
                 "code":          code,
+                "grant_type":    "authorization_code",
             },
             headers={"User-Agent": USER_AGENT},
             timeout=15,
