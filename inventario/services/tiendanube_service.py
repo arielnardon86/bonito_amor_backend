@@ -95,6 +95,26 @@ class TiendaNubeService:
             raise ValueError(f"Respuesta inesperada de Tienda Nube: {data}")
         return access_token, store_id
 
+    # ── Productos ────────────────────────────────────────────────────────────
+
+    def get_products(self, page=1, per_page=200):
+        """Devuelve una página de productos con sus variantes."""
+        return self._get("products", params={"page": page, "per_page": per_page})
+
+    def get_all_products(self):
+        """Itera todas las páginas y devuelve la lista completa de productos."""
+        all_products = []
+        page = 1
+        while True:
+            batch = self.get_products(page=page, per_page=200)
+            if not batch:
+                break
+            all_products.extend(batch)
+            if len(batch) < 200:
+                break
+            page += 1
+        return all_products
+
     # ── Órdenes ──────────────────────────────────────────────────────────────
 
     def get_order(self, order_id):

@@ -277,7 +277,21 @@ class Producto(models.Model):
         blank=True, null=True,
         help_text="Fecha y hora de la última sincronización con Mercado Libre"
     )
-    
+
+    # Integración con Tienda Nube
+    tn_product_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID del producto en Tienda Nube"
+    )
+    tn_variant_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de la variante en Tienda Nube (usado para actualizar stock)"
+    )
+    tn_sincronizado = models.BooleanField(
+        default=False,
+        help_text="Indica si este producto está sincronizado con Tienda Nube"
+    )
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 

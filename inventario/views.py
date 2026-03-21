@@ -2394,6 +2394,140 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
         return Response({'status': 'ok', 'venta_id': str(venta.id)}, status=200)
 
+    # ── Importar productos desde Tienda Nube ─────────────────────────────────
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/import-products', url_name='tn-import-products')
+    def tn_import_products(self, request, pk=None):
+        """
+        Importa productos desde Tienda Nube al sistema.
+        - Si ya existe un producto con el mismo tn_variant_id → lo actualiza (precio/stock).
+        - Si no existe → intenta matchear por SKU o nombre, y vincula.
+        - Si no hay match → crea el producto.
+        """
+        tienda = self.get_object()
+        if not tienda.tn_access_token or not tienda.tn_store_id:
+            return Response({'error': 'Tienda Nube no conectada.'}, status=400)
+
+        from .services.tiendanube_service import TiendaNubeService
+        tn = TiendaNubeService(tienda)
+
+        try:
+            productos_tn = tn.get_all_products()
+        except Exception as e:
+            logger.error("Error obteniendo productos TN: %s", e)
+            return Response({'error': str(e)}, status=500)
+
+        creados = 0
+        actualizados = 0
+        vinculados = 0
+        errores = []
+
+        for prod_tn in productos_tn:
+            tn_product_id = str(prod_tn.get('id', ''))
+            nombre_tn     = (prod_tn.get('name') or {}).get('es') or str(prod_tn.get('name', ''))
+            variantes     = prod_tn.get('variants', [])
+
+            for variant in variantes:
+                tn_variant_id = str(variant.get('id', ''))
+                sku           = variant.get('sku') or ''
+                precio_raw    = variant.get('price') or prod_tn.get('price') or '0'
+                precio        = Decimal(str(precio_raw)).quantize(Decimal('0.01'))
+                stock_tn      = variant.get('stock') if variant.get('stock') is not None else 0
+                nombre_var    = nombre_tn
+                if variant.get('values'):
+                    vals = ' / '.join(v.get('es', '') or str(v) for v in variant['values'] if v)
+                    if vals:
+                        nombre_var = f"{nombre_tn} - {vals}"
+
+                try:
+                    # 1) Buscar por tn_variant_id
+                    producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
+
+                    if producto:
+                        producto.precio        = precio
+                        producto.stock         = stock_tn
+                        producto.tn_product_id = tn_product_id
+                        producto.tn_sincronizado = True
+                        producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado'])
+                        actualizados += 1
+                        continue
+
+                    # 2) Buscar por SKU
+                    if sku:
+                        producto = Producto.objects.filter(tienda=tienda, codigo=sku).first()
+                    # 3) Buscar por nombre
+                    if not producto:
+                        producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_var).first()
+                    if not producto and nombre_tn != nombre_var:
+                        producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_tn).first()
+
+                    if producto:
+                        producto.tn_product_id   = tn_product_id
+                        producto.tn_variant_id   = tn_variant_id
+                        producto.tn_sincronizado  = True
+                        producto.precio           = precio
+                        producto.stock            = stock_tn
+                        producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'precio', 'stock'])
+                        vinculados += 1
+                    else:
+                        # 4) Crear nuevo producto
+                        Producto.objects.create(
+                            tienda          = tienda,
+                            nombre          = nombre_var,
+                            precio          = precio,
+                            stock           = stock_tn,
+                            tn_product_id   = tn_product_id,
+                            tn_variant_id   = tn_variant_id,
+                            tn_sincronizado = True,
+                        )
+                        creados += 1
+
+                except Exception as e:
+                    logger.error("Error importando variante TN %s: %s", tn_variant_id, e, exc_info=True)
+                    errores.append(f"Variante {tn_variant_id}: {str(e)}")
+
+        return Response({
+            'creados':     creados,
+            'vinculados':  vinculados,
+            'actualizados': actualizados,
+            'errores':     errores,
+        }, status=200)
+
+    # ── Sincronizar stock hacia Tienda Nube ──────────────────────────────────
+
+    @action(detail=True, methods=['post'], url_path='tiendanube/sync-stock', url_name='tn-sync-stock')
+    def tn_sync_stock(self, request, pk=None):
+        """
+        Empuja el stock actual de todos los productos sincronizados hacia Tienda Nube.
+        """
+        tienda = self.get_object()
+        if not tienda.tn_access_token or not tienda.tn_store_id:
+            return Response({'error': 'Tienda Nube no conectada.'}, status=400)
+
+        from .services.tiendanube_service import TiendaNubeService
+        tn = TiendaNubeService(tienda)
+
+        productos = Producto.objects.filter(
+            tienda=tienda,
+            tn_sincronizado=True,
+            tn_variant_id__isnull=False,
+        ).exclude(tn_variant_id='')
+
+        if not productos.exists():
+            return Response({'error': 'No hay productos sincronizados con Tienda Nube.'}, status=400)
+
+        ok = 0
+        errores = []
+        for prod in productos:
+            try:
+                tn.update_variant_stock(prod.tn_variant_id, prod.stock)
+                ok += 1
+            except Exception as e:
+                logger.error("Error actualizando stock TN variante %s: %s", prod.tn_variant_id, e)
+                errores.append(f"{prod.nombre}: {str(e)}")
+
+        return Response({'actualizados': ok, 'errores': errores}, status=200)
+
 
 def _procesar_orden_tiendanube(tienda, order, order_id):
     """
@@ -2438,8 +2572,11 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
         cantidad = int(item.get('quantity', 1))
         precio   = Decimal(str(item.get('price', '0'))).quantize(Decimal('0.01'))
 
+        tn_variant_id = str(item.get('variant_id', '') or '')
         producto = None
-        if sku:
+        if tn_variant_id:
+            producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
+        if not producto and sku:
             producto = Producto.objects.filter(tienda=tienda, codigo=sku).first()
         if not producto:
             producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre).first()
