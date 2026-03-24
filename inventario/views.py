@@ -2767,10 +2767,37 @@ class VentaViewSet(viewsets.ModelViewSet):
             return VentaCreateSerializer
         return VentaSerializer
 
-    # FIX DE CONEXIÓN
+    # FIX DE CONEXIÓN + totales globales (sobre el queryset completo, no solo la página)
     def list(self, request, *args, **kwargs):
         close_old_connections()
-        return super().list(request, *args, **kwargs)
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # Calcular totales sobre el queryset completo antes de paginar
+        agg = queryset.aggregate(
+            total_ventas=Count('id'),
+            monto_total=Sum('total'),
+            total_activas=Count('id', filter=Q(anulada=False)),
+            monto_activas=Sum('total', filter=Q(anulada=False)),
+            total_anuladas=Count('id', filter=Q(anulada=True)),
+            monto_anuladas=Sum('total', filter=Q(anulada=True)),
+        )
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data['totales_global'] = {
+                'total_ventas':   agg['total_ventas'] or 0,
+                'monto_total':    str(agg['monto_total'] or 0),
+                'total_activas':  agg['total_activas'] or 0,
+                'monto_activas':  str(agg['monto_activas'] or 0),
+                'total_anuladas': agg['total_anuladas'] or 0,
+                'monto_anuladas': str(agg['monto_anuladas'] or 0),
+            }
+            return response
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def get_queryset(self):
         user = self.request.user
