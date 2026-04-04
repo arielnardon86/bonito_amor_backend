@@ -12,7 +12,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.views import APIView
 from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.db.models import Sum, Count, F, Q, Value 
+from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Case, When
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -2772,27 +2772,57 @@ class VentaViewSet(viewsets.ModelViewSet):
         close_old_connections()
         queryset = self.filter_queryset(self.get_queryset())
 
-        # Calcular totales sobre el queryset completo antes de paginar
-        agg = queryset.aggregate(
+        # CONTEOS: sobre el queryset completo (incluye todas las ventas visibles)
+        count_agg = queryset.aggregate(
             total_ventas=Count('id'),
-            monto_total=Sum('total'),
             total_activas=Count('id', filter=Q(anulada=False)),
-            monto_activas=Sum('total', filter=Q(anulada=False)),
             total_anuladas=Count('id', filter=Q(anulada=True)),
-            monto_anuladas=Sum('total', filter=Q(anulada=True)),
         )
+
+        # MONTOS: excluir notas de crédito y usar monto_diferencia para ventas de cambio
+        # (igual que MetricasAPIView para que los totales sean consistentes)
+        CambioDevolucion, _ = _get_cambio_devolucion_models()
+        queryset_monto = queryset.exclude(
+            metodo_pago__in=['Nota de Crédito', 'Pendiente']
+        )
+        if CambioDevolucion is not None:
+            # Subquery: obtiene monto_diferencia del cambio/devolución si esta venta es la "diferencia a pagar"
+            sq_monto_dif = CambioDevolucion.objects.filter(
+                venta_diferencia_pendiente=OuterRef('pk')
+            ).values('monto_diferencia')[:1]
+
+            queryset_monto = queryset_monto.annotate(
+                monto_dif_cambio=Subquery(sq_monto_dif, output_field=DecimalField(max_digits=10, decimal_places=2))
+            ).annotate(
+                total_efectivo=Case(
+                    When(monto_dif_cambio__isnull=False, then=F('monto_dif_cambio')),
+                    default=F('total'),
+                    output_field=DecimalField(max_digits=10, decimal_places=2)
+                )
+            )
+            monto_agg = queryset_monto.aggregate(
+                monto_total=Sum('total_efectivo'),
+                monto_activas=Sum('total_efectivo', filter=Q(anulada=False)),
+                monto_anuladas=Sum('total_efectivo', filter=Q(anulada=True)),
+            )
+        else:
+            monto_agg = queryset_monto.aggregate(
+                monto_total=Sum('total'),
+                monto_activas=Sum('total', filter=Q(anulada=False)),
+                monto_anuladas=Sum('total', filter=Q(anulada=True)),
+            )
 
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             response = self.get_paginated_response(serializer.data)
             response.data['totales_global'] = {
-                'total_ventas':   agg['total_ventas'] or 0,
-                'monto_total':    str(agg['monto_total'] or 0),
-                'total_activas':  agg['total_activas'] or 0,
-                'monto_activas':  str(agg['monto_activas'] or 0),
-                'total_anuladas': agg['total_anuladas'] or 0,
-                'monto_anuladas': str(agg['monto_anuladas'] or 0),
+                'total_ventas':   count_agg['total_ventas'] or 0,
+                'monto_total':    str(monto_agg['monto_total'] or 0),
+                'total_activas':  count_agg['total_activas'] or 0,
+                'monto_activas':  str(monto_agg['monto_activas'] or 0),
+                'total_anuladas': count_agg['total_anuladas'] or 0,
+                'monto_anuladas': str(monto_agg['monto_anuladas'] or 0),
             }
             return response
 
