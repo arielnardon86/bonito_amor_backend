@@ -2779,23 +2779,25 @@ class VentaViewSet(viewsets.ModelViewSet):
             total_anuladas=Count('id', filter=Q(anulada=True)),
         )
 
-        # MONTOS: excluir notas de crédito y usar monto_diferencia para ventas de cambio
-        # (igual que MetricasAPIView para que los totales sean consistentes)
+        # MONTOS: excluir notas de crédito; para ventas de diferencia de cambio usar
+        # monto_diferencia; para ventas Pendiente sin relación a cambio, no contar.
         CambioDevolucion, _ = _get_cambio_devolucion_models()
-        queryset_monto = queryset.exclude(
-            metodo_pago__in=['Nota de Crédito', 'Pendiente']
-        )
         if CambioDevolucion is not None:
-            # Subquery: obtiene monto_diferencia del cambio/devolución si esta venta es la "diferencia a pagar"
+            # Subquery: monto_diferencia del cambio si esta venta es la "diferencia a pagar"
             sq_monto_dif = CambioDevolucion.objects.filter(
                 venta_diferencia_pendiente=OuterRef('pk')
             ).values('monto_diferencia')[:1]
 
-            queryset_monto = queryset_monto.annotate(
+            queryset_monto = queryset.exclude(
+                metodo_pago='Nota de Crédito'
+            ).annotate(
                 monto_dif_cambio=Subquery(sq_monto_dif, output_field=DecimalField(max_digits=10, decimal_places=2))
             ).annotate(
                 total_efectivo=Case(
+                    # Venta de diferencia de cambio → contar solo la diferencia real pagada
                     When(monto_dif_cambio__isnull=False, then=F('monto_dif_cambio')),
+                    # Pendiente sin relación a cambio (ej. venta a cuenta) → no contar aún
+                    When(metodo_pago='Pendiente', then=Value(Decimal('0'))),
                     default=F('total'),
                     output_field=DecimalField(max_digits=10, decimal_places=2)
                 )
@@ -2806,7 +2808,9 @@ class VentaViewSet(viewsets.ModelViewSet):
                 monto_anuladas=Sum('total_efectivo', filter=Q(anulada=True)),
             )
         else:
-            monto_agg = queryset_monto.aggregate(
+            monto_agg = queryset.exclude(
+                metodo_pago__in=['Nota de Crédito', 'Pendiente']
+            ).aggregate(
                 monto_total=Sum('total'),
                 monto_activas=Sum('total', filter=Q(anulada=False)),
                 monto_anuladas=Sum('total', filter=Q(anulada=True)),
