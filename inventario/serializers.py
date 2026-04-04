@@ -403,28 +403,31 @@ class VentaSerializer(serializers.ModelSerializer):
     es_diferencia_pendiente = serializers.SerializerMethodField()
 
     def get_tiene_factura(self, obj):
-        """Verifica si la venta tiene una factura asociada"""
+        """Verifica si la venta tiene una factura asociada (usa select_related)"""
         try:
             return obj.factura is not None
-        except:
+        except Exception:
             return False
-    
+
     def get_cambio_devolucion_nota_credito(self, obj):
-        """Obtiene el cambio/devolución que generó esta nota de crédito"""
+        """Obtiene el cambio/devolución que generó esta nota de crédito (usa prefetch cache)"""
         if CambioDevolucion is None:
             return None
         try:
-            cambio = obj.nota_credito_origen.first()
+            # Usar .all() para aprovechar el prefetch_related cache
+            cached = obj.nota_credito_origen.all()
+            cambio = cached[0] if cached else None
             if cambio:
-                # Obtener información de productos devueltos para mostrar
                 productos_devueltos = []
-                for detalle in cambio.detalles.filter(accion__in=['DEVOLVER', 'CAMBIAR']):
+                # Usar .all() en detalles para aprovechar prefetch cache
+                for detalle in cambio.detalles.all():
+                    if detalle.accion not in ('DEVOLVER', 'CAMBIAR'):
+                        continue
                     if detalle.detalle_venta_original and detalle.detalle_venta_original.producto:
                         productos_devueltos.append({
                             'nombre': detalle.detalle_venta_original.producto.nombre,
                             'cantidad': detalle.cantidad
                         })
-                
                 return {
                     'id': str(cambio.id),
                     'venta_original_id': str(cambio.venta_original_id),
@@ -433,16 +436,17 @@ class VentaSerializer(serializers.ModelSerializer):
                     'saldo_a_favor': str(cambio.saldo_a_favor),
                     'productos_devueltos': productos_devueltos
                 }
-        except:
+        except Exception:
             pass
         return None
-    
+
     def get_cambio_devolucion_diferencia(self, obj):
-        """Obtiene el cambio/devolución que generó esta venta de diferencia"""
+        """Obtiene el cambio/devolución que generó esta venta de diferencia (usa prefetch cache)"""
         if CambioDevolucion is None:
             return None
         try:
-            cambio = obj.cambio_devolucion_diferencia.first()
+            cached = obj.cambio_devolucion_diferencia.all()
+            cambio = cached[0] if cached else None
             if cambio:
                 return {
                     'id': str(cambio.id),
@@ -454,26 +458,26 @@ class VentaSerializer(serializers.ModelSerializer):
                     'monto_nuevo': str(cambio.monto_nuevo),
                     'saldo_a_favor': str(cambio.saldo_a_favor)
                 }
-        except:
+        except Exception:
             pass
         return None
-    
+
     def get_es_nota_credito(self, obj):
-        """Indica si esta venta es una nota de crédito"""
+        """Indica si esta venta es una nota de crédito (usa prefetch cache)"""
         if CambioDevolucion is None:
             return False
         try:
-            return obj.nota_credito_origen.exists()
-        except:
+            return len(obj.nota_credito_origen.all()) > 0
+        except Exception:
             return False
-    
+
     def get_es_diferencia_pendiente(self, obj):
-        """Indica si esta venta es una diferencia pendiente de un cambio/devolución"""
+        """Indica si esta venta es una diferencia pendiente de un cambio/devolución (usa prefetch cache)"""
         if CambioDevolucion is None:
             return False
         try:
-            return obj.cambio_devolucion_diferencia.exists()
-        except:
+            return len(obj.cambio_devolucion_diferencia.all()) > 0
+        except Exception:
             return False
 
     class Meta:

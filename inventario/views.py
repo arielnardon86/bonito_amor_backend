@@ -2772,61 +2772,57 @@ class VentaViewSet(viewsets.ModelViewSet):
         close_old_connections()
         queryset = self.filter_queryset(self.get_queryset())
 
-        # CONTEOS: sobre el queryset completo (incluye todas las ventas visibles)
-        count_agg = queryset.aggregate(
-            total_ventas=Count('id'),
-            total_activas=Count('id', filter=Q(anulada=False)),
-            total_anuladas=Count('id', filter=Q(anulada=True)),
-        )
-
-        # MONTOS: excluir notas de crédito; para ventas de diferencia de cambio usar
-        # monto_diferencia; para ventas Pendiente sin relación a cambio, no contar.
+        # Una sola query de agregación: conteos + montos ajustados para cambios/devoluciones
+        # - Notas de crédito → monto 0 (no son ingreso)
+        # - Ventas de diferencia de cambio → usar monto_diferencia del cambio
+        # - Ventas Pendiente sin relación a cambio → monto 0 (no cobradas)
+        # - Ventas normales → total
         CambioDevolucion, _ = _get_cambio_devolucion_models()
         if CambioDevolucion is not None:
-            # Subquery: monto_diferencia del cambio si esta venta es la "diferencia a pagar"
             sq_monto_dif = CambioDevolucion.objects.filter(
                 venta_diferencia_pendiente=OuterRef('pk')
             ).values('monto_diferencia')[:1]
 
-            queryset_monto = queryset.exclude(
-                metodo_pago='Nota de Crédito'
-            ).annotate(
-                monto_dif_cambio=Subquery(sq_monto_dif, output_field=DecimalField(max_digits=10, decimal_places=2))
+            queryset_agg = queryset.annotate(
+                _monto_dif=Subquery(sq_monto_dif, output_field=DecimalField(max_digits=10, decimal_places=2))
             ).annotate(
                 total_efectivo=Case(
-                    # Venta de diferencia de cambio → contar solo la diferencia real pagada
-                    When(monto_dif_cambio__isnull=False, then=F('monto_dif_cambio')),
-                    # Pendiente sin relación a cambio (ej. venta a cuenta) → no contar aún
+                    When(metodo_pago='Nota de Crédito', then=Value(Decimal('0'))),
+                    When(_monto_dif__isnull=False, then=F('_monto_dif')),
                     When(metodo_pago='Pendiente', then=Value(Decimal('0'))),
                     default=F('total'),
                     output_field=DecimalField(max_digits=10, decimal_places=2)
                 )
             )
-            monto_agg = queryset_monto.aggregate(
-                monto_total=Sum('total_efectivo'),
-                monto_activas=Sum('total_efectivo', filter=Q(anulada=False)),
-                monto_anuladas=Sum('total_efectivo', filter=Q(anulada=True)),
-            )
         else:
-            monto_agg = queryset.exclude(
-                metodo_pago__in=['Nota de Crédito', 'Pendiente']
-            ).aggregate(
-                monto_total=Sum('total'),
-                monto_activas=Sum('total', filter=Q(anulada=False)),
-                monto_anuladas=Sum('total', filter=Q(anulada=True)),
+            queryset_agg = queryset.annotate(
+                total_efectivo=Case(
+                    When(metodo_pago__in=['Nota de Crédito', 'Pendiente'], then=Value(Decimal('0'))),
+                    default=F('total'),
+                    output_field=DecimalField(max_digits=10, decimal_places=2)
+                )
             )
+
+        agg = queryset_agg.aggregate(
+            total_ventas=Count('id'),
+            total_activas=Count('id', filter=Q(anulada=False)),
+            total_anuladas=Count('id', filter=Q(anulada=True)),
+            monto_total=Sum('total_efectivo'),
+            monto_activas=Sum('total_efectivo', filter=Q(anulada=False)),
+            monto_anuladas=Sum('total_efectivo', filter=Q(anulada=True)),
+        )
 
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             response = self.get_paginated_response(serializer.data)
             response.data['totales_global'] = {
-                'total_ventas':   count_agg['total_ventas'] or 0,
-                'monto_total':    str(monto_agg['monto_total'] or 0),
-                'total_activas':  count_agg['total_activas'] or 0,
-                'monto_activas':  str(monto_agg['monto_activas'] or 0),
-                'total_anuladas': count_agg['total_anuladas'] or 0,
-                'monto_anuladas': str(monto_agg['monto_anuladas'] or 0),
+                'total_ventas':   agg['total_ventas'] or 0,
+                'monto_total':    str(agg['monto_total'] or 0),
+                'total_activas':  agg['total_activas'] or 0,
+                'monto_activas':  str(agg['monto_activas'] or 0),
+                'total_anuladas': agg['total_anuladas'] or 0,
+                'monto_anuladas': str(agg['monto_anuladas'] or 0),
             }
             return response
 
@@ -2837,7 +2833,13 @@ class VentaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # Optimización: usar select_related para evitar consultas N+1
         # Nota: metodo_pago es CharField, no ForeignKey, por lo que no se puede usar en select_related
-        queryset = Venta.objects.select_related('tienda', 'usuario', 'arancel_aplicado').order_by('-fecha_venta')
+        queryset = Venta.objects.select_related(
+            'tienda', 'usuario', 'arancel_aplicado', 'factura'
+        ).prefetch_related(
+            'detalles__producto',
+            'nota_credito_origen__detalles__detalle_venta_original__producto',
+            'cambio_devolucion_diferencia',
+        ).order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
         # Para usuarios staff (no superuser), solo permitir ver ventas buscadas por ID
