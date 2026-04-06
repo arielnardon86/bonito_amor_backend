@@ -1900,6 +1900,24 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     es_financiero=True
                                 )
                             
+                            # Parsear fee_details de ML: cargo por venta, costo fijo, cuotas, impuestos
+                            ml_sale_fee = Decimal('0.00')
+                            ml_fixed_fee = Decimal('0.00')
+                            ml_financing_fee = Decimal('0.00')
+                            ml_tax_fee = Decimal('0.00')
+                            for fee in (order.get('fee_details') or []):
+                                fee_type = fee.get('type', '')
+                                amount = abs(Decimal(str(fee.get('amount', 0))))
+                                if fee_type == 'sale_fee':
+                                    ml_sale_fee = amount
+                                elif fee_type == 'fixed_fee':
+                                    ml_fixed_fee = amount
+                                elif fee_type == 'financing_fee':
+                                    ml_financing_fee = amount
+                                elif fee_type == 'tax':
+                                    ml_tax_fee = amount
+                            logger.info(f"ML fees para orden {order_id}: sale={ml_sale_fee}, fixed={ml_fixed_fee}, financing={ml_financing_fee}, tax={ml_tax_fee}")
+
                             # Preparar detalles de venta y calcular totales (arancel + costo envío por producto)
                             detalles_venta = []
                             total_venta = Decimal('0.00')
@@ -2014,6 +2032,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             total=total_venta,
                                             arancel_total=total_arancel,
                                             costo_envio_ml=total_costo_envio,
+                                            ml_sale_fee=ml_sale_fee,
+                                            ml_fixed_fee=ml_fixed_fee,
+                                            ml_financing_fee=ml_financing_fee,
+                                            ml_tax_fee=ml_tax_fee,
                                             origen_mercadolibre=True,
                                             ml_order_id=order_id,
                                             usuario=usuario_ml,
@@ -4131,8 +4153,25 @@ class MetricasAPIView(APIView):
             if v.id not in nota_credito_map and (v.costo_envio_ml or Decimal('0.00')) > Decimal('0.00')
         )
 
-        # CAMBIO 11: La rentabilidad resta costo productos, egresos, aranceles Y costo envío ML
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_costo_envio_ml
+        # Descuentos ML reales: cargo por venta + costo fijo + costo por cuotas (de fee_details del webhook)
+        total_ml_descuentos = sum(
+            (v.ml_sale_fee or Decimal('0.00')) + (v.ml_fixed_fee or Decimal('0.00')) + (v.ml_financing_fee or Decimal('0.00'))
+            for v in ventas_list
+            if v.id not in nota_credito_map and v.origen_mercadolibre
+        )
+
+        # Impuestos ML reales (de fee_details del webhook)
+        total_ml_impuestos = sum(
+            (v.ml_tax_fee or Decimal('0.00'))
+            for v in ventas_list
+            if v.id not in nota_credito_map and v.origen_mercadolibre
+        )
+
+        # Flag: la tienda tiene Mercado Libre integrado
+        tienda_tiene_ml = bool(getattr(tienda_obj, 'ml_access_token', None) and getattr(tienda_obj, 'ml_sync_habilitado', False))
+
+        # La rentabilidad resta costo productos, egresos, aranceles, costo envío ML, descuentos ML e impuestos ML
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_costo_envio_ml - total_ml_descuentos - total_ml_impuestos
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         # Filtrar detalles que tienen producto (excluir notas de crédito y detalles sin producto)
@@ -4211,6 +4250,9 @@ class MetricasAPIView(APIView):
             'total_compras_periodo': total_compras_periodo,
             'total_arancel_ventas': total_arancel_ventas,
             'total_costo_envio_ml': total_costo_envio_ml,
+            'total_ml_descuentos': total_ml_descuentos,
+            'total_ml_impuestos': total_ml_impuestos,
+            'tienda_tiene_ml': tienda_tiene_ml,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
             'productos_mas_vendidos': list(productos_mas_vendidos),
