@@ -6,7 +6,7 @@ import secrets
 import re
 import threading
 from django.shortcuts import render, get_object_or_404
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, pagination as rest_framework_pagination
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.views import APIView
@@ -2759,9 +2759,17 @@ class UserViewSet(viewsets.ModelViewSet):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class VentaPageNumberPagination(rest_framework_pagination.PageNumberPagination):
+    """Paginación para Ventas: permite page_size por query param (para exportación Excel)."""
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 50000
+
+
 class VentaViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
-    
+    pagination_class = VentaPageNumberPagination
+
     def get_serializer_class(self):
         if self.action == 'create':
             return VentaCreateSerializer
