@@ -1916,7 +1916,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     ml_financing_fee = amount
                                 elif fee_type == 'tax':
                                     ml_tax_fee = amount
-                            logger.info(f"ML fees para orden {order_id}: sale={ml_sale_fee}, fixed={ml_fixed_fee}, financing={ml_financing_fee}, tax={ml_tax_fee}")
+
+                            # Costo de envío real cobrado por ML al vendedor (shipping.cost o base_cost)
+                            shipping_info = order.get('shipping') or {}
+                            _ship_cost = shipping_info.get('cost') or shipping_info.get('base_cost') or 0
+                            ml_shipping_cost = abs(Decimal(str(_ship_cost)))
+
+                            logger.info(f"ML fees para orden {order_id}: sale={ml_sale_fee}, fixed={ml_fixed_fee}, financing={ml_financing_fee}, shipping={ml_shipping_cost}, tax={ml_tax_fee}")
 
                             # Preparar detalles de venta y calcular totales (arancel + costo envío por producto)
                             detalles_venta = []
@@ -2035,6 +2041,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             ml_sale_fee=ml_sale_fee,
                                             ml_fixed_fee=ml_fixed_fee,
                                             ml_financing_fee=ml_financing_fee,
+                                            ml_shipping_cost=ml_shipping_cost,
                                             ml_tax_fee=ml_tax_fee,
                                             origen_mercadolibre=True,
                                             ml_order_id=order_id,
@@ -4153,9 +4160,12 @@ class MetricasAPIView(APIView):
             if v.id not in nota_credito_map and (v.costo_envio_ml or Decimal('0.00')) > Decimal('0.00')
         )
 
-        # Descuentos ML reales: cargo por venta + costo fijo + costo por cuotas (de fee_details del webhook)
+        # Descuentos ML reales: cargo por venta + costo fijo + cuotas + envío real (del webhook)
         total_ml_descuentos = sum(
-            (v.ml_sale_fee or Decimal('0.00')) + (v.ml_fixed_fee or Decimal('0.00')) + (v.ml_financing_fee or Decimal('0.00'))
+            (v.ml_sale_fee or Decimal('0.00'))
+            + (v.ml_fixed_fee or Decimal('0.00'))
+            + (v.ml_financing_fee or Decimal('0.00'))
+            + (v.ml_shipping_cost or Decimal('0.00'))
             for v in ventas_list
             if v.id not in nota_credito_map and v.origen_mercadolibre
         )

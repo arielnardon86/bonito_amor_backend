@@ -448,6 +448,7 @@ class Venta(models.Model):
     ml_sale_fee = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Cargo por venta (% comisión) cobrado por Mercado Libre")
     ml_fixed_fee = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Costo fijo por transacción cobrado por Mercado Libre")
     ml_financing_fee = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Costo por ofrecer cuotas cobrado por Mercado Libre")
+    ml_shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Costo de envío real cobrado por Mercado Libre al vendedor (shipping.cost)")
     ml_tax_fee = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Impuestos sobre los cargos de Mercado Libre")
     origen_mercadolibre = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Mercado Libre")
     ml_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Mercado Libre (para evitar duplicados)")
