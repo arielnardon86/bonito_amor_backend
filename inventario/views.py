@@ -4161,14 +4161,12 @@ class MetricasAPIView(APIView):
         )
 
         # Descuentos ML reales: cargo por venta + costo fijo + cuotas + envío real (del webhook)
-        total_ml_descuentos = sum(
-            (v.ml_sale_fee or Decimal('0.00'))
-            + (v.ml_fixed_fee or Decimal('0.00'))
-            + (v.ml_financing_fee or Decimal('0.00'))
-            + (v.ml_shipping_cost or Decimal('0.00'))
-            for v in ventas_list
-            if v.id not in nota_credito_map and v.origen_mercadolibre
-        )
+        _ml_ventas = [v for v in ventas_list if v.id not in nota_credito_map and v.origen_mercadolibre]
+        total_ml_sale_fee      = sum(v.ml_sale_fee      or Decimal('0.00') for v in _ml_ventas)
+        total_ml_fixed_fee     = sum(v.ml_fixed_fee     or Decimal('0.00') for v in _ml_ventas)
+        total_ml_financing_fee = sum(v.ml_financing_fee or Decimal('0.00') for v in _ml_ventas)
+        total_ml_shipping_cost = sum(v.ml_shipping_cost or Decimal('0.00') for v in _ml_ventas)
+        total_ml_descuentos = total_ml_sale_fee + total_ml_fixed_fee + total_ml_financing_fee + total_ml_shipping_cost
 
         # Impuestos ML reales (de fee_details del webhook)
         total_ml_impuestos = sum(
@@ -4261,6 +4259,10 @@ class MetricasAPIView(APIView):
             'total_arancel_ventas': total_arancel_ventas,
             'total_costo_envio_ml': total_costo_envio_ml,
             'total_ml_descuentos': total_ml_descuentos,
+            'total_ml_sale_fee': total_ml_sale_fee,
+            'total_ml_fixed_fee': total_ml_fixed_fee,
+            'total_ml_financing_fee': total_ml_financing_fee,
+            'total_ml_shipping_cost': total_ml_shipping_cost,
             'total_ml_impuestos': total_ml_impuestos,
             'tienda_tiene_ml': tienda_tiene_ml,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
