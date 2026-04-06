@@ -2863,7 +2863,14 @@ class VentaViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(tienda__nombre=tienda_slug)
 
         fecha_venta_date = self.request.query_params.get('fecha_venta__date', None)
-        if fecha_venta_date:
+        fecha_desde = self.request.query_params.get('fecha_desde', None)
+        fecha_hasta = self.request.query_params.get('fecha_hasta', None)
+        if fecha_desde or fecha_hasta:
+            if fecha_desde:
+                queryset = queryset.filter(fecha_venta__date__gte=fecha_desde)
+            if fecha_hasta:
+                queryset = queryset.filter(fecha_venta__date__lte=fecha_hasta)
+        elif fecha_venta_date:
             queryset = queryset.filter(fecha_venta__date=fecha_venta_date)
 
         usuario = self.request.query_params.get('usuario', None)
