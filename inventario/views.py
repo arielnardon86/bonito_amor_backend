@@ -1827,16 +1827,53 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             'order_id': order_id
                         }, status=status.HTTP_200_OK)
                     
+                    ml_service = MercadoLibreService(tienda)
+
                     # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + entrega)
-                    if Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).exists():
-                        logger.info(f"Orden {order_id} ya procesada anteriormente, omitiendo")
+                    venta_existente_ml = Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).first()
+                    if venta_existente_ml:
+                        # Si los fees están en cero, intentar actualizarlos (ML los calcula con demora)
+                        fees_vacios = (
+                            (venta_existente_ml.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') and
+                            (venta_existente_ml.ml_fixed_fee or Decimal('0.00')) == Decimal('0.00') and
+                            (venta_existente_ml.ml_financing_fee or Decimal('0.00')) == Decimal('0.00') and
+                            (venta_existente_ml.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00') and
+                            (venta_existente_ml.ml_tax_fee or Decimal('0.00')) == Decimal('0.00')
+                        )
+                        if fees_vacios:
+                            try:
+                                order_para_fees = ml_service.get_order(order_id)
+                                if order_para_fees:
+                                    _sale_fee = _fixed_fee = _financing_fee = _tax_fee = Decimal('0.00')
+                                    for fee in (order_para_fees.get('fee_details') or []):
+                                        ft = fee.get('type', '')
+                                        amt = abs(Decimal(str(fee.get('amount', 0))))
+                                        if ft == 'sale_fee':      _sale_fee = amt
+                                        elif ft == 'fixed_fee':   _fixed_fee = amt
+                                        elif ft == 'financing_fee': _financing_fee = amt
+                                        elif ft == 'tax':         _tax_fee = amt
+                                    shipping_info = order_para_fees.get('shipping') or {}
+                                    _ship = abs(Decimal(str(shipping_info.get('cost') or shipping_info.get('base_cost') or 0)))
+                                    if _sale_fee or _fixed_fee or _financing_fee or _ship or _tax_fee:
+                                        venta_existente_ml.ml_sale_fee = _sale_fee
+                                        venta_existente_ml.ml_fixed_fee = _fixed_fee
+                                        venta_existente_ml.ml_financing_fee = _financing_fee
+                                        venta_existente_ml.ml_shipping_cost = _ship
+                                        venta_existente_ml.ml_tax_fee = _tax_fee
+                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_fixed_fee','ml_financing_fee','ml_shipping_cost','ml_tax_fee'])
+                                        logger.info(f"Orden {order_id}: fees actualizados (sale={_sale_fee}, fixed={_fixed_fee}, financing={_financing_fee}, shipping={_ship}, tax={_tax_fee})")
+                                    else:
+                                        logger.info(f"Orden {order_id} ya procesada, fees aún en cero (ML todavía no los calculó)")
+                            except Exception as fee_err:
+                                logger.warning(f"Error al actualizar fees de orden {order_id}: {fee_err}")
+                        else:
+                            logger.info(f"Orden {order_id} ya procesada anteriormente, omitiendo")
                         return Response({
                             'status': 'success',
                             'message': 'Orden ya procesada',
                             'order_id': order_id
                         }, status=status.HTTP_200_OK)
-                    
-                    ml_service = MercadoLibreService(tienda)
+
                     order = ml_service.get_order(order_id)
                     
                     if order:
