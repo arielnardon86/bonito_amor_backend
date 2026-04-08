@@ -4266,10 +4266,18 @@ class MetricasAPIView(APIView):
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         # Filtrar detalles que tienen producto (excluir notas de crédito y detalles sin producto)
+        # cantidad_pagados_ml: unidades vendidas por ML cuyo pago ya fue acreditado (ml_sale_fee > 0)
         productos_mas_vendidos = detalles_activos.filter(producto__isnull=False).values(
             'producto__nombre', 'producto__talle'
         ).annotate(
-            cantidad_total=Sum('cantidad')
+            cantidad_total=Sum('cantidad'),
+            cantidad_pagados_ml=Sum(
+                Case(
+                    When(venta__origen_mercadolibre=True, venta__ml_sale_fee__gt=0, then=F('cantidad')),
+                    default=Value(0),
+                    output_field=DecimalField()
+                )
+            )
         ).order_by('-cantidad_total')[:10]
         
         # Para ventas por usuario, también aplicar la lógica de diferencia
