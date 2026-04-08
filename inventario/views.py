@@ -2282,27 +2282,32 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     ml_order_id=order_id_from_pay
                                 ).first()
                                 if venta_pay:
-                                    fees_vacios = (
-                                        (venta_pay.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') and
-                                        (venta_pay.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00') and
-                                        (venta_pay.ml_tax_fee or Decimal('0.00')) == Decimal('0.00')
-                                    )
-                                    if fees_vacios:
-                                        # /collections devuelve datos del pago: marketplace_fee, shipping_cost, taxes_amount
-                                        _sale_fee  = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
-                                        _ship_cost = abs(Decimal(str(payment.get('shipping_cost') or 0)))
-                                        _tax_fee   = abs(Decimal(str(payment.get('taxes_amount') or 0)))
-                                        logger.info(f"Payment {payment_id} campos: marketplace_fee={_sale_fee}, shipping_cost={_ship_cost}, taxes_amount={_tax_fee}. Raw keys: {list(payment.keys())}")
-                                        if _sale_fee or _ship_cost or _tax_fee:
-                                            venta_pay.ml_sale_fee      = _sale_fee
+                                    # /collections es la fuente autoritativa para shipping_cost y taxes_amount
+                                    # (el order tiene shipping_cost sin impuestos sobre el envío).
+                                    # Siempre actualizar shipping y tax desde collections.
+                                    # Solo actualizar sale_fee si todavía está en cero.
+                                    _sale_fee  = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
+                                    _ship_cost = abs(Decimal(str(payment.get('shipping_cost') or 0)))
+                                    _tax_fee   = abs(Decimal(str(payment.get('taxes_amount') or 0)))
+                                    logger.info(f"Payment {payment_id}: marketplace_fee={_sale_fee}, shipping_cost={_ship_cost}, taxes_amount={_tax_fee}")
+                                    if _sale_fee or _ship_cost or _tax_fee:
+                                        update_fields = []
+                                        if _ship_cost and _ship_cost != (venta_pay.ml_shipping_cost or Decimal('0.00')):
                                             venta_pay.ml_shipping_cost = _ship_cost
-                                            venta_pay.ml_tax_fee       = _tax_fee
-                                            venta_pay.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee'])
-                                            logger.info(f"Payment {payment_id}: fees actualizados para orden {order_id_from_pay} (sale={_sale_fee}, shipping={_ship_cost}, tax={_tax_fee})")
+                                            update_fields.append('ml_shipping_cost')
+                                        if _tax_fee and _tax_fee != (venta_pay.ml_tax_fee or Decimal('0.00')):
+                                            venta_pay.ml_tax_fee = _tax_fee
+                                            update_fields.append('ml_tax_fee')
+                                        if _sale_fee and (venta_pay.ml_sale_fee or Decimal('0.00')) == Decimal('0.00'):
+                                            venta_pay.ml_sale_fee = _sale_fee
+                                            update_fields.append('ml_sale_fee')
+                                        if update_fields:
+                                            venta_pay.save(update_fields=update_fields)
+                                            logger.info(f"Payment {payment_id}: actualizado {update_fields} para orden {order_id_from_pay}")
                                         else:
-                                            logger.info(f"Payment {payment_id}: marketplace_fee=0, sin fees disponibles aún")
+                                            logger.info(f"Payment {payment_id}: sin cambios nuevos")
                                     else:
-                                        logger.info(f"Payment {payment_id}: venta ya tiene fees, omitiendo")
+                                        logger.info(f"Payment {payment_id}: marketplace_fee=0, sin fees disponibles aún")
                     except Exception as pay_err:
                         logger.warning(f"Error procesando payments topic (payment {payment_id}): {pay_err}")
 
