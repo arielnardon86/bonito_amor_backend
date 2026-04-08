@@ -1844,24 +1844,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             try:
                                 order_para_fees = ml_service.get_order(order_id)
                                 if order_para_fees:
-                                    _sale_fee = _fixed_fee = _financing_fee = _tax_fee = Decimal('0.00')
-                                    for fee in (order_para_fees.get('fee_details') or []):
-                                        ft = fee.get('type', '')
-                                        amt = abs(Decimal(str(fee.get('amount', 0))))
-                                        if ft == 'sale_fee':      _sale_fee = amt
-                                        elif ft == 'fixed_fee':   _fixed_fee = amt
-                                        elif ft == 'financing_fee': _financing_fee = amt
-                                        elif ft == 'tax':         _tax_fee = amt
-                                    shipping_info = order_para_fees.get('shipping') or {}
-                                    _ship = abs(Decimal(str(shipping_info.get('cost') or shipping_info.get('base_cost') or 0)))
-                                    if _sale_fee or _fixed_fee or _financing_fee or _ship or _tax_fee:
+                                    _sale_fee = Decimal('0.00')
+                                    _ship = Decimal('0.00')
+                                    _tax = Decimal('0.00')
+                                    # Comisión desde order_items[].sale_fee
+                                    for oi in (order_para_fees.get('order_items') or []):
+                                        _sale_fee += abs(Decimal(str(oi.get('sale_fee') or 0)))
+                                    # Envío e impuestos desde payments[]
+                                    for pay in (order_para_fees.get('payments') or []):
+                                        _ship += abs(Decimal(str(pay.get('shipping_cost') or 0)))
+                                        _tax  += abs(Decimal(str(pay.get('taxes_amount') or 0)))
+                                        _mp = abs(Decimal(str(pay.get('marketplace_fee') or 0)))
+                                        if _mp > 0 and _sale_fee == Decimal('0.00'):
+                                            _sale_fee = _mp
+                                    if _sale_fee or _ship or _tax:
                                         venta_existente_ml.ml_sale_fee = _sale_fee
-                                        venta_existente_ml.ml_fixed_fee = _fixed_fee
-                                        venta_existente_ml.ml_financing_fee = _financing_fee
                                         venta_existente_ml.ml_shipping_cost = _ship
-                                        venta_existente_ml.ml_tax_fee = _tax_fee
-                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_fixed_fee','ml_financing_fee','ml_shipping_cost','ml_tax_fee'])
-                                        logger.info(f"Orden {order_id}: fees actualizados (sale={_sale_fee}, fixed={_fixed_fee}, financing={_financing_fee}, shipping={_ship}, tax={_tax_fee})")
+                                        venta_existente_ml.ml_tax_fee = _tax
+                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee'])
+                                        logger.info(f"Orden {order_id}: fees actualizados (sale={_sale_fee}, shipping={_ship}, tax={_tax})")
                                     else:
                                         logger.info(f"Orden {order_id} ya procesada, fees aún en cero (ML todavía no los calculó)")
                             except Exception as fee_err:
@@ -1937,29 +1938,29 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     es_financiero=True
                                 )
                             
-                            # Parsear fee_details de ML: cargo por venta, costo fijo, cuotas, impuestos
+                            # Leer fees reales de ML desde los campos documentados:
+                            # - order_items[].sale_fee → comisión por ítem
+                            # - payments[].marketplace_fee → comisión total (disponible post-acreditación)
+                            # - payments[].shipping_cost → costo de envío al vendedor
+                            # - payments[].taxes_amount → impuestos
                             ml_sale_fee = Decimal('0.00')
-                            ml_fixed_fee = Decimal('0.00')
-                            ml_financing_fee = Decimal('0.00')
+                            ml_shipping_cost = Decimal('0.00')
                             ml_tax_fee = Decimal('0.00')
-                            for fee in (order.get('fee_details') or []):
-                                fee_type = fee.get('type', '')
-                                amount = abs(Decimal(str(fee.get('amount', 0))))
-                                if fee_type == 'sale_fee':
-                                    ml_sale_fee = amount
-                                elif fee_type == 'fixed_fee':
-                                    ml_fixed_fee = amount
-                                elif fee_type == 'financing_fee':
-                                    ml_financing_fee = amount
-                                elif fee_type == 'tax':
-                                    ml_tax_fee = amount
 
-                            # Costo de envío real cobrado por ML al vendedor (shipping.cost o base_cost)
-                            shipping_info = order.get('shipping') or {}
-                            _ship_cost = shipping_info.get('cost') or shipping_info.get('base_cost') or 0
-                            ml_shipping_cost = abs(Decimal(str(_ship_cost)))
+                            # Comisión: sumar sale_fee de cada order_item
+                            for oi in (order.get('order_items') or []):
+                                ml_sale_fee += abs(Decimal(str(oi.get('sale_fee') or 0)))
 
-                            logger.info(f"ML fees para orden {order_id}: sale={ml_sale_fee}, fixed={ml_fixed_fee}, financing={ml_financing_fee}, shipping={ml_shipping_cost}, tax={ml_tax_fee}")
+                            # Envío e impuestos desde payments[]
+                            for pay in (order.get('payments') or []):
+                                ml_shipping_cost += abs(Decimal(str(pay.get('shipping_cost') or 0)))
+                                ml_tax_fee += abs(Decimal(str(pay.get('taxes_amount') or 0)))
+                                # marketplace_fee es la comisión total; usarlo si sale_fee vino en 0
+                                _mp = abs(Decimal(str(pay.get('marketplace_fee') or 0)))
+                                if _mp > 0 and ml_sale_fee == Decimal('0.00'):
+                                    ml_sale_fee = _mp
+
+                            logger.info(f"ML fees para orden {order_id}: sale={ml_sale_fee}, shipping={ml_shipping_cost}, tax={ml_tax_fee}")
 
                             # Preparar detalles de venta y calcular totales (arancel + costo envío por producto)
                             detalles_venta = []
@@ -2287,9 +2288,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         (venta_pay.ml_tax_fee or Decimal('0.00')) == Decimal('0.00')
                                     )
                                     if fees_vacios:
-                                        _sale_fee   = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
-                                        _ship_cost  = abs(Decimal(str(payment.get('shipping_cost') or 0)))
-                                        _tax_fee    = abs(Decimal(str(payment.get('taxes_amount') or 0)))
+                                        # /collections devuelve datos del pago: marketplace_fee, shipping_cost, taxes_amount
+                                        _sale_fee  = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
+                                        _ship_cost = abs(Decimal(str(payment.get('shipping_cost') or 0)))
+                                        _tax_fee   = abs(Decimal(str(payment.get('taxes_amount') or 0)))
+                                        logger.info(f"Payment {payment_id} campos: marketplace_fee={_sale_fee}, shipping_cost={_ship_cost}, taxes_amount={_tax_fee}. Raw keys: {list(payment.keys())}")
                                         if _sale_fee or _ship_cost or _tax_fee:
                                             venta_pay.ml_sale_fee      = _sale_fee
                                             venta_pay.ml_shipping_cost = _ship_cost
@@ -2297,7 +2300,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             venta_pay.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee'])
                                             logger.info(f"Payment {payment_id}: fees actualizados para orden {order_id_from_pay} (sale={_sale_fee}, shipping={_ship_cost}, tax={_tax_fee})")
                                         else:
-                                            logger.info(f"Payment {payment_id}: aún sin fees (marketplace_fee=0)")
+                                            logger.info(f"Payment {payment_id}: marketplace_fee=0, sin fees disponibles aún")
                                     else:
                                         logger.info(f"Payment {payment_id}: venta ya tiene fees, omitiendo")
                     except Exception as pay_err:
