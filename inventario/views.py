@@ -2260,6 +2260,49 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         'message': f'Error al procesar orden: {str(e)}'
                     }, status=status.HTTP_200_OK)
             
+            # ── Topic: payments ──────────────────────────────────────────────
+            # ML notifica el pago con resource=/collections/{payment_id}
+            # El endpoint /collections/{id} devuelve marketplace_fee, shipping_cost
+            # y taxes_amount — datos que NO están disponibles en el order al momento
+            # de la primera notificación (fee_details siempre llega vacío).
+            if topic == 'payments' and resource and '/collections/' in resource:
+                payment_id = resource.split('/collections/')[-1].split('?')[0].strip().split('/')[0]
+                if payment_id:
+                    try:
+                        from .services.mercadolibre_service import MercadoLibreService
+                        ml_service_pay = MercadoLibreService(tienda)
+                        payment = ml_service_pay.get_payment(payment_id)
+                        if payment:
+                            order_id_from_pay = str(payment.get('order_id') or '')
+                            if order_id_from_pay:
+                                venta_pay = Venta.objects.filter(
+                                    tienda=tienda,
+                                    origen_mercadolibre=True,
+                                    ml_order_id=order_id_from_pay
+                                ).first()
+                                if venta_pay:
+                                    fees_vacios = (
+                                        (venta_pay.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') and
+                                        (venta_pay.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00') and
+                                        (venta_pay.ml_tax_fee or Decimal('0.00')) == Decimal('0.00')
+                                    )
+                                    if fees_vacios:
+                                        _sale_fee   = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
+                                        _ship_cost  = abs(Decimal(str(payment.get('shipping_cost') or 0)))
+                                        _tax_fee    = abs(Decimal(str(payment.get('taxes_amount') or 0)))
+                                        if _sale_fee or _ship_cost or _tax_fee:
+                                            venta_pay.ml_sale_fee      = _sale_fee
+                                            venta_pay.ml_shipping_cost = _ship_cost
+                                            venta_pay.ml_tax_fee       = _tax_fee
+                                            venta_pay.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee'])
+                                            logger.info(f"Payment {payment_id}: fees actualizados para orden {order_id_from_pay} (sale={_sale_fee}, shipping={_ship_cost}, tax={_tax_fee})")
+                                        else:
+                                            logger.info(f"Payment {payment_id}: aún sin fees (marketplace_fee=0)")
+                                    else:
+                                        logger.info(f"Payment {payment_id}: venta ya tiene fees, omitiendo")
+                    except Exception as pay_err:
+                        logger.warning(f"Error procesando payments topic (payment {payment_id}): {pay_err}")
+
             # Si no es una notificación de orden, solo confirmar recepción
             return Response({
                 'status': 'received',

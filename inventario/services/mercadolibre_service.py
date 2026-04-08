@@ -1004,6 +1004,35 @@ class MercadoLibreService:
             logger.error(f"Error inesperado al obtener orden {order_id}: {e}")
             return None
     
+    def get_payment(self, payment_id):
+        """
+        Obtiene datos de un pago desde /collections/{payment_id}.
+        Devuelve el dict 'collection' con marketplace_fee, shipping_cost,
+        taxes_amount y order_id, o None si hay error.
+        """
+        self.ensure_valid_token()
+        try:
+            url = f"{self.base_url}/collections/{payment_id}"
+            headers = {
+                'Authorization': f'Bearer {self.tienda.ml_access_token}',
+                'Content-Type': 'application/json',
+                'User-Agent': ML_USER_AGENT_API,
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Payment {payment_id} obtenido exitosamente")
+            return data.get('collection') or data
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                logger.warning(f"Payment {payment_id} no encontrado")
+            else:
+                logger.warning(f"Error al obtener payment {payment_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error inesperado al obtener payment {payment_id}: {e}")
+            return None
+
     def get_order_billing_info(self, order_id):
         """
         Obtiene datos de facturación del comprador para una orden (nombre, apellido, documento, dirección).
