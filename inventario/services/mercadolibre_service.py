@@ -1021,7 +1021,7 @@ class MercadoLibreService:
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             data = response.json()
-            logger.info(f"Payment {payment_id} obtenido exitosamente")
+            logger.info(f"Payment {payment_id} obtenido exitosamente. Keys: {list(data.keys())}. Raw (truncado): {str(data)[:800]}")
             return data.get('collection') or data
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 404:
