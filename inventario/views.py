@@ -1832,15 +1832,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + entrega)
                     venta_existente_ml = Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).first()
                     if venta_existente_ml:
-                        # Si los fees están en cero, intentar actualizarlos (ML los calcula con demora)
-                        fees_vacios = (
-                            (venta_existente_ml.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') and
-                            (venta_existente_ml.ml_fixed_fee or Decimal('0.00')) == Decimal('0.00') and
-                            (venta_existente_ml.ml_financing_fee or Decimal('0.00')) == Decimal('0.00') and
-                            (venta_existente_ml.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00') and
+                        # Intentar actualizar fees que aún están en cero (ML los calcula con demora)
+                        fees_incompletos = (
+                            (venta_existente_ml.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') or
+                            (venta_existente_ml.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00') or
                             (venta_existente_ml.ml_tax_fee or Decimal('0.00')) == Decimal('0.00')
                         )
-                        if fees_vacios:
+                        if fees_incompletos:
                             try:
                                 order_para_fees = ml_service.get_order(order_id)
                                 if order_para_fees:
@@ -1857,16 +1855,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         _mp = abs(Decimal(str(pay.get('marketplace_fee') or 0)))
                                         if _mp > 0 and _sale_fee == Decimal('0.00'):
                                             _sale_fee = _mp
-                                    if _sale_fee or _ship or _tax:
+                                    # Solo actualizar campos que aún están en cero
+                                    update_fields = []
+                                    if _sale_fee and (venta_existente_ml.ml_sale_fee or Decimal('0.00')) == Decimal('0.00'):
                                         venta_existente_ml.ml_sale_fee = _sale_fee
+                                        update_fields.append('ml_sale_fee')
+                                    if _ship and (venta_existente_ml.ml_shipping_cost or Decimal('0.00')) == Decimal('0.00'):
                                         venta_existente_ml.ml_shipping_cost = _ship
+                                        update_fields.append('ml_shipping_cost')
+                                    if _tax and (venta_existente_ml.ml_tax_fee or Decimal('0.00')) == Decimal('0.00'):
                                         venta_existente_ml.ml_tax_fee = _tax
+                                        update_fields.append('ml_tax_fee')
+                                    if update_fields:
                                         if not venta_existente_ml.ml_fecha_entrega:
                                             venta_existente_ml.ml_fecha_entrega = timezone.now()
-                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee','ml_fecha_entrega'])
-                                        logger.info(f"Orden {order_id}: fees actualizados (sale={_sale_fee}, shipping={_ship}, tax={_tax})")
+                                            update_fields.append('ml_fecha_entrega')
+                                        venta_existente_ml.save(update_fields=update_fields)
+                                        logger.info(f"Orden {order_id}: fees actualizados {update_fields} (sale={_sale_fee}, shipping={_ship}, tax={_tax})")
                                     else:
-                                        logger.info(f"Orden {order_id} ya procesada, fees aún en cero (ML todavía no los calculó)")
+                                        logger.info(f"Orden {order_id}: fees incompletos pero ML aún no los calculó")
                             except Exception as fee_err:
                                 logger.warning(f"Error al actualizar fees de orden {order_id}: {fee_err}")
                         else:
