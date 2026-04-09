@@ -1861,7 +1861,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         venta_existente_ml.ml_sale_fee = _sale_fee
                                         venta_existente_ml.ml_shipping_cost = _ship
                                         venta_existente_ml.ml_tax_fee = _tax
-                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee'])
+                                        if not venta_existente_ml.ml_fecha_entrega:
+                                            venta_existente_ml.ml_fecha_entrega = timezone.now()
+                                        venta_existente_ml.save(update_fields=['ml_sale_fee','ml_shipping_cost','ml_tax_fee','ml_fecha_entrega'])
                                         logger.info(f"Orden {order_id}: fees actualizados (sale={_sale_fee}, shipping={_ship}, tax={_tax})")
                                     else:
                                         logger.info(f"Orden {order_id} ya procesada, fees aún en cero (ML todavía no los calculó)")
@@ -2343,6 +2345,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         if _sale_fee and (venta_pay.ml_sale_fee or Decimal('0.00')) == Decimal('0.00'):
                                             venta_pay.ml_sale_fee = _sale_fee
                                             update_fields.append('ml_sale_fee')
+                                        if not venta_pay.ml_fecha_entrega and (_sale_fee or _ship_cost or _tax_fee):
+                                            venta_pay.ml_fecha_entrega = timezone.now()
+                                            update_fields.append('ml_fecha_entrega')
                                         if update_fields:
                                             venta_pay.save(update_fields=update_fields)
                                             logger.info(f"Payment {payment_id}: actualizado {update_fields} para orden {order_id_from_pay}")
@@ -4308,6 +4313,20 @@ class MetricasAPIView(APIView):
         # Flag: la tienda tiene Mercado Libre integrado
         tienda_tiene_ml = bool(getattr(tienda_obj, 'ml_access_token', None) and getattr(tienda_obj, 'ml_sync_habilitado', False))
 
+        # % ventas ML ya cobradas: ML acredita 6 días después de la fecha de entrega
+        ml_pct_cobradas = None
+        if tienda_tiene_ml:
+            total_ml = sum(1 for v in ventas_list if v.id not in nota_credito_map and v.origen_mercadolibre)
+            umbral_cobro = timezone.now() - timedelta(days=6)
+            ml_cobradas = sum(
+                1 for v in ventas_list
+                if v.id not in nota_credito_map
+                and v.origen_mercadolibre
+                and v.ml_fecha_entrega
+                and v.ml_fecha_entrega <= umbral_cobro
+            )
+            ml_pct_cobradas = round((ml_cobradas / total_ml * 100), 1) if total_ml > 0 else 0
+
         # La rentabilidad resta costo productos, egresos, aranceles, costo envío ML, descuentos ML e impuestos ML
         rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_costo_envio_ml - total_ml_descuentos - total_ml_impuestos
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
@@ -4403,6 +4422,7 @@ class MetricasAPIView(APIView):
             'total_ml_shipping_cost': total_ml_shipping_cost,
             'total_ml_impuestos': total_ml_impuestos,
             'tienda_tiene_ml': tienda_tiene_ml,
+            'ml_pct_cobradas': ml_pct_cobradas,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,
             'productos_mas_vendidos': list(productos_mas_vendidos),
