@@ -2261,6 +2261,48 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         'message': f'Error al procesar orden: {str(e)}'
                     }, status=status.HTTP_200_OK)
             
+            # ── Topic: shipments ─────────────────────────────────────────────
+            # ML notifica cambios de estado del envío. Cuando status=delivered
+            # guardamos la fecha de entrega real en la venta.
+            if topic == 'shipments' and resource and '/shipments/' in resource:
+                shipment_id = resource.split('/shipments/')[-1].split('?')[0].strip().split('/')[0]
+                if shipment_id:
+                    try:
+                        from .services.mercadolibre_service import MercadoLibreService
+                        ml_service_ship = MercadoLibreService(tienda)
+                        shipment = ml_service_ship.get_shipment(shipment_id)
+                        if shipment and shipment.get('status') == 'delivered':
+                            # Buscar la venta por el shipment_id o por order_id del shipment
+                            order_id_from_ship = str(shipment.get('order_id') or '')
+                            venta_ship = None
+                            if order_id_from_ship:
+                                venta_ship = Venta.objects.filter(
+                                    tienda=tienda,
+                                    origen_mercadolibre=True,
+                                    ml_order_id=order_id_from_ship
+                                ).first()
+                            if venta_ship and not venta_ship.ml_fecha_entrega:
+                                # date_delivered o date_first_printed como fallback
+                                fecha_str = (
+                                    shipment.get('date_delivered') or
+                                    shipment.get('status_history', {}).get('date_delivered') or
+                                    shipment.get('date_last_modified')
+                                )
+                                if fecha_str:
+                                    try:
+                                        fecha_entrega = timezone.datetime.fromisoformat(
+                                            str(fecha_str).replace('Z', '+00:00')
+                                        )
+                                        venta_ship.ml_fecha_entrega = fecha_entrega
+                                        venta_ship.save(update_fields=['ml_fecha_entrega'])
+                                        logger.info(f"Shipment {shipment_id}: entrega registrada el {fecha_entrega} para orden {order_id_from_ship}")
+                                    except (ValueError, TypeError) as fe:
+                                        logger.warning(f"Shipment {shipment_id}: no se pudo parsear fecha '{fecha_str}': {fe}")
+                            elif venta_ship and venta_ship.ml_fecha_entrega:
+                                logger.info(f"Shipment {shipment_id}: fecha de entrega ya registrada, omitiendo")
+                    except Exception as ship_err:
+                        logger.warning(f"Error procesando shipments topic (shipment {shipment_id}): {ship_err}")
+
             # ── Topic: payments ──────────────────────────────────────────────
             # ML notifica el pago con resource=/collections/{payment_id}
             # El endpoint /collections/{id} devuelve marketplace_fee, shipping_cost

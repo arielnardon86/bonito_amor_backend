@@ -1004,6 +1004,24 @@ class MercadoLibreService:
             logger.error(f"Error inesperado al obtener orden {order_id}: {e}")
             return None
     
+    def get_shipment(self, shipment_id):
+        """Obtiene datos de un envío desde /shipments/{id}."""
+        self.ensure_valid_token()
+        try:
+            url = f"{self.base_url}/shipments/{shipment_id}"
+            headers = {
+                'Authorization': f'Bearer {self.tienda.ml_access_token}',
+                'Content-Type': 'application/json',
+                'User-Agent': ML_USER_AGENT_API,
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            logger.info(f"Shipment {shipment_id} obtenido exitosamente")
+            return response.json()
+        except Exception as e:
+            logger.warning(f"Error al obtener shipment {shipment_id}: {e}")
+            return None
+
     def get_payment(self, payment_id):
         """
         Obtiene datos de un pago desde /collections/{payment_id}.
