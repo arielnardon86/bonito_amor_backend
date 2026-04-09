@@ -2079,8 +2079,6 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             arancel_total=total_arancel,
                                             costo_envio_ml=total_costo_envio,
                                             ml_sale_fee=ml_sale_fee,
-                                            ml_fixed_fee=ml_fixed_fee,
-                                            ml_financing_fee=ml_financing_fee,
                                             ml_shipping_cost=ml_shipping_cost,
                                             ml_tax_fee=ml_tax_fee,
                                             origen_mercadolibre=True,
