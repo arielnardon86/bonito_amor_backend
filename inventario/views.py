@@ -1867,9 +1867,6 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         venta_existente_ml.ml_tax_fee = _tax
                                         update_fields.append('ml_tax_fee')
                                     if update_fields:
-                                        if not venta_existente_ml.ml_fecha_entrega:
-                                            venta_existente_ml.ml_fecha_entrega = timezone.now()
-                                            update_fields.append('ml_fecha_entrega')
                                         venta_existente_ml.save(update_fields=update_fields)
                                         logger.info(f"Orden {order_id}: fees actualizados {update_fields} (sale={_sale_fee}, shipping={_ship}, tax={_tax})")
                                     else:
