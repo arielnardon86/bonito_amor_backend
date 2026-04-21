@@ -805,6 +805,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if user.tienda:
             token['tienda_id'] = str(user.tienda.id)
             token['tienda_nombre'] = user.tienda.nombre
+        tiendas = list(user.tiendas_autorizadas.values('id', 'nombre'))
+        token['tiendas_autorizadas'] = [
+            {'id': str(t['id']), 'nombre': t['nombre']} for t in tiendas
+        ]
         return token
 
     def validate(self, attrs):

@@ -9,6 +9,7 @@ from decimal import Decimal
 # Modelo de Usuario Personalizado
 class User(AbstractUser):
     tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='empleados')
+    tiendas_autorizadas = models.ManyToManyField('Tienda', blank=True, related_name='usuarios_autorizados')
 
     class Meta:
         verbose_name = "Usuario"
