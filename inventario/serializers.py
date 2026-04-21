@@ -805,9 +805,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if user.tienda:
             token['tienda_id'] = str(user.tienda.id)
             token['tienda_nombre'] = user.tienda.nombre
-        tiendas = list(user.tiendas_autorizadas.values('id', 'nombre'))
+        tiendas = {str(t['id']): t for t in user.tiendas_autorizadas.values('id', 'nombre')}
+        # Siempre incluir la tienda principal en la lista
+        if user.tienda and str(user.tienda.id) not in tiendas:
+            tiendas[str(user.tienda.id)] = {'id': str(user.tienda.id), 'nombre': user.tienda.nombre}
         token['tiendas_autorizadas'] = [
-            {'id': str(t['id']), 'nombre': t['nombre']} for t in tiendas
+            {'id': str(t['id']), 'nombre': t['nombre']} for t in tiendas.values()
         ]
         return token
 
