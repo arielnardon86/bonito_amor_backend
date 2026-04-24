@@ -3059,6 +3059,13 @@ class VentaViewSet(viewsets.ModelViewSet):
         elif fecha_venta_date:
             queryset = queryset.filter(fecha_venta__date=fecha_venta_date)
 
+        hora_desde = self.request.query_params.get('hora_desde', None)
+        hora_hasta = self.request.query_params.get('hora_hasta', None)
+        if hora_desde:
+            queryset = queryset.filter(fecha_venta__time__gte=hora_desde)
+        if hora_hasta:
+            queryset = queryset.filter(fecha_venta__time__lte=hora_hasta)
+
         usuario = self.request.query_params.get('usuario', None)
         if usuario:
             queryset = queryset.filter(usuario=usuario)
