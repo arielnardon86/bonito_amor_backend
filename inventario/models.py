@@ -255,7 +255,7 @@ class Producto(models.Model):
     talle = models.CharField(max_length=50, blank=True, null=True) 
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
-    codigo_barras = models.CharField(max_length=100, unique=True, blank=True, null=True)
+    codigo_barras = models.CharField(max_length=100, blank=True, null=True)
     
     # Integración con Mercado Libre
     ml_item_id = models.CharField(
@@ -299,7 +299,7 @@ class Producto(models.Model):
     class Meta:
         verbose_name = "Producto"
         verbose_name_plural = "Productos"
-        unique_together = ('nombre', 'tienda', 'talle') 
+        unique_together = [('nombre', 'tienda', 'talle'), ('codigo_barras', 'tienda')]
         ordering = ['nombre']
 
     def __str__(self):

@@ -230,6 +230,18 @@ class ProductoViewSet(viewsets.ModelViewSet):
         except Producto.DoesNotExist:
             return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=False, methods=['get'], url_path='nombre_por_barcode')
+    def nombre_por_barcode(self, request):
+        """Busca el nombre de un producto por código de barras en CUALQUIER tienda."""
+        codigo = request.query_params.get('barcode', None)
+        if not codigo:
+            return Response({"detail": "Parámetro barcode es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+
+        producto = Producto.objects.filter(codigo_barras=codigo).first()
+        if not producto:
+            return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({"nombre": producto.nombre})
 
     @action(detail=False, methods=['get'])
     def productos_con_stock(self, request):
