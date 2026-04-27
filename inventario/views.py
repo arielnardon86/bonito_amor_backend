@@ -4090,14 +4090,14 @@ def tn_install(request):
     from django.conf import settings as django_settings
     from .services.tiendanube_service import TiendaNubeService
 
-    code = request.data.get('code', '').strip()
+    code          = request.data.get('code', '').strip()
     nombre_custom = request.data.get('nombre', '').strip()
+    # Credenciales opcionales: si el cliente tiene su propia app en TN Partners
+    app_id        = request.data.get('app_id', '').strip() or os.environ.get('TN_APP_ID', '28208')
+    client_secret = request.data.get('client_secret', '').strip() or os.environ.get('TN_CLIENT_SECRET', '87f123d98ed49fe6424c1e6d6b582e0ab9b82c7a2f696b11')
 
     if not code:
         return Response({'error': 'Código de autorización faltante.'}, status=400)
-
-    app_id        = os.environ.get('TN_APP_ID', '28208')
-    client_secret = os.environ.get('TN_CLIENT_SECRET', '87f123d98ed49fe6424c1e6d6b582e0ab9b82c7a2f696b11')
 
     if not app_id or not client_secret:
         return Response({'error': 'La app no tiene credenciales de Tienda Nube configuradas.'}, status=500)
