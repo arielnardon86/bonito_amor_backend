@@ -4096,8 +4096,8 @@ def tn_install(request):
     if not code:
         return Response({'error': 'Código de autorización faltante.'}, status=400)
 
-    app_id        = os.environ.get('TN_APP_ID', '29782')
-    client_secret = os.environ.get('TN_CLIENT_SECRET', 'b0ea31dadda6af09a2e9b9426f92fd01d31d30bb4bd14ec6')
+    app_id        = os.environ.get('TN_APP_ID', '28208')
+    client_secret = os.environ.get('TN_CLIENT_SECRET', '87f123d98ed49fe6424c1e6d6b582e0ab9b82c7a2f696b11')
 
     if not app_id or not client_secret:
         return Response({'error': 'La app no tiene credenciales de Tienda Nube configuradas.'}, status=500)
