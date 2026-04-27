@@ -4077,6 +4077,106 @@ class InventarioMetricsAPIView(APIView):
 
         return Response(data)
 
+# --- INSTALACIÓN AUTO-GESTIONADA TIENDA NUBE ---
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def tn_install(request):
+    """
+    Endpoint público para la instalación auto-gestionada desde Tienda Nube.
+    Flujo: cliente autoriza la app en TN → TN redirige a tn-callback.html?code=XXX
+    → la página llama a este endpoint → se crea/actualiza la Tienda automáticamente.
+    """
+    import os
+    from django.conf import settings as django_settings
+    from .services.tiendanube_service import TiendaNubeService
+
+    code = request.data.get('code', '').strip()
+    nombre_custom = request.data.get('nombre', '').strip()
+
+    if not code:
+        return Response({'error': 'Código de autorización faltante.'}, status=400)
+
+    app_id        = os.environ.get('TN_APP_ID', '29782')
+    client_secret = os.environ.get('TN_CLIENT_SECRET', 'b0ea31dadda6af09a2e9b9426f92fd01d31d30bb4bd14ec6')
+
+    if not app_id or not client_secret:
+        return Response({'error': 'La app no tiene credenciales de Tienda Nube configuradas.'}, status=500)
+
+    # Intercambiar código por access_token
+    try:
+        access_token, store_id = TiendaNubeService.exchange_code_for_token(app_id, client_secret, code)
+    except Exception as e:
+        logger.error("tn_install: error intercambiando código: %s", e)
+        return Response({'error': f'Error al autenticar con Tienda Nube: {e}'}, status=400)
+
+    # Obtener nombre e email de la tienda desde la API de TN
+    tn_nombre = nombre_custom
+    tn_email  = ''
+    try:
+        store_info = TiendaNubeService.get_store_info_static(access_token, store_id)
+        name_dict  = store_info.get('name') or {}
+        tn_nombre  = nombre_custom or name_dict.get('es') or name_dict.get('pt') or f'Tienda {store_id}'
+        tn_email   = store_info.get('email', '')
+    except Exception as e:
+        logger.warning("tn_install: no se pudo obtener store info de TN: %s", e)
+        tn_nombre = nombre_custom or f'Tienda {store_id}'
+
+    # Buscar tienda existente por tn_store_id
+    tienda = Tienda.objects.filter(tn_store_id=store_id).first()
+    created = False
+
+    if tienda:
+        tienda.tn_access_token    = access_token
+        tienda.tn_app_id          = app_id
+        tienda.tn_client_secret   = client_secret
+        tienda.tn_sync_habilitado = True
+        tienda.save(update_fields=['tn_access_token', 'tn_app_id', 'tn_client_secret', 'tn_sync_habilitado'])
+        logger.info("tn_install: tienda existente actualizada — %s (store_id=%s)", tienda.nombre, store_id)
+    else:
+        # Crear nueva tienda con datos mínimos
+        tienda = Tienda.objects.create(
+            nombre            = tn_nombre,
+            email             = tn_email,
+            tn_access_token   = access_token,
+            tn_store_id       = store_id,
+            tn_app_id         = app_id,
+            tn_client_secret  = client_secret,
+            tn_sync_habilitado= True,
+            plataforma_ecommerce = 'TIENDA_NUBE',
+        )
+        created = True
+        logger.info("tn_install: nueva tienda creada — %s (store_id=%s, id=%s)", tienda.nombre, store_id, tienda.id)
+
+    # Registrar webhook automáticamente
+    webhook_ok = False
+    try:
+        tn_svc = TiendaNubeService(tienda)
+        if tienda.tn_webhook_id:
+            try:
+                tn_svc.delete_webhook(tienda.tn_webhook_id)
+            except Exception:
+                pass
+
+        base_url     = os.environ.get('BACKEND_URL', request.build_absolute_uri('/').rstrip('/'))
+        webhook_url  = f"{base_url}/api/tiendas/{tienda.id}/tiendanube/webhook/"
+        webhook_id   = tn_svc.register_webhook('order/paid', webhook_url)
+        tienda.tn_webhook_id = webhook_id
+        tienda.save(update_fields=['tn_webhook_id'])
+        webhook_ok = True
+        logger.info("tn_install: webhook registrado — id=%s url=%s", webhook_id, webhook_url)
+    except Exception as e:
+        logger.warning("tn_install: no se pudo registrar webhook: %s", e)
+
+    return Response({
+        'success':    True,
+        'created':    created,
+        'tienda_id':  str(tienda.id),
+        'nombre':     tienda.nombre,
+        'store_id':   store_id,
+        'webhook_ok': webhook_ok,
+    })
+
+
 # --- VISTA PARA VERIFICAR CONFIGURACIÓN DE BASE DE DATOS ---
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])  # Permitir acceso sin autenticación para diagnóstico
