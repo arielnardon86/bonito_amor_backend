@@ -626,7 +626,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         elif es_combinado:
             # Pago combinado: arancel calculado en el frontend por cada tramo
             data['arancel_total'] = Decimal(str(arancel_combinado or 0))
-        elif metodo_pago_str in metodos_financieros:
+        elif data.get('metodo_pago') in metodos_financieros:
             if not arancel_obj:
                  raise serializers.ValidationError({"arancel_aplicado_id": "Se requiere seleccionar un Plan/Arancel para este método de pago."})
 
