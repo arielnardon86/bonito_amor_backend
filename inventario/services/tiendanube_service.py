@@ -20,7 +20,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-TN_API_BASE  = "https://api.tiendanube.com/2025-03"
+TN_API_BASE  = "https://api.tiendanube.com/v1"
 TN_AUTH_URL  = "https://www.tiendanube.com/apps/{app_id}/authorize"
 TN_TOKEN_URL = "https://www.tiendanube.com/apps/authorize/token"
 
