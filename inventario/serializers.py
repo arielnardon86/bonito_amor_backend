@@ -512,6 +512,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         help_text="Arancel total calculado para ventas Mercado Libre (por producto)")
     costo_envio_ml = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
         help_text="Costo de envío total para ventas Mercado Libre (por producto)")
+    arancel_combinado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
+        help_text="Suma de aranceles de todos los métodos en un pago combinado")
     cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
     
     def to_internal_value(self, data):
@@ -529,7 +531,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 
-            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'cambio_devolucion_id'
+            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -606,26 +608,32 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         
         # Lógica de arancel
         data['arancel_total'] = Decimal('0.00')
-        arancel_obj = data.pop('arancel_aplicado_id', None) 
-        
+        arancel_obj      = data.pop('arancel_aplicado_id', None)
+        arancel_combinado = data.pop('arancel_combinado', None)
+
         # Normalizar: si viene como cadena vacía o None, convertir a None
         if arancel_obj == '' or arancel_obj is None:
             arancel_obj = None
 
         metodos_financieros = MetodoPago.objects.filter(es_financiero=True).values_list('nombre', flat=True)
-        # Mercado Libre usa aranceles por producto (arancel_total_ml, costo_envio_ml), no ArancelMetodoTienda
         es_mercadolibre = data.get('metodo_pago') == 'Mercado Libre'
+        metodo_pago_str = data.get('metodo_pago', '') or ''
+        # Pago combinado: el nombre del método contiene '+' o es exactamente 'Combinado'
+        es_combinado = '+' in metodo_pago_str or metodo_pago_str == 'Combinado'
 
         if es_mercadolibre:
             data['arancel_total'] = data.pop('arancel_total_ml', None) or Decimal('0.00')
             data['costo_envio_ml'] = data.pop('costo_envio_ml', None) or Decimal('0.00')
-        elif data.get('metodo_pago') in metodos_financieros:
+        elif es_combinado:
+            # Pago combinado: arancel calculado en el frontend por cada tramo
+            data['arancel_total'] = Decimal(str(arancel_combinado or 0))
+        elif metodo_pago_str in metodos_financieros:
             if not arancel_obj:
                  raise serializers.ValidationError({"arancel_aplicado_id": "Se requiere seleccionar un Plan/Arancel para este método de pago."})
 
             if arancel_obj.tienda != data['tienda']:
                  raise serializers.ValidationError({"arancel_aplicado_id": "El arancel seleccionado no pertenece a la tienda actual."})
-            
+
             arancel_porcentaje = arancel_obj.arancel_porcentaje
             total_final = data['total']
             data['arancel_total'] = total_final * (arancel_porcentaje / Decimal('100'))
