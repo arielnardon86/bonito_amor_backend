@@ -2485,6 +2485,26 @@ class TiendaViewSet(viewsets.ModelViewSet):
         logger.info("Tienda Nube conectada — tienda=%s store_id=%s", tienda.nombre, store_id)
         return Response({'success': True, 'store_id': store_id})
 
+    @action(detail=True, methods=['post'], url_path='tiendanube/set-token', url_name='tn-set-token')
+    def tn_set_token(self, request, pk=None):
+        """
+        Conecta la tienda usando un access_token y store_id ingresados manualmente.
+        Útil cuando la app está en modo desarrollo y TN no permite OAuth con tiendas reales.
+        """
+        tienda = self.get_object()
+        access_token = request.data.get('access_token', '').strip()
+        store_id     = request.data.get('store_id', '').strip()
+
+        if not access_token or not store_id:
+            return Response({'error': 'access_token y store_id son obligatorios.'}, status=400)
+
+        tienda.tn_access_token    = access_token
+        tienda.tn_store_id        = store_id
+        tienda.tn_sync_habilitado = True
+        tienda.save(update_fields=['tn_access_token', 'tn_store_id', 'tn_sync_habilitado'])
+        logger.info("Tienda Nube conectada manualmente — tienda=%s store_id=%s", tienda.nombre, store_id)
+        return Response({'success': True, 'store_id': store_id})
+
     @action(detail=True, methods=['post'], url_path='tiendanube/register-webhook', url_name='tn-register-webhook')
     def tn_register_webhook(self, request, pk=None):
         """
