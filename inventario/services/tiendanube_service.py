@@ -108,7 +108,12 @@ class TiendaNubeService:
         page = 1
         per_page = 25
         while True:
-            batch = self.get_products(page=page, per_page=per_page)
+            try:
+                batch = self.get_products(page=page, per_page=per_page)
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 404:
+                    break
+                raise
             if not batch:
                 break
             all_products.extend(batch)
