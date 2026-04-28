@@ -106,11 +106,14 @@ class TiendaNubeService:
         """Itera todas las páginas y devuelve la lista completa de productos."""
         all_products = []
         page = 1
+        per_page = 25
         while True:
-            batch = self.get_products(page=page, per_page=25)
+            batch = self.get_products(page=page, per_page=per_page)
             if not batch:
                 break
             all_products.extend(batch)
+            if len(batch) < per_page:
+                break
             page += 1
         return all_products
 
