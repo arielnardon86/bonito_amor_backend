@@ -2802,6 +2802,21 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 tn.update_variant_stock(prod.tn_variant_id, prod.stock)
                 ok += 1
             except Exception as e:
+                # Si la variante no existe (404), intentar refrescar el ID desde TN
+                is_404 = hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 404
+                if is_404 and prod.tn_product_id:
+                    try:
+                        prod_tn = tn.get_product(prod.tn_product_id)
+                        variants = prod_tn.get('variants', [])
+                        if variants:
+                            new_vid = str(variants[0]['id'])
+                            prod.tn_variant_id = new_vid
+                            prod.save(update_fields=['tn_variant_id'])
+                            tn.update_variant_stock(new_vid, prod.stock)
+                            ok += 1
+                            continue
+                    except Exception as inner:
+                        logger.error("No se pudo refrescar variante TN para %s: %s", prod.nombre, inner)
                 logger.error("Error actualizando stock TN variante %s: %s", prod.tn_variant_id, e)
                 errores.append(f"{prod.nombre}: {str(e)}")
 

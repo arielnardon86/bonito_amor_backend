@@ -98,7 +98,7 @@ class TiendaNubeService:
 
     # ── Productos ────────────────────────────────────────────────────────────
 
-    def get_products(self, page=1, per_page=200):
+    def get_products(self, page=1, per_page=25):
         """Devuelve una página de productos con sus variantes."""
         return self._get("products", params={"page": page, "per_page": per_page})
 
@@ -107,14 +107,16 @@ class TiendaNubeService:
         all_products = []
         page = 1
         while True:
-            batch = self.get_products(page=page, per_page=200)
+            batch = self.get_products(page=page, per_page=25)
             if not batch:
                 break
             all_products.extend(batch)
-            if len(batch) < 200:
-                break
             page += 1
         return all_products
+
+    def get_product(self, product_id):
+        """Obtiene un producto con sus variantes por ID."""
+        return self._get(f"products/{product_id}")
 
     # ── Órdenes ──────────────────────────────────────────────────────────────
 
