@@ -96,20 +96,6 @@ class TiendaNubeService:
             raise ValueError(f"Respuesta inesperada de Tienda Nube: {data}")
         return access_token, store_id
 
-    @staticmethod
-    def get_store_info_static(access_token, store_id):
-        """Obtiene datos básicos de la tienda (nombre, email) usando el token recién obtenido."""
-        resp = requests.get(
-            f"{TN_API_BASE}/{store_id}/store",
-            headers={
-                "Authentication": f"bearer {access_token}",
-                "User-Agent":     USER_AGENT,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
     # ── Productos ────────────────────────────────────────────────────────────
 
     def get_products(self, page=1, per_page=200):

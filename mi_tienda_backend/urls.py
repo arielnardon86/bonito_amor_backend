@@ -29,7 +29,7 @@ except (ImportError, AttributeError) as e:
     print(f"⚠️ Warning: No se pudo importar vistas ML OAuth: {e}")
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from inventario.views import verificar_database_config, registrar_token_fcm, eliminar_token_fcm, tn_install
+from inventario.views import verificar_database_config, registrar_token_fcm, eliminar_token_fcm
 # Importación condicional de CambioDevolucionViewSet
 try:
     from inventario.views import CambioDevolucionViewSet
@@ -90,7 +90,6 @@ urlpatterns += [
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
     path('api/verificar-database/', verificar_database_config, name='verificar-database'),  # Endpoint de verificación
-    path('api/notificaciones/registrar-token/', registrar_token_fcm, name='registrar-token-fcm'),
-    path('api/notificaciones/eliminar-token/', eliminar_token_fcm, name='eliminar-token-fcm'),
-    path('api/tn/install/', tn_install, name='tn-install'),
+    path('api/notificaciones/registrar-token/', registrar_token_fcm, name='registrar-token-fcm'),  # Registrar token FCM
+    path('api/notificaciones/eliminar-token/', eliminar_token_fcm, name='eliminar-token-fcm'),  # Eliminar token FCM
 ]
