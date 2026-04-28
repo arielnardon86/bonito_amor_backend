@@ -617,9 +617,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
         metodos_financieros = MetodoPago.objects.filter(es_financiero=True).values_list('nombre', flat=True)
         es_mercadolibre = data.get('metodo_pago') == 'Mercado Libre'
-        metodo_pago_str = data.get('metodo_pago', '') or ''
-        # Pago combinado: el nombre del método contiene '+' o es exactamente 'Combinado'
-        es_combinado = '+' in metodo_pago_str or metodo_pago_str == 'Combinado'
+        # Pago combinado: el frontend siempre envía arancel_combinado (incluso si es 0)
+        es_combinado = arancel_combinado is not None
 
         if es_mercadolibre:
             data['arancel_total'] = data.pop('arancel_total_ml', None) or Decimal('0.00')
