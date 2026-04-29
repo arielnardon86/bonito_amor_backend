@@ -10,6 +10,7 @@ from decimal import Decimal
 class User(AbstractUser):
     tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='empleados')
     tiendas_autorizadas = models.ManyToManyField('Tienda', blank=True, related_name='usuarios_autorizados')
+    cierre_caja_habilitado = models.BooleanField(default=False, help_text="Habilita el control de turnos y cierre de caja para este usuario")
 
     class Meta:
         verbose_name = "Usuario"
@@ -859,10 +860,91 @@ class CompraStock(models.Model):
         return f"{self.tienda.nombre} - {self.proveedor or 'Sin proveedor'} - ${self.monto}"
 
 
+class CierreCaja(models.Model):
+    ESTADO_CHOICES = [
+        ('ABIERTO', 'Abierto'),
+        ('CERRADO', 'Cerrado'),
+    ]
+
+    tienda = models.ForeignKey('Tienda', on_delete=models.CASCADE, related_name='cierres_caja')
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='cierres_caja')
+    estado = models.CharField(max_length=10, choices=ESTADO_CHOICES, default='ABIERTO')
+
+    fecha_apertura = models.DateTimeField(default=timezone.now)
+    fecha_cierre = models.DateTimeField(null=True, blank=True)
+
+    cambio_inicial = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+
+    # Cantidades de billetes/monedas en el recuento físico
+    billetes_20000 = models.IntegerField(default=0)
+    billetes_10000 = models.IntegerField(default=0)
+    billetes_2000 = models.IntegerField(default=0)
+    billetes_1000 = models.IntegerField(default=0)
+    billetes_500 = models.IntegerField(default=0)
+    billetes_200 = models.IntegerField(default=0)
+    billetes_100 = models.IntegerField(default=0)
+    monedas = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    # Totales calculados al cerrar
+    total_ventas_efectivo = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    total_egresos = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    total_recuento_fisico = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    diferencia = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    notas = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-fecha_apertura']
+        verbose_name = "Cierre de Caja"
+        verbose_name_plural = "Cierres de Caja"
+
+    def __str__(self):
+        usuario_str = self.usuario.username if self.usuario else 'N/A'
+        return f"Cierre {self.id} - {self.tienda.nombre} - {usuario_str} - {self.fecha_apertura.strftime('%d/%m/%Y %H:%M')}"
+
+    def calcular_recuento_fisico(self):
+        billete_total = (
+            self.billetes_20000 * 20000 +
+            self.billetes_10000 * 10000 +
+            self.billetes_2000 * 2000 +
+            self.billetes_1000 * 1000 +
+            self.billetes_500 * 500 +
+            self.billetes_200 * 200 +
+            self.billetes_100 * 100
+        )
+        return Decimal(str(billete_total)) + Decimal(str(self.monedas or 0))
+
+
+class EgresoCaja(models.Model):
+    TIPO_CHOICES = [
+        ('EGRESO', 'Egreso / Gasto'),
+        ('RETIRO', 'Retiro de caja'),
+        ('PAGO_PROVEEDOR', 'Pago a proveedor'),
+    ]
+
+    cierre_caja = models.ForeignKey(CierreCaja, on_delete=models.CASCADE, related_name='egresos')
+    tienda = models.ForeignKey('Tienda', on_delete=models.CASCADE, related_name='egresos_caja')
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='egresos_caja')
+
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default='EGRESO')
+    concepto = models.CharField(max_length=255)
+    importe = models.DecimalField(max_digits=12, decimal_places=2)
+    fecha = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = "Egreso de Caja"
+        verbose_name_plural = "Egresos de Caja"
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} - {self.concepto} - ${self.importe}"
+
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
-    'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken'
+    'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
+    'CierreCaja', 'EgresoCaja',
 ]

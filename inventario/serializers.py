@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -174,15 +174,15 @@ class TiendaSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     tienda = serializers.SlugRelatedField(
-        slug_field='nombre', 
-        queryset=Tienda.objects.all(), 
-        required=False, 
-        allow_null=True 
+        slug_field='nombre',
+        queryset=Tienda.objects.all(),
+        required=False,
+        allow_null=True
     )
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
         read_only_fields = ['is_staff', 'is_superuser']
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -198,7 +198,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'password2', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
+        fields = ['id', 'username', 'email', 'password', 'password2', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -231,8 +231,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda']
-    
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
+
     def update(self, instance, validated_data):
         # Si el usuario es superusuario, también debe ser staff automáticamente
         if validated_data.get('is_superuser', False):
@@ -799,6 +799,57 @@ class EmitirFacturaSerializer(serializers.Serializer):
         required=False
     )
 
+class EgresoCajaSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.SerializerMethodField()
+    tipo_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EgresoCaja
+        fields = ['id', 'cierre_caja', 'tipo', 'tipo_display', 'concepto', 'importe', 'fecha', 'usuario', 'usuario_nombre']
+        read_only_fields = ['id', 'fecha', 'usuario', 'tienda']
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.username if obj.usuario else 'N/A'
+
+    def get_tipo_display(self, obj):
+        return obj.get_tipo_display()
+
+
+class CierreCajaSerializer(serializers.ModelSerializer):
+    egresos = EgresoCajaSerializer(many=True, read_only=True)
+    usuario_nombre = serializers.SerializerMethodField()
+    recuento_fisico_calculado = serializers.SerializerMethodField()
+    total_teorico = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CierreCaja
+        fields = [
+            'id', 'tienda', 'usuario', 'usuario_nombre', 'estado',
+            'fecha_apertura', 'fecha_cierre', 'cambio_inicial',
+            'billetes_20000', 'billetes_10000', 'billetes_2000', 'billetes_1000',
+            'billetes_500', 'billetes_200', 'billetes_100', 'monedas',
+            'total_ventas_efectivo', 'total_egresos', 'total_recuento_fisico', 'diferencia',
+            'recuento_fisico_calculado', 'total_teorico',
+            'notas', 'egresos',
+        ]
+        read_only_fields = [
+            'id', 'usuario', 'estado', 'fecha_apertura', 'fecha_cierre',
+            'total_ventas_efectivo', 'total_egresos', 'total_recuento_fisico', 'diferencia',
+        ]
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.username if obj.usuario else 'N/A'
+
+    def get_recuento_fisico_calculado(self, obj):
+        return str(obj.calcular_recuento_fisico())
+
+    def get_total_teorico(self, obj):
+        cambio = obj.cambio_inicial or Decimal('0')
+        ventas = obj.total_ventas_efectivo or Decimal('0')
+        egresos = obj.total_egresos or Decimal('0')
+        return str(cambio + ventas - egresos)
+
+
 # CRUCIAL: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
 # Esto soluciona el error de importación.
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -809,6 +860,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['email'] = user.email
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
+        token['cierre_caja_habilitado'] = user.cierre_caja_habilitado
         if user.tienda:
             token['tienda_id'] = str(user.tienda.id)
             token['tienda_nombre'] = user.tienda.nombre

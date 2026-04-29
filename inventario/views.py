@@ -44,7 +44,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -117,7 +117,8 @@ from .serializers import (
     FacturaSerializer, EmitirFacturaSerializer,
     NotaCreditoSerializer, EmitirNotaCreditoSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
-    ArancelMetodoTiendaCreateSerializer
+    ArancelMetodoTiendaCreateSerializer,
+    CierreCajaSerializer, EgresoCajaSerializer,
 )
 # Importación condicional de serializers de ArancelMercadoLibre
 try:
@@ -5389,3 +5390,160 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             
             close_old_connections()
             return super().list(request, *args, **kwargs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cierre de Caja
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CierreCajaViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = CierreCajaSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        tienda_slug = self.request.query_params.get('tienda')
+        fecha_desde = self.request.query_params.get('fecha_desde')
+        fecha_hasta = self.request.query_params.get('fecha_hasta')
+
+        qs = CierreCaja.objects.select_related('tienda', 'usuario').prefetch_related('egresos')
+
+        if not user.is_superuser:
+            qs = qs.filter(usuario=user)
+
+        if tienda_slug:
+            qs = qs.filter(tienda__nombre=tienda_slug)
+        if fecha_desde:
+            qs = qs.filter(fecha_apertura__date__gte=fecha_desde)
+        if fecha_hasta:
+            qs = qs.filter(fecha_apertura__date__lte=fecha_hasta)
+
+        return qs
+
+    def _get_tienda(self, request):
+        tienda_slug = request.data.get('tienda_slug') or request.query_params.get('tienda')
+        if tienda_slug:
+            return Tienda.objects.get(nombre=tienda_slug)
+        if request.user.tienda:
+            return request.user.tienda
+        raise serializers.ValidationError({'tienda': 'No se puede determinar la tienda.'})
+
+    def perform_create(self, serializer):
+        tienda = self._get_tienda(self.request)
+        serializer.save(usuario=self.request.user, tienda=tienda)
+
+    @action(detail=False, methods=['get'], url_path='activo')
+    def activo(self, request):
+        tienda_slug = request.query_params.get('tienda')
+        qs = CierreCaja.objects.filter(usuario=request.user, estado='ABIERTO')
+        if tienda_slug:
+            qs = qs.filter(tienda__nombre=tienda_slug)
+        cierre = qs.order_by('-fecha_apertura').first()
+        if cierre:
+            return Response(CierreCajaSerializer(cierre).data)
+        return Response(None)
+
+    @action(detail=True, methods=['post'], url_path='cerrar')
+    def cerrar(self, request, pk=None):
+        from django.db.models import Sum as DbSum
+        cierre = self.get_object()
+        if cierre.estado == 'CERRADO':
+            return Response({'error': 'El cierre ya está cerrado.'}, status=400)
+
+        # Ventas en efectivo del período (mismo usuario + tienda + apertura hasta ahora)
+        ventas_efectivo = Venta.objects.filter(
+            tienda=cierre.tienda,
+            usuario=cierre.usuario,
+            fecha_venta__gte=cierre.fecha_apertura,
+            metodo_pago__icontains='efectivo',
+            anulada=False,
+        ).aggregate(total=DbSum('total'))['total'] or Decimal('0.00')
+
+        total_egresos = cierre.egresos.aggregate(
+            total=DbSum('importe')
+        )['total'] or Decimal('0.00')
+
+        # Recuento físico desde el request
+        def _int(val):
+            try:
+                return max(0, int(val or 0))
+            except (ValueError, TypeError):
+                return 0
+
+        cierre.billetes_20000 = _int(request.data.get('billetes_20000'))
+        cierre.billetes_10000 = _int(request.data.get('billetes_10000'))
+        cierre.billetes_2000  = _int(request.data.get('billetes_2000'))
+        cierre.billetes_1000  = _int(request.data.get('billetes_1000'))
+        cierre.billetes_500   = _int(request.data.get('billetes_500'))
+        cierre.billetes_200   = _int(request.data.get('billetes_200'))
+        cierre.billetes_100   = _int(request.data.get('billetes_100'))
+        cierre.monedas        = Decimal(str(request.data.get('monedas') or 0))
+
+        cierre.total_ventas_efectivo = ventas_efectivo
+        cierre.total_egresos         = total_egresos
+        cierre.total_recuento_fisico = cierre.calcular_recuento_fisico()
+
+        total_teorico = cierre.cambio_inicial + ventas_efectivo - total_egresos
+        cierre.diferencia = cierre.total_recuento_fisico - total_teorico
+        cierre.estado     = 'CERRADO'
+        cierre.fecha_cierre = timezone.now()
+        cierre.notas = request.data.get('notas', '') or ''
+        cierre.save()
+
+        return Response(CierreCajaSerializer(cierre).data)
+
+    @action(detail=True, methods=['get'], url_path='ventas-efectivo')
+    def ventas_efectivo(self, request, pk=None):
+        from django.db.models import Sum as DbSum
+        cierre = self.get_object()
+        ventas = Venta.objects.filter(
+            tienda=cierre.tienda,
+            usuario=cierre.usuario,
+            fecha_venta__gte=cierre.fecha_apertura,
+            metodo_pago__icontains='efectivo',
+            anulada=False,
+        ).values('id', 'fecha_venta', 'total', 'cliente', 'metodo_pago')
+
+        if cierre.fecha_cierre:
+            ventas = ventas.filter(fecha_venta__lte=cierre.fecha_cierre)
+
+        return Response(list(ventas))
+
+
+class EgresoCajaViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = EgresoCajaSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        cierre_id = self.request.query_params.get('cierre_caja')
+        tienda_slug = self.request.query_params.get('tienda')
+
+        qs = EgresoCaja.objects.select_related('cierre_caja', 'usuario')
+        if not user.is_superuser:
+            qs = qs.filter(usuario=user)
+        if cierre_id:
+            qs = qs.filter(cierre_caja_id=cierre_id)
+        if tienda_slug:
+            qs = qs.filter(tienda__nombre=tienda_slug)
+
+        return qs
+
+    def perform_create(self, serializer):
+        tienda_slug = self.request.data.get('tienda_slug')
+        if tienda_slug:
+            tienda = Tienda.objects.get(nombre=tienda_slug)
+        elif self.request.user.tienda:
+            tienda = self.request.user.tienda
+        else:
+            raise serializers.ValidationError({'tienda': 'No se puede determinar la tienda.'})
+
+        egreso = serializer.save(usuario=self.request.user, tienda=tienda)
+
+        # Registrar también en Registro de Egresos (modelo Compra)
+        Compra.objects.create(
+            tienda=tienda,
+            total=egreso.importe,
+            proveedor=f"[Caja] {egreso.get_tipo_display()}: {egreso.concepto}",
+            usuario=self.request.user,
+        )
