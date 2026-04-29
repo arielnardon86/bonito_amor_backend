@@ -5445,25 +5445,29 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='cerrar')
     def cerrar(self, request, pk=None):
-        from django.db.models import Sum as DbSum
         cierre = self.get_object()
         if cierre.estado == 'CERRADO':
             return Response({'error': 'El cierre ya está cerrado.'}, status=400)
 
-        # Ventas en efectivo del período (mismo usuario + tienda + apertura hasta ahora)
+        # Ventas en efectivo del período
         ventas_efectivo = Venta.objects.filter(
             tienda=cierre.tienda,
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
             metodo_pago__icontains='efectivo',
             anulada=False,
-        ).aggregate(total=DbSum('total'))['total'] or Decimal('0.00')
+        ).aggregate(total=Sum('total'))['total'] or Decimal('0.00')
 
-        total_egresos = cierre.egresos.aggregate(
-            total=DbSum('importe')
-        )['total'] or Decimal('0.00')
+        # Separar movimientos por tipo
+        def _sum_tipo(tipo):
+            return cierre.egresos.filter(tipo=tipo).aggregate(
+                total=Sum('importe')
+            )['total'] or Decimal('0.00')
 
-        # Recuento físico desde el request
+        total_gastos   = _sum_tipo('EGRESO')
+        total_retiros  = _sum_tipo('RETIRO')
+        total_ingresos = _sum_tipo('INGRESO')
+
         def _int(val):
             try:
                 return max(0, int(val or 0))
@@ -5480,14 +5484,18 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         cierre.monedas        = Decimal(str(request.data.get('monedas') or 0))
 
         cierre.total_ventas_efectivo = ventas_efectivo
-        cierre.total_egresos         = total_egresos
+        cierre.total_gastos          = total_gastos
+        cierre.total_retiros         = total_retiros
+        cierre.total_ingresos_extra  = total_ingresos
+        cierre.total_egresos         = total_gastos + total_retiros  # total salidas
         cierre.total_recuento_fisico = cierre.calcular_recuento_fisico()
 
-        total_teorico = cierre.cambio_inicial + ventas_efectivo - total_egresos
-        cierre.diferencia = cierre.total_recuento_fisico - total_teorico
-        cierre.estado     = 'CERRADO'
-        cierre.fecha_cierre = timezone.now()
-        cierre.notas = request.data.get('notas', '') or ''
+        # total teórico en caja = inicio + ventas efectivo + ingresos extra - gastos - retiros
+        total_teorico  = cierre.cambio_inicial + ventas_efectivo + total_ingresos - total_gastos - total_retiros
+        cierre.diferencia    = cierre.total_recuento_fisico - total_teorico
+        cierre.estado        = 'CERRADO'
+        cierre.fecha_cierre  = timezone.now()
+        cierre.notas         = request.data.get('notas', '') or ''
         cierre.save()
 
         return Response(CierreCajaSerializer(cierre).data)
@@ -5562,10 +5570,12 @@ class EgresoCajaViewSet(viewsets.ModelViewSet):
 
         egreso = serializer.save(usuario=self.request.user, tienda=tienda)
 
-        # Registrar también en Registro de Egresos (modelo Compra)
-        Compra.objects.create(
-            tienda=tienda,
-            total=egreso.importe,
-            proveedor=f"[Caja] {egreso.get_tipo_display()}: {egreso.concepto}",
-            usuario=self.request.user,
-        )
+        # Solo los Gastos (EGRESO) impactan en Registro de Egresos y métricas.
+        # Retiros e Ingresos quedan solo en el cierre de caja.
+        if egreso.tipo == 'EGRESO':
+            Compra.objects.create(
+                tienda=tienda,
+                total=egreso.importe,
+                proveedor=f"[Caja] Gasto: {egreso.concepto}",
+                usuario=self.request.user,
+            )

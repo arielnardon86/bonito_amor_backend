@@ -887,7 +887,10 @@ class CierreCaja(models.Model):
 
     # Totales calculados al cerrar
     total_ventas_efectivo = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    total_egresos = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    total_gastos = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Solo EGRESO/Gasto (impacta métricas)")
+    total_retiros = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Retiros de caja (no impacta métricas)")
+    total_ingresos_extra = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Ingresos de efectivo extra (no impacta métricas)")
+    total_egresos = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Total salidas de caja (gastos + retiros)")
     total_recuento_fisico = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     diferencia = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
@@ -917,9 +920,9 @@ class CierreCaja(models.Model):
 
 class EgresoCaja(models.Model):
     TIPO_CHOICES = [
-        ('EGRESO', 'Egreso / Gasto'),
+        ('EGRESO', 'Gasto'),
         ('RETIRO', 'Retiro de caja'),
-        ('PAGO_PROVEEDOR', 'Pago a proveedor'),
+        ('INGRESO', 'Ingreso de efectivo'),
     ]
 
     cierre_caja = models.ForeignKey(CierreCaja, on_delete=models.CASCADE, related_name='egresos')

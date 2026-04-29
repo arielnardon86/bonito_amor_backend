@@ -828,13 +828,15 @@ class CierreCajaSerializer(serializers.ModelSerializer):
             'fecha_apertura', 'fecha_cierre', 'cambio_inicial',
             'billetes_20000', 'billetes_10000', 'billetes_2000', 'billetes_1000',
             'billetes_500', 'billetes_200', 'billetes_100', 'monedas',
-            'total_ventas_efectivo', 'total_egresos', 'total_recuento_fisico', 'diferencia',
+            'total_ventas_efectivo', 'total_gastos', 'total_retiros', 'total_ingresos_extra',
+            'total_egresos', 'total_recuento_fisico', 'diferencia',
             'recuento_fisico_calculado', 'total_teorico',
             'notas', 'egresos',
         ]
         read_only_fields = [
             'id', 'tienda', 'usuario', 'estado', 'fecha_apertura', 'fecha_cierre',
-            'total_ventas_efectivo', 'total_egresos', 'total_recuento_fisico', 'diferencia',
+            'total_ventas_efectivo', 'total_gastos', 'total_retiros', 'total_ingresos_extra',
+            'total_egresos', 'total_recuento_fisico', 'diferencia',
         ]
 
     def get_usuario_nombre(self, obj):
@@ -844,10 +846,12 @@ class CierreCajaSerializer(serializers.ModelSerializer):
         return str(obj.calcular_recuento_fisico())
 
     def get_total_teorico(self, obj):
-        cambio = obj.cambio_inicial or Decimal('0')
-        ventas = obj.total_ventas_efectivo or Decimal('0')
-        egresos = obj.total_egresos or Decimal('0')
-        return str(cambio + ventas - egresos)
+        cambio   = obj.cambio_inicial or Decimal('0')
+        ventas   = obj.total_ventas_efectivo or Decimal('0')
+        gastos   = obj.total_gastos or Decimal('0')
+        retiros  = obj.total_retiros or Decimal('0')
+        ingresos = obj.total_ingresos_extra or Decimal('0')
+        return str(cambio + ventas + ingresos - gastos - retiros)
 
 
 # CRUCIAL: DEFINICIÓN DE CustomTokenObtainPairSerializer MOVIDA AL FINAL
