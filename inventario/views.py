@@ -5494,7 +5494,6 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='ventas-efectivo')
     def ventas_efectivo(self, request, pk=None):
-        from django.db.models import Sum as DbSum
         cierre = self.get_object()
         ventas = Venta.objects.filter(
             tienda=cierre.tienda,
@@ -5508,6 +5507,29 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             ventas = ventas.filter(fecha_venta__lte=cierre.fecha_cierre)
 
         return Response(list(ventas))
+
+    @action(detail=True, methods=['get'], url_path='ventas-resumen')
+    def ventas_resumen(self, request, pk=None):
+        """Retorna todas las ventas del turno agrupadas por método de pago, más el detalle individual."""
+        cierre = self.get_object()
+        qs = Venta.objects.filter(
+            tienda=cierre.tienda,
+            usuario=cierre.usuario,
+            fecha_venta__gte=cierre.fecha_apertura,
+            anulada=False,
+        )
+        if cierre.fecha_cierre:
+            qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
+
+        por_metodo = list(
+            qs.values('metodo_pago')
+              .annotate(total=Sum('total'), cantidad=Count('id'))
+              .order_by('metodo_pago')
+        )
+
+        ventas = list(qs.values('id', 'fecha_venta', 'total', 'cliente', 'metodo_pago').order_by('fecha_venta'))
+
+        return Response({'por_metodo': por_metodo, 'ventas': ventas})
 
 
 class EgresoCajaViewSet(viewsets.ModelViewSet):

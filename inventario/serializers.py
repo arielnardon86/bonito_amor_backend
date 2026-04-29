@@ -833,7 +833,7 @@ class CierreCajaSerializer(serializers.ModelSerializer):
             'notas', 'egresos',
         ]
         read_only_fields = [
-            'id', 'usuario', 'estado', 'fecha_apertura', 'fecha_cierre',
+            'id', 'tienda', 'usuario', 'estado', 'fecha_apertura', 'fecha_cierre',
             'total_ventas_efectivo', 'total_egresos', 'total_recuento_fisico', 'diferencia',
         ]
 
