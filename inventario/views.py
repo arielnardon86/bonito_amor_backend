@@ -5509,7 +5509,7 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             fecha_venta__gte=cierre.fecha_apertura,
             metodo_pago__icontains='efectivo',
             anulada=False,
-        ).values('id', 'fecha_venta', 'total', 'cliente', 'metodo_pago')
+        ).values('id', 'fecha_venta', 'total', 'cliente_nombre', 'metodo_pago')
 
         if cierre.fecha_cierre:
             ventas = ventas.filter(fecha_venta__lte=cierre.fecha_cierre)
@@ -5535,7 +5535,7 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
               .order_by('metodo_pago')
         )
 
-        ventas = list(qs.values('id', 'fecha_venta', 'total', 'cliente', 'metodo_pago').order_by('fecha_venta'))
+        ventas = list(qs.values('id', 'fecha_venta', 'total', 'cliente_nombre', 'metodo_pago').order_by('fecha_venta'))
 
         return Response({'por_metodo': por_metodo, 'ventas': ventas})
 
