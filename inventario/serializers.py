@@ -877,8 +877,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Siempre incluir la tienda principal en la lista
         if user.tienda and str(user.tienda.id) not in tiendas:
             tiendas[str(user.tienda.id)] = {'id': str(user.tienda.id), 'nombre': user.tienda.nombre}
+        # IDs de tiendas que tienen al menos un usuario con cierre_caja_habilitado
+        tiendas_con_cierre = set(
+            str(tid) for tid in
+            user.__class__.objects.filter(
+                cierre_caja_habilitado=True,
+                tienda_id__in=[t['id'] for t in tiendas.values()],
+            ).values_list('tienda_id', flat=True)
+        )
         token['tiendas_autorizadas'] = [
-            {'id': str(t['id']), 'nombre': t['nombre']} for t in tiendas.values()
+            {'id': str(t['id']), 'nombre': t['nombre'], 'tiene_cierre_caja': str(t['id']) in tiendas_con_cierre}
+            for t in tiendas.values()
         ]
         return token
 
