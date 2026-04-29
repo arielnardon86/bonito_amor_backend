@@ -865,6 +865,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
         token['cierre_caja_habilitado'] = user.cierre_caja_habilitado
+        tienda_tiene_cierre = (
+            user.__class__.objects.filter(tienda=user.tienda, cierre_caja_habilitado=True).exists()
+            if user.tienda else False
+        )
+        token['tienda_tiene_cierre_caja'] = tienda_tiene_cierre
         if user.tienda:
             token['tienda_id'] = str(user.tienda.id)
             token['tienda_nombre'] = user.tienda.nombre
