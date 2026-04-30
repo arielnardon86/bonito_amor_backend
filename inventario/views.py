@@ -182,28 +182,55 @@ class ProductoViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ['nombre', 'talle', 'codigo_barras']
 
+    def _resolver_tienda(self, tienda_slug=None):
+        """Devuelve el objeto Tienda autorizado para el usuario actual.
+        Para superusers: cualquier tienda por slug.
+        Para staff: tienda principal o cualquiera en tiendas_autorizadas.
+        """
+        user = self.request.user
+        if user.is_superuser:
+            if tienda_slug:
+                return Tienda.objects.filter(nombre=tienda_slug).first()
+            return user.tienda
+        # Staff con tiendas autorizadas
+        tiendas_ok = user.tiendas_autorizadas.all()
+        if user.tienda:
+            tiendas_ok = tiendas_ok | Tienda.objects.filter(pk=user.tienda.pk)
+        if tienda_slug:
+            return tiendas_ok.filter(nombre=tienda_slug).first()
+        return user.tienda
+
     def get_queryset(self):
         user = self.request.user
-        # Optimización: usar select_related para evitar consultas N+1 con tienda
         queryset = Producto.objects.select_related('tienda').all()
-
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if user.is_superuser:
             if tienda_slug:
                 return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
             return queryset.order_by('nombre')
-        
-        elif user.tienda:
-            if tienda_slug and user.tienda.nombre != tienda_slug:
-                return Producto.objects.none()
-            
-            return queryset.filter(tienda=user.tienda).order_by('nombre')
-        
+
+        # Staff: puede ver productos de su tienda principal Y de las autorizadas
+        tiendas_ids = list(user.tiendas_autorizadas.values_list('pk', flat=True))
+        if user.tienda:
+            tiendas_ids.append(user.tienda.pk)
+
+        if tienda_slug:
+            # Verificar que el slug sea una tienda autorizada
+            if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
+                return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
+            return Producto.objects.none()
+
+        if tiendas_ids:
+            return queryset.filter(tienda__pk__in=tiendas_ids).order_by('nombre')
         return Producto.objects.none()
 
     def perform_create(self, serializer):
-        serializer.save(tienda=self.request.user.tienda)
+        tienda_slug = self.request.data.get('tienda_slug')
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            tienda = self.request.user.tienda
+        serializer.save(tienda=tienda)
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
