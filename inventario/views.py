@@ -4506,6 +4506,7 @@ class MetricasAPIView(APIView):
             'total_ml_shipping_cost': total_ml_shipping_cost,
             'total_ml_impuestos': total_ml_impuestos,
             'tienda_tiene_ml': tienda_tiene_ml,
+            'ml_aranceles_automaticos': getattr(tienda_obj, 'ml_aranceles_automaticos', True),
             'ml_pct_cobradas': ml_pct_cobradas,
             'rentabilidad_bruta_periodo': rentabilidad_bruta,
             'margen_rentabilidad_periodo': margen_rentabilidad,

@@ -146,6 +146,10 @@ class Tienda(models.Model):
         default=True,
         help_text="Si está activo, las ventas procesadas por el webhook de Mercado Libre se facturan automáticamente (AFIP/ARCA). Si está desactivado, solo se emite recibo (no se genera factura electrónica)."
     )
+    ml_aranceles_automaticos = models.BooleanField(
+        default=True,
+        help_text="Si está activo, los cargos de ML se obtienen de las notificaciones (webhook) y se muestran en 'Descuentos Mercado Libre'. Si está desactivado, se usan los aranceles configurados manualmente y se muestran en 'Aranceles'."
+    )
 
     # ── Tienda Nube ────────────────────────────────────────────────────────────
     # Credenciales OAuth

@@ -93,25 +93,25 @@ class TiendaSerializer(serializers.ModelSerializer):
             # Si los campos no existen, removerlos de validated_data para evitar errores
             ml_fields = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
                         'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
-                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_user_id',
+                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_aranceles_automaticos', 'ml_user_id',
                         'ml_token_expires_at', 'ml_access_token', 'ml_refresh_token']
             for field in ml_fields:
                 validated_data.pop(field, None)
-        
+
         return super().create(validated_data)
-    
+
     def update(self, instance, validated_data):
         """
         Actualiza una tienda, manejando campos que pueden no existir
         """
         # Verificar si los campos de ML existen en el modelo
         ml_fields_exist = hasattr(Tienda, 'plataforma_ecommerce')
-        
+
         if not ml_fields_exist:
             # Si los campos no existen, removerlos de validated_data
             ml_fields = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
                         'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
-                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_user_id',
+                        'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_aranceles_automaticos', 'ml_user_id',
                         'ml_token_expires_at', 'ml_access_token', 'ml_refresh_token']
             for field in ml_fields:
                 validated_data.pop(field, None)
@@ -132,7 +132,7 @@ class TiendaSerializer(serializers.ModelSerializer):
         # Campos de e-commerce (Mercado Libre + Tienda Nube)
         campos_ecommerce = ['plataforma_ecommerce', 'ml_app_id', 'ml_client_secret',
                            'ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
-                           'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_user_id',
+                           'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_aranceles_automaticos', 'ml_user_id',
                            'ml_token_expires_at',
                            'tn_app_id', 'tn_store_id', 'tn_sync_habilitado', 'tn_facturar_ventas',
                            'tn_webhook_id']
@@ -164,7 +164,7 @@ class TiendaSerializer(serializers.ModelSerializer):
                 if campo == 'plataforma_ecommerce':
                     data[campo] = 'NINGUNA'
                 elif campo in ['ml_sync_habilitado', 'ml_sincronizar_stock', 'ml_sincronizar_precios',
-                              'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas',
+                              'ml_sincronizar_productos', 'ml_modo_test', 'ml_facturar_ventas', 'ml_aranceles_automaticos',
                               'tn_sync_habilitado', 'tn_facturar_ventas']:
                     data[campo] = False if campo in ('ml_sync_habilitado', 'tn_sync_habilitado') else True
                 else:
