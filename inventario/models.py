@@ -426,6 +426,10 @@ class Venta(models.Model):
     fecha_venta = models.DateTimeField(auto_now_add=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     metodo_pago = models.CharField(max_length=100, blank=True, null=True)
+    monto_efectivo = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Monto pagado en efectivo. Para pagos combinados es solo la parte en efectivo."
+    )
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,

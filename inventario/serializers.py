@@ -530,14 +530,15 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'fecha_venta',
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
-            'metodo_pago', 
+            'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id'
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
             'descuento_monto': {'required': False},
-            'recargo_porcentaje': {'required': False}, 
-            'recargo_monto': {'required': False},      
+            'recargo_porcentaje': {'required': False},
+            'recargo_monto': {'required': False},
+            'monto_efectivo': {'required': False},
         }
 
     def validate(self, data):
@@ -670,19 +671,29 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 user_obj = None
 
         costo_envio_ml = validated_data.pop('costo_envio_ml', Decimal('0.00'))
-        
+        monto_efectivo = validated_data.pop('monto_efectivo', None)
+
+        # Si el frontend no envió monto_efectivo, deducirlo del metodo_pago
+        metodo = validated_data.get('metodo_pago', '') or ''
+        if monto_efectivo is None:
+            if 'efectivo' in metodo.lower() and '+' not in metodo:
+                monto_efectivo = validated_data.get('total', Decimal('0.00'))
+            else:
+                monto_efectivo = Decimal('0.00')
+
         venta = Venta.objects.create(
             total=validated_data['total'],
             usuario=user_obj,
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
+            monto_efectivo=monto_efectivo,
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
             descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
             recargo_porcentaje=validated_data.get('recargo_porcentaje', Decimal('0.00')),
             recargo_monto=validated_data.get('recargo_monto', Decimal('0.00')),
             arancel_aplicado=arancel_aplicado,
-            costo_envio_ml=costo_envio_ml, 
-            arancel_total=arancel_total,       
+            costo_envio_ml=costo_envio_ml,
+            arancel_total=arancel_total,
             fecha_venta=validated_data['fecha_venta'],
         )
         

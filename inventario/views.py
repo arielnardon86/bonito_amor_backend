@@ -5477,13 +5477,26 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             return Response({'error': 'El cierre ya está cerrado.'}, status=400)
 
         # Ventas en efectivo del período
+        # Suma el monto en efectivo real de cada venta:
+        # - ventas nuevas: usa monto_efectivo (correcto para pagos combinados)
+        # - ventas antiguas sin monto_efectivo: fallback a total si el método era puro efectivo
+        from django.db.models import Case, When, F, Value
+        from django.db.models import DecimalField as _Dec
         ventas_efectivo = Venta.objects.filter(
             tienda=cierre.tienda,
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
-            metodo_pago__icontains='efectivo',
             anulada=False,
-        ).aggregate(total=Sum('total'))['total'] or Decimal('0.00')
+        ).aggregate(
+            total=Sum(
+                Case(
+                    When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
+                    When(metodo_pago__icontains='efectivo', then=F('total')),
+                    default=Value(Decimal('0.00')),
+                    output_field=_Dec(max_digits=12, decimal_places=2),
+                )
+            )
+        )['total'] or Decimal('0.00')
 
         # Separar movimientos por tipo
         def _sum_tipo(tipo):
@@ -5529,19 +5542,25 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='ventas-efectivo')
     def ventas_efectivo(self, request, pk=None):
+        from django.db.models import Q
         cierre = self.get_object()
-        ventas = Venta.objects.filter(
+        qs = Venta.objects.filter(
             tienda=cierre.tienda,
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
-            metodo_pago__icontains='efectivo',
             anulada=False,
-        ).values('id', 'fecha_venta', 'total', 'cliente_nombre', 'metodo_pago')
+        ).filter(
+            # ventas nuevas con efectivo > 0, o ventas antiguas con metodo efectivo
+            Q(monto_efectivo__gt=0) |
+            Q(monto_efectivo__isnull=True, metodo_pago__icontains='efectivo')
+        )
 
         if cierre.fecha_cierre:
-            ventas = ventas.filter(fecha_venta__lte=cierre.fecha_cierre)
+            qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
 
-        return Response(list(ventas))
+        return Response(list(
+            qs.values('id', 'fecha_venta', 'total', 'monto_efectivo', 'cliente_nombre', 'metodo_pago')
+        ))
 
     @action(detail=True, methods=['get'], url_path='ventas-resumen')
     def ventas_resumen(self, request, pk=None):
