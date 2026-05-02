@@ -5702,3 +5702,15 @@ class EgresoCajaViewSet(viewsets.ModelViewSet):
                 proveedor=f"[Caja] Gasto: {egreso.concepto}",
                 usuario=self.request.user,
             )
+
+    def perform_destroy(self, instance):
+        # Si era un EGRESO, revertir la Compra asociada que se creó al registrarlo.
+        if instance.tipo == 'EGRESO':
+            compra = Compra.objects.filter(
+                tienda=instance.tienda,
+                proveedor=f"[Caja] Gasto: {instance.concepto}",
+                total=instance.importe,
+            ).order_by('-fecha_compra').first()
+            if compra:
+                compra.delete()
+        instance.delete()
