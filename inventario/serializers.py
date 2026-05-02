@@ -179,10 +179,14 @@ class UserSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
+    tiendas_autorizadas = serializers.SerializerMethodField()
+
+    def get_tiendas_autorizadas(self, obj):
+        return list(obj.tiendas_autorizadas.values('id', 'nombre'))
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado', 'tiendas_autorizadas']
         read_only_fields = ['is_staff', 'is_superuser']
 
 class UserCreateSerializer(serializers.ModelSerializer):

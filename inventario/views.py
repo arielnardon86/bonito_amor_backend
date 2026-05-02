@@ -2954,33 +2954,49 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
 
 class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
-    
+
     def get_serializer_class(self):
         if self.action == 'create':
             return UserCreateSerializer
         elif self.action in ['update', 'partial_update']:
             return UserUpdateSerializer
         return UserSerializer
-    
+
+    def _tiendas_gestionables(self):
+        """Devuelve el queryset de Tiendas que el usuario autenticado puede gestionar."""
+        user = self.request.user
+        if user.is_superuser:
+            return Tienda.objects.all()
+        tiendas = user.tiendas_autorizadas.all()
+        if user.tienda:
+            tiendas = tiendas | Tienda.objects.filter(pk=user.tienda.pk)
+        return tiendas
+
     def get_queryset(self):
         user = self.request.user
         queryset = User.objects.all().order_by('username')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
-        
-        # Solo superusuarios pueden gestionar usuarios
-        if not user.is_superuser:
+
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug)
+            return queryset
+
+        # Staff con tiendas autorizadas: solo ve usuarios de las tiendas que gestiona
+        tiendas_ids = list(self._tiendas_gestionables().values_list('pk', flat=True))
+        if not tiendas_ids:
             return User.objects.none()
-        
+
+        qs = queryset.filter(tienda__pk__in=tiendas_ids)
         if tienda_slug:
-            return queryset.filter(tienda__nombre=tienda_slug)
-        
-        return queryset
+            qs = qs.filter(tienda__nombre=tienda_slug)
+        return qs
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
         close_old_connections()
         return super().list(request, *args, **kwargs)
-    
+
     @action(detail=True, methods=['post'])
     def change_password(self, request, pk=None):
         """Endpoint para cambiar la contraseña de un usuario"""
@@ -2989,16 +3005,51 @@ class UserViewSet(viewsets.ModelViewSet):
                 {'error': 'No tienes permisos para cambiar contraseñas.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         user = self.get_object()
         serializer = ChangePasswordSerializer(data=request.data)
-        
+
         if serializer.is_valid():
             user.set_password(serializer.validated_data['new_password'])
             user.save()
             return Response({'status': 'Contraseña actualizada correctamente'})
-        
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='set-tiendas-autorizadas')
+    def set_tiendas_autorizadas(self, request, pk=None):
+        """
+        Asigna tiendas_autorizadas a un usuario.
+        Solo se pueden asignar tiendas a las que el admin autenticado tiene acceso.
+        Body: {"tiendas": [id1, id2, ...]}
+        """
+        target_user = self.get_object()
+        tienda_ids = request.data.get('tiendas', [])
+
+        if not isinstance(tienda_ids, list):
+            return Response({'error': 'Se esperaba una lista de IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tiendas_permitidas = self._tiendas_gestionables()
+        tiendas_permitidas_ids = set(tiendas_permitidas.values_list('pk', flat=True))
+
+        # Solo asignar tiendas que el admin puede gestionar
+        tiendas_a_asignar = Tienda.objects.filter(pk__in=tienda_ids, pk__in=tiendas_permitidas_ids)
+        ids_invalidos = set(int(i) for i in tienda_ids) - tiendas_permitidas_ids
+        if ids_invalidos:
+            return Response(
+                {'error': f'No tenés acceso a las tiendas: {list(ids_invalidos)}'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Reemplaza las tiendas autorizadas del usuario (solo las gestionables por este admin)
+        actuales = set(target_user.tiendas_autorizadas.values_list('pk', flat=True))
+        no_gestionables = actuales - tiendas_permitidas_ids
+        nuevas = set(t.pk for t in tiendas_a_asignar)
+        target_user.tiendas_autorizadas.set(list(nuevas | no_gestionables))
+
+        return Response({
+            'tiendas_autorizadas': list(target_user.tiendas_autorizadas.values('id', 'nombre'))
+        })
 
 class VentaPageNumberPagination(rest_framework_pagination.PageNumberPagination):
     """Paginación para Ventas: permite page_size por query param (para exportación Excel)."""
