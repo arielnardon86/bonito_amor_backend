@@ -5660,7 +5660,26 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
 
         ventas = list(qs.values('id', 'fecha_venta', 'total', 'cliente_nombre', 'metodo_pago').order_by('fecha_venta'))
 
-        return Response({'por_metodo': por_metodo, 'ventas': ventas})
+        # Suma el efectivo real del turno (igual que el endpoint cerrar)
+        from django.db.models import Case, When, F, Value, Q as _Q
+        from django.db.models import DecimalField as _Dec
+        total_ventas_efectivo = qs.filter(
+            _Q(monto_efectivo__gt=0) |
+            _Q(monto_efectivo__isnull=True, metodo_pago__icontains='efectivo')
+        ).aggregate(
+            total=Sum(Case(
+                When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
+                When(metodo_pago__icontains='efectivo', then=F('total')),
+                default=Value(Decimal('0.00')),
+                output_field=_Dec(max_digits=12, decimal_places=2),
+            ))
+        )['total'] or Decimal('0.00')
+
+        return Response({
+            'por_metodo': por_metodo,
+            'ventas': ventas,
+            'total_ventas_efectivo': float(total_ventas_efectivo),
+        })
 
 
 class EgresoCajaViewSet(viewsets.ModelViewSet):
