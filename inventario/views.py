@@ -20,7 +20,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
-from django.db import close_old_connections, models # <-- Importado para el fix de conexión y búsqueda de categorías
+from django.db import close_old_connections, models, transaction
 from django.http import HttpResponse
 from django.core.cache import cache
 from io import BytesIO
@@ -5517,6 +5517,20 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         if request.user.tienda:
             return request.user.tienda
         raise serializers.ValidationError({'tienda': 'No se puede determinar la tienda.'})
+
+    def create(self, request, *args, **kwargs):
+        tienda = self._get_tienda(request)
+        # Bloqueo a nivel DB para evitar doble apertura por race condition
+        with transaction.atomic():
+            ya_abierta = CierreCaja.objects.select_for_update().filter(
+                usuario=request.user, tienda=tienda, estado='ABIERTO'
+            ).exists()
+            if ya_abierta:
+                return Response(
+                    {'error': 'Ya tenés una caja abierta para esta tienda. Cerrala antes de abrir una nueva.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         tienda = self._get_tienda(self.request)
