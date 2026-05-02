@@ -709,10 +709,27 @@ class FacturacionService:
                 logger.info(f"Valores redondeados a 2 decimales para AFIP: imp_total={imp_total_redondeado}, imp_neto={imp_neto_redondeado}, imp_iva={imp_iva_redondeado}")
                 
                 # Preparar parámetros base de la factura
+                # Para comprobantes A (tipos 1, 2, 3): DocTipo DEBE ser 80 (CUIT), regla AFIP 10013.
+                # La clave en cliente_data es 'cliente_cuit', no 'cuit'.
+                cuit_cliente = (
+                    cliente_data.get('cliente_cuit') or
+                    cliente_data.get('cuit') or ''
+                ).replace('-', '')
+
+                if tipo_comprobante in [1, 2, 3]:  # Factura/ND/NC clase A
+                    doc_tipo = 80
+                    doc_nro = cuit_cliente or '0'
+                else:
+                    doc_tipo = int(cliente_data.get('tipo_documento', 99))
+                    doc_nro = cuit_cliente or '0'
+                    if not cuit_cliente:
+                        doc_tipo = 99
+                        doc_nro = '0'
+
                 factura_params = {
                     'concepto': concepto,
-                    'tipo_doc': cliente_data.get('tipo_documento', '99'),  # 99 = Sin identificar
-                    'nro_doc': cliente_data.get('cuit', '').replace('-', '') or '0',
+                    'tipo_doc': doc_tipo,
+                    'nro_doc': doc_nro,
                     'tipo_cbte': tipo_comprobante,
                     'punto_vta': punto_venta,
                     'cbt_desde': nuevo_numero,
@@ -1419,11 +1436,15 @@ class FacturacionService:
             condicion_iva_codigo_map = {'RI': 1, 'EX': 4, 'CF': 5, 'MT': 6, 'NR': 0}
             condicion_iva_codigo = condicion_iva_codigo_map.get(factura.cliente_condicion_iva, 5)
 
-            tipo_doc_cliente = factura.cliente_tipo_documento or '99'
             nro_doc_cliente  = (factura.cliente_cuit or '').replace('-', '') or '0'
-            # AFIP regla: Factura C < $10.000.000 con DocTipo=99 → DocNro debe ser 0
-            if str(tipo_doc_cliente) == '99' and total_nc < Decimal('10000000'):
-                nro_doc_cliente = '0'
+            # NC clase A (tipo 3): DocTipo DEBE ser 80 (CUIT), igual que Factura A
+            if tipo_nc in [3]:
+                tipo_doc_cliente = 80
+            else:
+                tipo_doc_cliente = int(factura.cliente_tipo_documento or 99)
+                # AFIP regla: DocTipo=99 → DocNro debe ser 0
+                if tipo_doc_cliente == 99:
+                    nro_doc_cliente = '0'
 
             fecha_cbte = datetime.now()
 
