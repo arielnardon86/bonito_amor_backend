@@ -3016,6 +3016,16 @@ class UserViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def perform_update(self, serializer):
+        """Solo superusuarios pueden modificar is_staff e is_superuser."""
+        if not self.request.user.is_superuser:
+            serializer.save(
+                is_staff=serializer.instance.is_staff,
+                is_superuser=serializer.instance.is_superuser,
+            )
+        else:
+            serializer.save()
+
     @action(detail=True, methods=['post'], url_path='set-tiendas-autorizadas')
     def set_tiendas_autorizadas(self, request, pk=None):
         """
@@ -3029,23 +3039,24 @@ class UserViewSet(viewsets.ModelViewSet):
         if not isinstance(tienda_ids, list):
             return Response({'error': 'Se esperaba una lista de IDs.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        tiendas_permitidas = self._tiendas_gestionables()
-        tiendas_permitidas_ids = set(tiendas_permitidas.values_list('pk', flat=True))
+        tiendas_permitidas_ids = set(self._tiendas_gestionables().values_list('pk', flat=True))
+        tienda_ids_int = set(int(i) for i in tienda_ids)
 
-        # Solo asignar tiendas que el admin puede gestionar
-        tiendas_a_asignar = Tienda.objects.filter(pk__in=tienda_ids, pk__in=tiendas_permitidas_ids)
-        ids_invalidos = set(int(i) for i in tienda_ids) - tiendas_permitidas_ids
+        ids_invalidos = tienda_ids_int - tiendas_permitidas_ids
         if ids_invalidos:
             return Response(
                 {'error': f'No tenés acceso a las tiendas: {list(ids_invalidos)}'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Reemplaza las tiendas autorizadas del usuario (solo las gestionables por este admin)
+        # Intersection correcta: ids pedidos ∩ ids permitidos
+        tiendas_a_asignar_ids = tienda_ids_int & tiendas_permitidas_ids
+
+        # Preservar tiendas que ya tenía y que este admin no puede gestionar
         actuales = set(target_user.tiendas_autorizadas.values_list('pk', flat=True))
         no_gestionables = actuales - tiendas_permitidas_ids
-        nuevas = set(t.pk for t in tiendas_a_asignar)
-        target_user.tiendas_autorizadas.set(list(nuevas | no_gestionables))
+
+        target_user.tiendas_autorizadas.set(list(tiendas_a_asignar_ids | no_gestionables))
 
         return Response({
             'tiendas_autorizadas': list(target_user.tiendas_autorizadas.values('id', 'nombre'))
