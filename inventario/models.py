@@ -11,6 +11,7 @@ class User(AbstractUser):
     tienda = models.ForeignKey('Tienda', on_delete=models.SET_NULL, null=True, blank=True, related_name='empleados')
     tiendas_autorizadas = models.ManyToManyField('Tienda', blank=True, related_name='usuarios_autorizados')
     cierre_caja_habilitado = models.BooleanField(default=False, help_text="Habilita el control de turnos y cierre de caja para este usuario")
+    is_supervisor = models.BooleanField(default=False, help_text="Supervisor: puede ver ventas completas, agregar productos y ver cierres de caja")
 
     class Meta:
         verbose_name = "Usuario"

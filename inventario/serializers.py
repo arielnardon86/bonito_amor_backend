@@ -186,7 +186,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado', 'tiendas_autorizadas']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'is_supervisor', 'tienda', 'cierre_caja_habilitado', 'tiendas_autorizadas']
         read_only_fields = ['is_staff', 'is_superuser']
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -202,7 +202,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'password2', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
+        fields = ['id', 'username', 'email', 'password', 'password2', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'is_supervisor', 'tienda', 'cierre_caja_habilitado']
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -235,7 +235,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'tienda', 'cierre_caja_habilitado']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'is_supervisor', 'tienda', 'cierre_caja_habilitado']
 
     def update(self, instance, validated_data):
         # Si el usuario es superusuario, también debe ser staff automáticamente
@@ -879,6 +879,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['email'] = user.email
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
+        token['is_supervisor'] = user.is_supervisor
         token['cierre_caja_habilitado'] = user.cierre_caja_habilitado
         tienda_tiene_cierre = (
             user.__class__.objects.filter(tienda=user.tienda, cierre_caja_habilitado=True).exists()

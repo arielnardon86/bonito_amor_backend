@@ -232,6 +232,18 @@ class ProductoViewSet(viewsets.ModelViewSet):
             tienda = self.request.user.tienda
         serializer.save(tienda=tienda)
 
+    def perform_update(self, serializer):
+        if self.request.user.is_supervisor and not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Los supervisores no pueden editar productos.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if self.request.user.is_supervisor and not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Los supervisores no pueden eliminar productos.")
+        instance.delete()
+
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
         close_old_connections()
@@ -3017,11 +3029,12 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def perform_update(self, serializer):
-        """Solo superusuarios pueden modificar is_staff e is_superuser."""
+        """Solo superusuarios pueden modificar is_staff, is_superuser e is_supervisor."""
         if not self.request.user.is_superuser:
             serializer.save(
                 is_staff=serializer.instance.is_staff,
                 is_superuser=serializer.instance.is_superuser,
+                is_supervisor=serializer.instance.is_supervisor,
             )
         else:
             serializer.save()
@@ -3153,8 +3166,14 @@ class VentaViewSet(viewsets.ModelViewSet):
         ).order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
-        # Para usuarios staff (no superuser), solo permitir ver ventas buscadas por ID
-        if user.is_staff and not user.is_superuser:
+        # Para supervisores: ven todas las ventas de su tienda (como admin pero solo su tienda)
+        if user.is_supervisor and not user.is_superuser:
+            if user.tienda:
+                queryset = queryset.filter(tienda=user.tienda)
+            else:
+                return Venta.objects.none()
+        # Para usuarios staff (no superuser ni supervisor), solo permitir ver ventas buscadas por ID
+        elif user.is_staff and not user.is_superuser:
             # Solo permitir ver ventas si se busca por ID o código de barras
             venta_id = self.request.query_params.get('id', None)
             if not venta_id:
@@ -5498,7 +5517,16 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
 
         qs = CierreCaja.objects.select_related('tienda', 'usuario').prefetch_related('egresos')
 
-        if not user.is_superuser:
+        if user.is_superuser:
+            pass  # ve todos los cierres
+        elif user.is_supervisor:
+            # Supervisor ve todos los cierres de su tienda
+            if user.tienda:
+                qs = qs.filter(tienda=user.tienda)
+            else:
+                qs = qs.none()
+        else:
+            # Staff y usuarios normales solo ven sus propios cierres
             qs = qs.filter(usuario=user)
 
         if tienda_slug:
