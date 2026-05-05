@@ -3326,10 +3326,9 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'])
     def anular(self, request, pk=None):
-        # Verificar permisos: solo superusuarios pueden anular ventas
-        if not request.user.is_superuser:
+        if not request.user.is_superuser and not request.user.is_supervisor:
             return Response(
-                {"error": "No tienes permiso para anular ventas. Solo los superusuarios pueden realizar esta acción."},
+                {"error": "No tienes permiso para anular ventas."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -3460,10 +3459,9 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'])
     def anular_detalle(self, request, pk=None):
-        # Verificar permisos: solo superusuarios pueden anular detalles de venta
-        if not request.user.is_superuser:
+        if not request.user.is_superuser and not request.user.is_supervisor:
             return Response(
-                {"error": "No tienes permiso para anular detalles de venta. Solo los superusuarios pueden realizar esta acción."},
+                {"error": "No tienes permiso para anular detalles de venta."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -3476,7 +3474,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         except DetalleVenta.DoesNotExist:
             return Response({"error": "Detalle de venta no encontrado."}, status=status.HTTP_404_NOT_FOUND)
         
-        if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser:
+        if request.user.tienda != detalle.venta.tienda and not request.user.is_superuser and not request.user.is_supervisor:
             return Response({"error": "No tienes permiso para anular este detalle de venta."}, status=status.HTTP_403_FORBIDDEN)
         
         if detalle.anulado_individualmente:
