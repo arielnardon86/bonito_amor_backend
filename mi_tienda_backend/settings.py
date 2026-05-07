@@ -48,10 +48,12 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() == 'true'
 ALLOWED_HOSTS = []
 if not DEBUG:
     ALLOWED_HOSTS = [
-        '.onrender.com',                      
-        'bonito-amor-backend.onrender.com',   
-        'bonitoamorstock.onrender.com', 
-        'totalstock.onrender.com',      
+        '.onrender.com',
+        'bonito-amor-backend.onrender.com',
+        'bonitoamorstock.onrender.com',
+        'totalstock.onrender.com',
+        'totalstock.com.ar',
+        'www.totalstock.com.ar',
     ]
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True
@@ -219,14 +221,18 @@ CORS_ALLOWED_ORIGINS = [
     "https://bonitoamorstock.onrender.com",
     "https://bonito-amor-backend.onrender.com",
     "https://totalstock.onrender.com",
+    "https://totalstock.com.ar",
+    "https://www.totalstock.com.ar",
 ]
 CORS_ALLOW_CREDENTIALS = True 
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
-    'https://bonito-amor-backend.onrender.com', 
-    "https://bonitoamorstock.onrender.com", 
-    "https://totalstock.onrender.com", 
+    "https://bonito-amor-backend.onrender.com",
+    "https://bonitoamorstock.onrender.com",
+    "https://totalstock.onrender.com",
+    "https://totalstock.com.ar",
+    "https://www.totalstock.com.ar",
 ]
 
 REST_FRAMEWORK = {
