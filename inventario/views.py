@@ -3283,7 +3283,13 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         # Intentar obtener directamente por ID primero (sin filtros de queryset)
         try:
-            instance = Venta.objects.get(pk=pk)
+            instance = Venta.objects.select_related(
+                'tienda', 'usuario', 'arancel_aplicado', 'factura'
+            ).prefetch_related(
+                'detalles__producto',
+                'nota_credito_origen__detalles__detalle_venta_original__producto',
+                'cambio_devolucion_diferencia',
+            ).get(pk=pk)
         except Venta.DoesNotExist:
             return Response(
                 {'detail': 'No encontrado.'},

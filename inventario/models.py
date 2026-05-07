@@ -307,6 +307,9 @@ class Producto(models.Model):
         verbose_name_plural = "Productos"
         unique_together = [('nombre', 'tienda', 'talle'), ('codigo_barras', 'tienda')]
         ordering = ['nombre']
+        indexes = [
+            models.Index(fields=['tienda'], name='producto_tienda_idx'),
+        ]
 
     def __str__(self):
         return f"{self.nombre} ({self.talle}) - {self.tienda.nombre}"
@@ -483,6 +486,11 @@ class Venta(models.Model):
         verbose_name = "Venta"
         verbose_name_plural = "Ventas"
         ordering = ['-fecha_venta']
+        indexes = [
+            models.Index(fields=['tienda', 'fecha_venta'], name='venta_tienda_fecha_idx'),
+            models.Index(fields=['tienda', 'anulada'], name='venta_tienda_anulada_idx'),
+            models.Index(fields=['usuario'], name='venta_usuario_idx'),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=['tienda', 'ml_order_id'],
@@ -514,9 +522,12 @@ class DetalleVenta(models.Model):
 
     class Meta:
         verbose_name = "Detalle de Venta"
-        verbose_name_plural = "Detalles de Ventas" 
-        unique_together = ('venta', 'producto') 
-        ordering = ['fecha_creacion'] 
+        verbose_name_plural = "Detalles de Ventas"
+        unique_together = ('venta', 'producto')
+        ordering = ['fecha_creacion']
+        indexes = [
+            models.Index(fields=['venta', 'anulado_individualmente'], name='detalle_venta_anulado_idx'),
+        ]
 
     def __str__(self):
         return f"Detalle {self.id} - Venta {self.venta.id} - Producto: {self.producto.nombre if self.producto else 'N/A'} - Cantidad: {self.cantidad}"
