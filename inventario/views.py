@@ -611,8 +611,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'list':
             permission_classes = [permissions.AllowAny]
-        elif self.action == 'ml_webhook':
-            # El webhook debe ser accesible sin autenticación para que Mercado Libre pueda validarlo
+        elif self.action in ['ml_webhook', 'tn_webhook']:
+            # Los webhooks deben ser accesibles sin autenticación
             permission_classes = [permissions.AllowAny]
         elif self.action in ['facturacion_test']:
             # Probar configuración de facturación: requiere usuario autenticado (staff/admin recomendado)
