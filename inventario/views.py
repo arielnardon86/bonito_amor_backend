@@ -5525,10 +5525,11 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             pass  # ve todos los cierres
         elif user.is_supervisor:
             # Supervisor ve todos los cierres de su tienda
+            # + los que él mismo abrió (por si quedó una caja abierta en otra tienda)
             if user.tienda:
-                qs = qs.filter(tienda=user.tienda)
+                qs = qs.filter(Q(tienda=user.tienda) | Q(usuario=user))
             else:
-                qs = qs.none()
+                qs = qs.filter(usuario=user)
         else:
             # Staff y usuarios normales solo ven sus propios cierres
             qs = qs.filter(usuario=user)
