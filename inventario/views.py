@@ -3060,10 +3060,10 @@ class UserViewSet(viewsets.ModelViewSet):
         if not isinstance(tienda_ids, list):
             return Response({'error': 'Se esperaba una lista de IDs.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        tiendas_permitidas_ids = set(self._tiendas_gestionables().values_list('pk', flat=True))
-        tienda_ids_int = set(int(i) for i in tienda_ids)
+        tiendas_permitidas_ids = set(str(pk) for pk in self._tiendas_gestionables().values_list('pk', flat=True))
+        tienda_ids_str = set(str(i) for i in tienda_ids)
 
-        ids_invalidos = tienda_ids_int - tiendas_permitidas_ids
+        ids_invalidos = tienda_ids_str - tiendas_permitidas_ids
         if ids_invalidos:
             return Response(
                 {'error': f'No tenés acceso a las tiendas: {list(ids_invalidos)}'},
@@ -3071,10 +3071,10 @@ class UserViewSet(viewsets.ModelViewSet):
             )
 
         # Intersection correcta: ids pedidos ∩ ids permitidos
-        tiendas_a_asignar_ids = tienda_ids_int & tiendas_permitidas_ids
+        tiendas_a_asignar_ids = tienda_ids_str & tiendas_permitidas_ids
 
         # Preservar tiendas que ya tenía y que este admin no puede gestionar
-        actuales = set(target_user.tiendas_autorizadas.values_list('pk', flat=True))
+        actuales = set(str(pk) for pk in target_user.tiendas_autorizadas.values_list('pk', flat=True))
         no_gestionables = actuales - tiendas_permitidas_ids
 
         target_user.tiendas_autorizadas.set(list(tiendas_a_asignar_ids | no_gestionables))
