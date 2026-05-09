@@ -8,13 +8,15 @@ from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, Meto
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (
+        ('Permisos del sistema', {'fields': ('is_supervisor', 'cierre_caja_habilitado')}),
         ('Tiendas', {'fields': ('tienda', 'tiendas_autorizadas')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
+        ('Permisos del sistema', {'fields': ('is_supervisor', 'cierre_caja_habilitado')}),
         ('Tiendas', {'fields': ('tienda', 'tiendas_autorizadas')}),
     )
-    list_display = ('username', 'email', 'is_staff', 'is_superuser', 'tienda', 'date_joined')
-    list_filter = ('is_staff', 'is_superuser', 'tienda')
+    list_display = ('username', 'email', 'is_staff', 'is_superuser', 'is_supervisor', 'cierre_caja_habilitado', 'tienda', 'date_joined')
+    list_filter = ('is_staff', 'is_superuser', 'is_supervisor', 'cierre_caja_habilitado', 'tienda')
     search_fields = ('username', 'email', 'tienda__nombre')
     filter_horizontal = ('tiendas_autorizadas',)
 
