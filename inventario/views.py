@@ -176,6 +176,14 @@ class IsAdminOrSuperUser(BasePermission):
                    (request.user.is_superuser or request.user.is_staff))
 
 
+def _get_tiendas_ids_usuario(user):
+    """PKs de todas las tiendas a las que el usuario tiene acceso (tienda principal + autorizadas)."""
+    tiendas_ids = list(user.tiendas_autorizadas.values_list('pk', flat=True))
+    if user.tienda:
+        tiendas_ids.append(user.tienda.pk)
+    return tiendas_ids
+
+
 class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -3166,10 +3174,11 @@ class VentaViewSet(viewsets.ModelViewSet):
         ).order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
-        # Para supervisores: ven todas las ventas de su tienda (como admin pero solo su tienda)
+        # Para supervisores: ven ventas de su tienda principal + tiendas autorizadas
         if user.is_supervisor and not user.is_superuser:
-            if user.tienda:
-                queryset = queryset.filter(tienda=user.tienda)
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if tiendas_ids:
+                queryset = queryset.filter(tienda__pk__in=tiendas_ids)
             else:
                 return Venta.objects.none()
         # Para usuarios staff (no superuser ni supervisor), solo permitir ver ventas buscadas por ID
@@ -3304,7 +3313,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         # Verificar permisos básicos
         if not user.is_superuser:
-            if not user.tienda or instance.tienda != user.tienda:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if instance.tienda_id not in tiendas_ids:
                 # Si es una nota de crédito o diferencia pendiente relacionada con cambio/devolución, permitir acceso
                 if instance.metodo_pago in ['Nota de Crédito', 'Pendiente'] and CambioDevolucion is not None:
                     try:
@@ -3563,7 +3573,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         # Validar permisos
         user = request.user
-        if not user.is_superuser and user.tienda != venta.tienda:
+        if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
             return Response(
                 {"error": "No tienes permiso para emitir facturas de esta tienda."},
                 status=status.HTTP_403_FORBIDDEN
@@ -3703,7 +3713,7 @@ class VentaViewSet(viewsets.ModelViewSet):
         
         # Verificar permisos
         user = request.user
-        if not user.is_superuser and user.tienda != venta.tienda:
+        if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
             return Response(
                 {"error": "No tienes permiso para ver este ticket de cambio"},
                 status=status.HTTP_403_FORBIDDEN
@@ -3812,8 +3822,9 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if user.is_superuser:
             return DetalleVenta.objects.all()
-        elif user.tienda:
-            return DetalleVenta.objects.filter(venta__tienda=user.tienda)
+        tiendas_ids = _get_tiendas_ids_usuario(user)
+        if tiendas_ids:
+            return DetalleVenta.objects.filter(venta__tienda__pk__in=tiendas_ids)
         return DetalleVenta.objects.none()
 
     # FIX DE CONEXIÓN
@@ -3870,6 +3881,15 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
             logger.info(f"✅ Superuser - Todos los aranceles: {result.count()} aranceles")
             return result
         
+        # Supervisores: ven aranceles de su tienda principal + tiendas autorizadas
+        elif user.is_supervisor:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if tienda_slug:
+                if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
+                    return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+                return ArancelMetodoTienda.objects.none()
+            return queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre', 'nombre_plan')
+
         # Usuarios staff solo pueden ver aranceles de su tienda
         elif user.is_staff and user.tienda:
             # Normalizar comparación (sin case sensitivity)
@@ -5524,10 +5544,10 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         if user.is_superuser:
             pass  # ve todos los cierres
         elif user.is_supervisor:
-            # Supervisor ve todos los cierres de su tienda
-            # + los que él mismo abrió (por si quedó una caja abierta en otra tienda)
-            if user.tienda:
-                qs = qs.filter(Q(tienda=user.tienda) | Q(usuario=user))
+            # Supervisor ve cierres de su tienda principal + autorizadas + los que abrió él
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if tiendas_ids:
+                qs = qs.filter(Q(tienda__pk__in=tiendas_ids) | Q(usuario=user))
             else:
                 qs = qs.filter(usuario=user)
         else:
