@@ -159,21 +159,31 @@ class TiendaNubeService:
         """
         Crea un producto en TN con múltiples variantes.
         variantes: list of {precio, stock, sku (opt), talle (opt)}
-        Devuelve (tn_product_id, [{"tn_variant_id": ..., "idx": i}, ...])
+        Devuelve (tn_product_id, tn_variants_list)
+
+        TN requiere que si alguna variante usa 'values', el producto tenga
+        'attributes' definidos con exactamente el mismo número de ejes.
         """
+        has_talle = any(v.get('talle') for v in variantes)
+
         variants_data = []
-        for i, v in enumerate(variantes):
+        for v in variantes:
             variant = {"price": str(v['precio']), "stock": v.get('stock', 0)}
             if v.get('sku'):
                 variant["sku"] = v['sku']
-            if v.get('talle'):
-                variant["values"] = [{"es": str(v['talle'])}]
+            if has_talle:
+                # Siempre incluir values para TODOS los variantes cuando hay atributo
+                variant["values"] = [{"es": str(v.get('talle') or '')}]
             variants_data.append(variant)
 
         data = {
             "name": {"es": nombre},
             "variants": variants_data,
         }
+        if has_talle:
+            # El eje de variante — TN lo llama "attribute"
+            data["attributes"] = [{"es": "Variante"}]
+
         result = self._post("products", data)
         tn_product_id = str(result.get("id", ""))
         tn_variants = result.get("variants", [])
@@ -182,6 +192,7 @@ class TiendaNubeService:
     def add_variant(self, tn_product_id, precio, stock, sku=None, talle=None):
         """
         Agrega una variante a un producto TN existente.
+        El producto ya debe tener 'attributes' definidos si se usan 'values'.
         Devuelve tn_variant_id.
         """
         variant = {"price": str(precio), "stock": stock}
