@@ -260,6 +260,15 @@ class Producto(models.Model):
     stock = models.IntegerField(default=0)
     talle = models.CharField(max_length=50, blank=True, null=True) 
 
+    producto_padre = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='variantes',
+        help_text="Producto padre del que esta variante forma parte"
+    )
+
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
     codigo_barras = models.CharField(max_length=100, blank=True, null=True)
     

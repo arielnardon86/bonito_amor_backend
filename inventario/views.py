@@ -297,6 +297,44 @@ class ProductoViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(productos, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['post'], url_path='agrupar-variantes')
+    def agrupar_variantes(self, request, pk=None):
+        """
+        Agrupa una lista de productos como variantes de este producto (padre).
+        Body: { "variante_ids": ["uuid1", "uuid2", ...] }
+        """
+        padre = self.get_object()
+        variante_ids = request.data.get('variante_ids', [])
+
+        if not variante_ids:
+            return Response({'error': 'Debe proporcionar al menos un variante_id.'}, status=400)
+
+        variantes = Producto.objects.filter(
+            id__in=variante_ids,
+            tienda=padre.tienda,
+        ).exclude(id=padre.id)
+
+        if variantes.count() != len(variante_ids):
+            return Response({'error': 'Algunos productos no pertenecen a la tienda o no existen.'}, status=400)
+
+        variantes.update(producto_padre=padre)
+        return Response({
+            'mensaje': f'{variantes.count()} producto(s) agrupados como variantes de "{padre.nombre}".',
+            'padre_id': str(padre.id),
+        })
+
+    @action(detail=True, methods=['post'], url_path='desagrupar-variante')
+    def desagrupar_variante(self, request, pk=None):
+        """
+        Desvincula este producto de su padre, convirtiéndolo en producto independiente.
+        """
+        producto = self.get_object()
+        if not producto.producto_padre_id:
+            return Response({'error': 'Este producto no es una variante.'}, status=400)
+        producto.producto_padre = None
+        producto.save(update_fields=['producto_padre'])
+        return Response({'mensaje': f'"{producto.nombre}" ahora es un producto independiente.'})
+
 
 class CategoriaViewSet(viewsets.ModelViewSet):
     serializer_class = CategoriaSerializer
@@ -2683,12 +2721,14 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def tn_export_products(self, request, pk=None):
         """
         Publica en Tienda Nube los productos de Total Stock que aún no tienen
-        tn_variant_id. Corre en background para evitar timeout en Render.
+        tn_variant_id. Agrupa variantes bajo un mismo producto TN.
+        Corre en background para evitar timeout en Render.
         """
         tienda = self.get_object()
         if not tienda.tn_access_token or not tienda.tn_store_id:
             return Response({'error': 'Tienda Nube no conectada.'}, status=400)
 
+        # Contar pendientes: variantes sin tn_variant_id + standalone sin tn_variant_id
         total_pendientes = Producto.objects.filter(tienda=tienda).filter(
             Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
         ).count()
@@ -2704,27 +2744,66 @@ class TiendaViewSet(viewsets.ModelViewSet):
             try:
                 t = Tienda.objects.get(id=tienda_id)
                 tn = TiendaNubeService(t)
-                productos = Producto.objects.filter(tienda=t).filter(
+                pendientes = Producto.objects.filter(tienda=t).filter(
                     Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
-                )
+                ).select_related('producto_padre').prefetch_related('variantes')
                 publicados = 0
                 errores = 0
-                for prod in productos:
+
+                # Procesar padres con variantes pendientes
+                padres_vistos = set()
+                for prod in pendientes:
                     try:
-                        tn_product_id, tn_variant_id = tn.create_product(
-                            nombre=prod.nombre,
-                            precio=prod.precio,
-                            stock=prod.stock,
-                            sku=prod.codigo_barras or None,
-                        )
-                        prod.tn_product_id   = tn_product_id
-                        prod.tn_variant_id   = tn_variant_id
-                        prod.tn_sincronizado = True
-                        prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
-                        publicados += 1
+                        if prod.producto_padre_id:
+                            # Es una variante — se procesa al procesar su padre
+                            continue
+
+                        variantes_pendientes = [
+                            v for v in prod.variantes.all()
+                            if not v.tn_variant_id
+                        ]
+
+                        if variantes_pendientes:
+                            # Producto con variantes: crear un solo TN product con todas las variantes
+                            variantes_data = [
+                                {
+                                    'precio': v.precio,
+                                    'stock': v.stock,
+                                    'sku': v.codigo_barras or None,
+                                    'talle': v.talle or None,
+                                }
+                                for v in variantes_pendientes
+                            ]
+                            tn_product_id, tn_variants = tn.create_product_with_variants(
+                                nombre=prod.nombre,
+                                variantes=variantes_data,
+                            )
+                            for i, variante in enumerate(variantes_pendientes):
+                                if i < len(tn_variants):
+                                    variante.tn_product_id   = tn_product_id
+                                    variante.tn_variant_id   = str(tn_variants[i]['id'])
+                                    variante.tn_sincronizado = True
+                                    variante.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                                    publicados += 1
+                            padres_vistos.add(prod.id)
+                        else:
+                            # Producto standalone sin variantes
+                            tn_product_id, tn_variant_id = tn.create_product(
+                                nombre=prod.nombre,
+                                precio=prod.precio,
+                                stock=prod.stock,
+                                sku=prod.codigo_barras or None,
+                            )
+                            prod.tn_product_id   = tn_product_id
+                            prod.tn_variant_id   = tn_variant_id
+                            prod.tn_sincronizado = True
+                            prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                            publicados += 1
+
                     except Exception as e:
                         logger.error("Error publicando producto %s en TN: %s", prod.nombre, e)
                         errores += 1
+
                 logger.info("TN export finalizado — tienda=%s publicados=%s errores=%s", t.nombre, publicados, errores)
             except Exception as e:
                 logger.error("Error en hilo export TN tienda=%s: %s", tienda_id, e, exc_info=True)
@@ -2772,37 +2851,65 @@ class TiendaViewSet(viewsets.ModelViewSet):
         for prod_tn in productos_tn:
             tn_product_id = str(prod_tn.get('id', ''))
             nombre_tn     = (prod_tn.get('name') or {}).get('es') or str(prod_tn.get('name', ''))
-            variantes     = prod_tn.get('variants', [])
+            variantes_tn  = prod_tn.get('variants', [])
+            es_multivar   = len(variantes_tn) > 1
 
-            for variant in variantes:
+            # Para productos multi-variante, resolver/crear el producto padre
+            padre = None
+            if es_multivar:
+                padre = Producto.objects.filter(tienda=tienda, tn_product_id=tn_product_id, producto_padre__isnull=True, tn_variant_id__isnull=True).first()
+                if not padre:
+                    padre = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_tn, producto_padre__isnull=True, tn_variant_id__isnull=True).first()
+                if not padre:
+                    precio_ref = Decimal(str(variantes_tn[0].get('price') or '0')).quantize(Decimal('0.01'))
+                    padre = Producto.objects.create(
+                        tienda          = tienda,
+                        nombre          = nombre_tn,
+                        precio          = precio_ref,
+                        stock           = 0,
+                        tn_product_id   = tn_product_id,
+                        tn_sincronizado = True,
+                    )
+                    creados += 1
+                elif not padre.tn_product_id:
+                    padre.tn_product_id   = tn_product_id
+                    padre.tn_sincronizado = True
+                    padre.save(update_fields=['tn_product_id', 'tn_sincronizado'])
+
+            for variant in variantes_tn:
                 tn_variant_id = str(variant.get('id', ''))
                 sku           = variant.get('sku') or ''
                 precio_raw    = variant.get('price') or prod_tn.get('price') or '0'
                 precio        = Decimal(str(precio_raw)).quantize(Decimal('0.01'))
                 stock_tn      = variant.get('stock') if variant.get('stock') is not None else 0
+                talle_val     = None
                 nombre_var    = nombre_tn
                 if variant.get('values'):
                     vals = ' / '.join(v.get('es', '') or str(v) for v in variant['values'] if v)
                     if vals:
                         nombre_var = f"{nombre_tn} - {vals}"
+                        talle_val  = vals
 
                 try:
                     # 1) Buscar por tn_variant_id
                     producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
 
                     if producto:
-                        producto.precio        = precio
-                        producto.stock         = stock_tn
-                        producto.tn_product_id = tn_product_id
+                        producto.precio          = precio
+                        producto.stock           = stock_tn
+                        producto.tn_product_id   = tn_product_id
                         producto.tn_sincronizado = True
-                        producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado'])
+                        if es_multivar and padre and not producto.producto_padre_id:
+                            producto.producto_padre = padre
+                            producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado', 'producto_padre'])
+                        else:
+                            producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado'])
                         actualizados += 1
                         continue
 
-                    # 2) Buscar por SKU
+                    # 2) Buscar por SKU / nombre
                     if sku:
-                        producto = Producto.objects.filter(tienda=tienda, codigo=sku).first()
-                    # 3) Buscar por nombre
+                        producto = Producto.objects.filter(tienda=tienda, codigo_barras=sku).first()
                     if not producto:
                         producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_var).first()
                     if not producto and nombre_tn != nombre_var:
@@ -2811,21 +2918,27 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     if producto:
                         producto.tn_product_id   = tn_product_id
                         producto.tn_variant_id   = tn_variant_id
-                        producto.tn_sincronizado  = True
-                        producto.precio           = precio
-                        producto.stock            = stock_tn
-                        producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'precio', 'stock'])
+                        producto.tn_sincronizado = True
+                        producto.precio          = precio
+                        producto.stock           = stock_tn
+                        if es_multivar and padre:
+                            producto.producto_padre = padre
+                            if talle_val and not producto.talle:
+                                producto.talle = talle_val
+                        producto.save()
                         vinculados += 1
                     else:
-                        # 4) Crear nuevo producto
+                        # 3) Crear nuevo producto
                         Producto.objects.create(
                             tienda          = tienda,
                             nombre          = nombre_var,
                             precio          = precio,
                             stock           = stock_tn,
+                            talle           = talle_val,
                             tn_product_id   = tn_product_id,
                             tn_variant_id   = tn_variant_id,
                             tn_sincronizado = True,
+                            producto_padre  = padre if es_multivar else None,
                         )
                         creados += 1
 

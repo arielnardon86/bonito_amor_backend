@@ -20,6 +20,13 @@ class SimpleUserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'first_name', 'last_name']
 
+class VarianteSimpleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Producto
+        fields = ['id', 'nombre', 'talle', 'precio', 'stock', 'codigo_barras',
+                  'tn_product_id', 'tn_variant_id', 'tn_sincronizado']
+
+
 class ProductoSerializer(serializers.ModelSerializer):
     tienda_slug = serializers.SlugRelatedField(
         source='tienda',
@@ -28,29 +35,34 @@ class ProductoSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
-    
+    variantes = VarianteSimpleSerializer(many=True, read_only=True)
+
     def get_fields(self):
         """Genera fields dinámicamente verificando si los campos de ML existen"""
         fields = super().get_fields()
-        
+
         # Remover 'tienda' del serializer ya que usamos 'tienda_slug' en su lugar
         # Esto evita el conflicto con UniqueTogetherValidator
         if 'tienda' in fields and 'tienda_slug' in fields:
             fields.pop('tienda', None)
-        
+
         # Campos de ML que pueden no existir
         ml_fields = ['ml_item_id', 'ml_sincronizado', 'ml_sincronizar', 'ml_categoria_id', 'ml_ultima_sincronizacion']
-        
+
         # Verificar si los campos de ML existen en el modelo
         ml_fields_exist = hasattr(Producto, 'ml_item_id')
-        
+
         # Remover campos de ML si no existen en el modelo
         if not ml_fields_exist:
             for field_name in ml_fields:
                 fields.pop(field_name, None)
-        
+
+        # Incluir variantes (relación inversa declarada en clase, no en Meta)
+        if 'variantes' not in fields:
+            fields['variantes'] = VarianteSimpleSerializer(many=True, read_only=True)
+
         return fields
-    
+
     class Meta:
         model = Producto
         fields = '__all__'

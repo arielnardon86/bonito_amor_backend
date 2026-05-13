@@ -155,6 +155,43 @@ class TiendaNubeService:
         tn_variant_id = str(variants[0]["id"]) if variants else ""
         return tn_product_id, tn_variant_id
 
+    def create_product_with_variants(self, nombre, variantes):
+        """
+        Crea un producto en TN con múltiples variantes.
+        variantes: list of {precio, stock, sku (opt), talle (opt)}
+        Devuelve (tn_product_id, [{"tn_variant_id": ..., "idx": i}, ...])
+        """
+        variants_data = []
+        for i, v in enumerate(variantes):
+            variant = {"price": str(v['precio']), "stock": v.get('stock', 0)}
+            if v.get('sku'):
+                variant["sku"] = v['sku']
+            if v.get('talle'):
+                variant["values"] = [{"es": str(v['talle'])}]
+            variants_data.append(variant)
+
+        data = {
+            "name": {"es": nombre},
+            "variants": variants_data,
+        }
+        result = self._post("products", data)
+        tn_product_id = str(result.get("id", ""))
+        tn_variants = result.get("variants", [])
+        return tn_product_id, tn_variants
+
+    def add_variant(self, tn_product_id, precio, stock, sku=None, talle=None):
+        """
+        Agrega una variante a un producto TN existente.
+        Devuelve tn_variant_id.
+        """
+        variant = {"price": str(precio), "stock": stock}
+        if sku:
+            variant["sku"] = sku
+        if talle:
+            variant["values"] = [{"es": str(talle)}]
+        result = self._post(f"products/{tn_product_id}/variants", variant)
+        return str(result.get("id", ""))
+
     # ── Stock ────────────────────────────────────────────────────────────────
 
     def update_variant_stock(self, variant_id, quantity):
