@@ -250,6 +250,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if self.request.user.is_supervisor and not self.request.user.is_superuser:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Los supervisores no pueden eliminar productos.")
+        instance.variantes.all().delete()
         instance.delete()
 
     # FIX DE CONEXIÓN
