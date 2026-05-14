@@ -5723,23 +5723,40 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         # Ventas en efectivo del período
         # Suma el monto en efectivo real de cada venta:
         # - ventas nuevas: usa monto_efectivo (correcto para pagos combinados)
+        # - ventas de cambio/devolución: usa monto_diferencia (no el total del producto completo)
         # - ventas antiguas sin monto_efectivo: fallback a total si el método era puro efectivo
         from django.db.models import Case, When, F, Value
         from django.db.models import DecimalField as _Dec
-        ventas_efectivo = Venta.objects.filter(
+        CambioDevolucion_cls, _ = _get_cambio_devolucion_models()
+        ventas_qs_cierre = Venta.objects.filter(
             tienda=cierre.tienda,
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
-        ).aggregate(
-            total=Sum(
-                Case(
-                    When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
-                    When(metodo_pago__icontains='efectivo', then=F('total')),
-                    default=Value(Decimal('0.00')),
-                    output_field=_Dec(max_digits=12, decimal_places=2),
-                )
+        )
+        if CambioDevolucion_cls is not None:
+            sq_monto_dif = CambioDevolucion_cls.objects.filter(
+                venta_diferencia_pendiente=OuterRef('pk')
+            ).values('monto_diferencia')[:1]
+            ventas_qs_cierre = ventas_qs_cierre.annotate(
+                _monto_dif=Subquery(sq_monto_dif, output_field=_Dec(max_digits=10, decimal_places=2))
             )
+            case_efectivo = Case(
+                When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
+                When(Q(_monto_dif__isnull=False) & Q(metodo_pago__icontains='efectivo'), then=F('_monto_dif')),
+                When(metodo_pago__icontains='efectivo', then=F('total')),
+                default=Value(Decimal('0.00')),
+                output_field=_Dec(max_digits=12, decimal_places=2),
+            )
+        else:
+            case_efectivo = Case(
+                When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
+                When(metodo_pago__icontains='efectivo', then=F('total')),
+                default=Value(Decimal('0.00')),
+                output_field=_Dec(max_digits=12, decimal_places=2),
+            )
+        ventas_efectivo = ventas_qs_cierre.aggregate(
+            total=Sum(case_efectivo)
         )['total'] or Decimal('0.00')
 
         # Separar movimientos por tipo
@@ -5828,19 +5845,36 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         ventas = list(qs.values('id', 'fecha_venta', 'total', 'cliente_nombre', 'metodo_pago').order_by('fecha_venta'))
 
         # Suma el efectivo real del turno (igual que el endpoint cerrar)
+        # Para ventas de cambio/devolución usa monto_diferencia, no el total del producto completo
         from django.db.models import Case, When, F, Value, Q as _Q
         from django.db.models import DecimalField as _Dec
-        total_ventas_efectivo = qs.filter(
+        CambioDevolucion_vr, _ = _get_cambio_devolucion_models()
+        qs_ef = qs.filter(
             _Q(monto_efectivo__gt=0) |
             _Q(monto_efectivo__isnull=True, metodo_pago__icontains='efectivo')
-        ).aggregate(
-            total=Sum(Case(
+        )
+        if CambioDevolucion_vr is not None:
+            sq_dif = CambioDevolucion_vr.objects.filter(
+                venta_diferencia_pendiente=OuterRef('pk')
+            ).values('monto_diferencia')[:1]
+            qs_ef = qs_ef.annotate(
+                _monto_dif=Subquery(sq_dif, output_field=_Dec(max_digits=10, decimal_places=2))
+            )
+            case_ef = Case(
+                When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
+                When(_Q(_monto_dif__isnull=False) & _Q(metodo_pago__icontains='efectivo'), then=F('_monto_dif')),
+                When(metodo_pago__icontains='efectivo', then=F('total')),
+                default=Value(Decimal('0.00')),
+                output_field=_Dec(max_digits=12, decimal_places=2),
+            )
+        else:
+            case_ef = Case(
                 When(monto_efectivo__isnull=False, then=F('monto_efectivo')),
                 When(metodo_pago__icontains='efectivo', then=F('total')),
                 default=Value(Decimal('0.00')),
                 output_field=_Dec(max_digits=12, decimal_places=2),
-            ))
-        )['total'] or Decimal('0.00')
+            )
+        total_ventas_efectivo = qs_ef.aggregate(total=Sum(case_ef))['total'] or Decimal('0.00')
 
         return Response({
             'por_metodo': por_metodo,

@@ -718,9 +718,12 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             try:
                 from .models import CambioDevolucion
                 cambio_devolucion = CambioDevolucion.objects.get(id=cambio_devolucion_id)
-                # Actualizar el cambio/devolución para que apunte a esta venta en lugar de la pendiente
+                # Eliminar la venta Pendiente placeholder creada automáticamente al procesar el cambio
+                old_pendiente = cambio_devolucion.venta_diferencia_pendiente
                 cambio_devolucion.venta_diferencia_pendiente = venta
                 cambio_devolucion.save()
+                if old_pendiente and old_pendiente.id != venta.id and old_pendiente.metodo_pago == 'Pendiente':
+                    old_pendiente.delete()
             except CambioDevolucion.DoesNotExist:
                 pass  # Si no existe, continuar sin relacionar
         
