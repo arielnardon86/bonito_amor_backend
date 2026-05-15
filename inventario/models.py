@@ -972,11 +972,110 @@ class EgresoCaja(models.Model):
         return f"{self.get_tipo_display()} - {self.concepto} - ${self.importe}"
 
 
+# ── Planes y Suscripciones ────────────────────────────────────────────────────
+
+class Plan(models.Model):
+    TIER_CHOICES = [
+        ('starter',  'Starter'),
+        ('pro',      'Pro'),
+        ('advanced', 'Advanced'),
+    ]
+
+    nombre           = models.CharField(max_length=20, choices=TIER_CHOICES, unique=True)
+    precio_mensual   = models.DecimalField(max_digits=10, decimal_places=2)
+    # None = ilimitado
+    max_productos    = models.IntegerField(null=True, blank=True)
+    max_usuarios     = models.IntegerField(null=True, blank=True)
+    # Feature flags
+    permite_factura_electronica    = models.BooleanField(default=False)
+    permite_integracion_ecommerce  = models.BooleanField(default=False)  # ML + TN
+
+    class Meta:
+        verbose_name = "Plan"
+        verbose_name_plural = "Planes"
+        ordering = ['precio_mensual']
+
+    def __str__(self):
+        return f"{self.get_nombre_display()} — ${self.precio_mensual}/mes"
+
+
+class Suscripcion(models.Model):
+    ESTADO_CHOICES = [
+        ('trial',     'Período de prueba'),
+        ('activa',    'Activa'),
+        ('gracia',    'Período de gracia'),
+        ('cancelada', 'Cancelada'),
+        ('pausada',   'Pausada'),
+    ]
+
+    DIAS_TRIAL  = 7
+    DIAS_GRACIA = 5
+
+    id     = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.OneToOneField(Tienda, on_delete=models.CASCADE, related_name='suscripcion')
+    plan   = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name='suscripciones')
+
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='trial')
+
+    # Fechas
+    fecha_inicio        = models.DateTimeField(default=timezone.now)
+    fecha_fin_trial     = models.DateTimeField(null=True, blank=True)
+    fecha_proximo_cobro = models.DateTimeField(null=True, blank=True)
+    fecha_inicio_gracia = models.DateTimeField(null=True, blank=True)
+
+    # Mercado Pago
+    mp_preapproval_id = models.CharField(max_length=255, blank=True, null=True)
+    mp_payer_email    = models.EmailField(blank=True, null=True)
+
+    fecha_creacion     = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Suscripción"
+        verbose_name_plural = "Suscripciones"
+
+    def __str__(self):
+        return f"{self.tienda.nombre} — {self.plan.get_nombre_display()} — {self.get_estado_display()}"
+
+    @property
+    def esta_activa(self):
+        """True si la tienda puede operar. Incluye trial, activa y gracia."""
+        return self.estado in ('trial', 'activa', 'gracia')
+
+    @property
+    def dias_gracia_restantes(self):
+        if self.estado == 'gracia' and self.fecha_inicio_gracia:
+            transcurridos = (timezone.now() - self.fecha_inicio_gracia).days
+            return max(0, self.DIAS_GRACIA - transcurridos)
+        return None
+
+    def puede_agregar_producto(self, cantidad_actual):
+        if self.plan.max_productos is None:
+            return True
+        return cantidad_actual < self.plan.max_productos
+
+    def puede_agregar_usuario(self, cantidad_actual):
+        if self.plan.max_usuarios is None:
+            return True
+        return cantidad_actual < self.plan.max_usuarios
+
+    def permite_feature(self, feature):
+        """
+        feature: 'factura_electronica' | 'ecommerce'
+        Tiendas sin suscripción (legacy) tienen acceso total → chequear en la view.
+        """
+        if feature == 'factura_electronica':
+            return self.plan.permite_factura_electronica
+        if feature == 'ecommerce':
+            return self.plan.permite_integracion_ecommerce
+        return True
+
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
-    'CierreCaja', 'EgresoCaja',
+    'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',
 ]

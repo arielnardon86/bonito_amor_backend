@@ -318,3 +318,7 @@ AUTHENTICATION_BACKENDS = [
     'inventario.auth_backends.CaseInsensitiveUsernameBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+# ── Suscripciones / Mercado Pago ─────────────────────────────────────────────
+MP_ACCESS_TOKEN_SUSCRIPCIONES = os.environ.get('MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')

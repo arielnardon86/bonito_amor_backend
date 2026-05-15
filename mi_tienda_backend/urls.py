@@ -30,7 +30,11 @@ except (ImportError, AttributeError) as e:
     print(f"⚠️ Warning: No se pudo importar vistas ML OAuth: {e}")
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from inventario.views import verificar_database_config, registrar_token_fcm, eliminar_token_fcm
+from inventario.views import (
+    verificar_database_config, registrar_token_fcm, eliminar_token_fcm,
+    planes_publicos, registro_publico, mp_webhook_suscripcion, cambiar_plan,
+    mi_suscripcion,
+)
 # Importación condicional de CambioDevolucionViewSet
 try:
     from inventario.views import CambioDevolucionViewSet
@@ -92,7 +96,13 @@ urlpatterns += [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/metricas/metrics/', MetricasAPIView.as_view(), name='metricas-ventas-rentabilidad'),
     path('api/inventario/metrics/', InventarioMetricsAPIView.as_view(), name='inventario-metrics'),
-    path('api/verificar-database/', verificar_database_config, name='verificar-database'),  # Endpoint de verificación
-    path('api/notificaciones/registrar-token/', registrar_token_fcm, name='registrar-token-fcm'),  # Registrar token FCM
-    path('api/notificaciones/eliminar-token/', eliminar_token_fcm, name='eliminar-token-fcm'),  # Eliminar token FCM
+    path('api/verificar-database/', verificar_database_config, name='verificar-database'),
+    path('api/notificaciones/registrar-token/', registrar_token_fcm, name='registrar-token-fcm'),
+    path('api/notificaciones/eliminar-token/', eliminar_token_fcm, name='eliminar-token-fcm'),
+    # Suscripciones / registro público
+    path('api/planes/', planes_publicos, name='planes-publicos'),
+    path('api/registro/', registro_publico, name='registro-publico'),
+    path('api/mp-webhook-suscripcion/', mp_webhook_suscripcion, name='mp-webhook-suscripcion'),
+    path('api/suscripcion/cambiar-plan/', cambiar_plan, name='cambiar-plan'),
+    path('api/suscripcion/mi-plan/', mi_suscripcion, name='mi-suscripcion'),
 ]

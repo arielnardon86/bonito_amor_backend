@@ -5934,3 +5934,238 @@ class EgresoCajaViewSet(viewsets.ModelViewSet):
             if compra:
                 compra.delete()
         instance.delete()
+
+
+# ── Registro público + Suscripciones ─────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def planes_publicos(request):
+    """Devuelve los 3 planes con sus límites y features (endpoint público)."""
+    from .models import Plan
+    planes = Plan.objects.all().order_by('precio_mensual')
+    data = [
+        {
+            'id': p.id,
+            'nombre': p.nombre,
+            'display': p.get_nombre_display(),
+            'precio_mensual': str(p.precio_mensual),
+            'max_productos': p.max_productos,
+            'max_usuarios': p.max_usuarios,
+            'permite_factura_electronica': p.permite_factura_electronica,
+            'permite_integracion_ecommerce': p.permite_integracion_ecommerce,
+        }
+        for p in planes
+    ]
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def registro_publico(request):
+    """
+    Crea una nueva tienda + usuario admin + suscripción en trial.
+    Body: { nombre_tienda, email, username, password, telefono, plan (nombre) }
+    Devuelve: { token_access, token_refresh, init_point (URL de MP para suscribirse) }
+    """
+    from .models import Plan, Suscripcion
+    from .services.suscripcion_service import crear_preaprobacion
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from django.conf import settings as django_settings
+    from django.utils import timezone
+    from datetime import timedelta
+
+    data = request.data
+
+    # Validaciones básicas
+    required = ['nombre_tienda', 'email', 'username', 'password', 'plan']
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400)
+
+    nombre_tienda = data['nombre_tienda'].strip()
+    username      = data['username'].strip().lower()
+    email         = data['email'].strip().lower()
+    password      = data['password']
+    plan_nombre   = data['plan'].lower()
+
+    if Tienda.objects.filter(nombre__iexact=nombre_tienda).exists():
+        return Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400)
+
+    if User.objects.filter(username__iexact=username).exists():
+        return Response({'error': 'Ese nombre de usuario ya está en uso.'}, status=400)
+
+    if User.objects.filter(email__iexact=email).exists():
+        return Response({'error': 'Ya existe una cuenta con ese email.'}, status=400)
+
+    try:
+        plan = Plan.objects.get(nombre=plan_nombre)
+    except Plan.DoesNotExist:
+        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
+
+    with transaction.atomic():
+        # Crear tienda
+        tienda = Tienda.objects.create(
+            nombre=nombre_tienda,
+            email=email,
+            telefono=data.get('telefono', ''),
+        )
+
+        # Crear usuario admin de la tienda
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            is_staff=True,
+            tienda=tienda,
+        )
+
+        # Crear suscripción en trial
+        suscripcion = Suscripcion.objects.create(
+            tienda=tienda,
+            plan=plan,
+            estado='trial',
+            fecha_inicio=timezone.now(),
+            fecha_fin_trial=timezone.now() + timedelta(days=Suscripcion.DIAS_TRIAL),
+            fecha_proximo_cobro=timezone.now() + timedelta(days=Suscripcion.DIAS_TRIAL),
+        )
+
+    # Generar tokens JWT para que el usuario quede logueado
+    refresh = RefreshToken.for_user(user)
+
+    # Construir URLs de retorno para MP
+    frontend_url = django_settings.FRONTEND_URL
+    back_url          = f"{frontend_url}/suscripcion/resultado"
+    notification_url  = f"{request.scheme}://{request.get_host()}/api/mp-webhook-suscripcion/"
+
+    init_point = None
+    if django_settings.MP_ACCESS_TOKEN_SUSCRIPCIONES:
+        try:
+            init_point = crear_preaprobacion(suscripcion, back_url, notification_url)
+        except Exception as e:
+            logger.warning("No se pudo crear preaprobación MP para %s: %s", tienda.nombre, e)
+
+    return Response({
+        'token_access':  str(refresh.access_token),
+        'token_refresh': str(refresh),
+        'tienda_slug':   tienda.nombre,
+        'username':      user.username,
+        'init_point':    init_point,
+        'trial_dias':    Suscripcion.DIAS_TRIAL,
+        'plan':          plan.nombre,
+    }, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def mp_webhook_suscripcion(request):
+    """
+    Webhook de Mercado Pago para eventos de suscripción (preaprobaciones).
+    MP envía POST con { type, data: { id } }.
+    """
+    from .models import Suscripcion
+    from .services.suscripcion_service import (
+        activar_suscripcion, cancelar_suscripcion,
+        pausar_suscripcion, obtener_preaprobacion,
+    )
+
+    payload = request.data
+    event_type = payload.get('type', '')
+    resource_id = payload.get('data', {}).get('id', '')
+
+    logger.info("Webhook MP suscripción: type=%s id=%s", event_type, resource_id)
+
+    if not resource_id:
+        return Response(status=200)
+
+    try:
+        suscripcion = Suscripcion.objects.select_related('plan').get(
+            mp_preapproval_id=resource_id
+        )
+    except Suscripcion.DoesNotExist:
+        # Puede ser un evento de otro recurso (pagos, etc.) — ignorar silenciosamente
+        return Response(status=200)
+
+    if event_type == 'subscription_preapproval':
+        # Consultar estado real en MP
+        try:
+            datos_mp = obtener_preaprobacion(resource_id)
+            estado_mp = datos_mp.get('status', '')
+        except Exception as e:
+            logger.error("Error consultando preaprobación %s: %s", resource_id, e)
+            return Response(status=200)
+
+        if estado_mp == 'authorized' and suscripcion.estado in ('trial', 'pending'):
+            activar_suscripcion(suscripcion)
+        elif estado_mp == 'cancelled':
+            cancelar_suscripcion(suscripcion)
+        elif estado_mp == 'paused':
+            pausar_suscripcion(suscripcion)
+
+    elif event_type == 'subscription_authorized_payment':
+        # Cobro exitoso → si estaba en gracia, volver a activa
+        if suscripcion.estado == 'gracia':
+            from django.utils import timezone as tz
+            suscripcion.estado = 'activa'
+            suscripcion.fecha_inicio_gracia = None
+            suscripcion.fecha_proximo_cobro = tz.now().replace(
+                day=1
+            ) + __import__('datetime').timedelta(days=32)
+            suscripcion.save(update_fields=['estado', 'fecha_inicio_gracia', 'fecha_proximo_cobro'])
+            logger.info("Suscripción reactivada tras cobro exitoso: %s", suscripcion.id)
+
+    return Response(status=200)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def mi_suscripcion(request):
+    """Devuelve el estado del plan de la tienda del usuario autenticado."""
+    from .plan_enforcement import info_suscripcion
+    tienda = request.user.tienda
+    if not tienda:
+        return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
+    return Response(info_suscripcion(tienda))
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def cambiar_plan(request):
+    """
+    Cambia el plan de la tienda del usuario autenticado.
+    El cambio es inmediato (features/límites); el cobro del nuevo precio
+    empieza en el próximo ciclo.
+    Body: { plan: 'starter' | 'pro' | 'advanced' }
+    """
+    from .models import Plan, Suscripcion
+    from .services.suscripcion_service import cambiar_plan_mp
+
+    user = request.user
+    tienda = user.tienda
+    if not tienda:
+        return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
+
+    try:
+        suscripcion = tienda.suscripcion
+    except Suscripcion.DoesNotExist:
+        return Response({'error': 'La tienda no tiene suscripción activa.'}, status=400)
+
+    plan_nombre = request.data.get('plan', '').lower()
+    try:
+        plan_nuevo = Plan.objects.get(nombre=plan_nombre)
+    except Plan.DoesNotExist:
+        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
+
+    if plan_nuevo == suscripcion.plan:
+        return Response({'error': 'Ya estás en ese plan.'}, status=400)
+
+    suscripcion.plan = plan_nuevo
+    suscripcion.save(update_fields=['plan'])
+
+    # Sincronizar nuevo monto en MP (se cobra al próximo ciclo)
+    cambiar_plan_mp(suscripcion, plan_nuevo)
+
+    return Response({
+        'mensaje': f'Plan cambiado a {plan_nuevo.get_nombre_display()} exitosamente.',
+        'plan': plan_nuevo.nombre,
+    })
