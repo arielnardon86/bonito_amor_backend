@@ -5966,14 +5966,14 @@ def registro_publico(request):
     """
     Crea una nueva tienda + usuario admin + suscripción en trial.
     Body: { nombre_tienda, email, username, password, telefono, plan (nombre) }
-    Devuelve: { token_access, token_refresh, init_point (URL de MP para suscribirse) }
+    Devuelve: { token_access, token_refresh, init_point (URL checkout MP) }
     """
     from .models import Plan, Suscripcion
-    from .services.suscripcion_service import crear_preaprobacion
     from rest_framework_simplejwt.tokens import RefreshToken
     from django.conf import settings as django_settings
     from django.utils import timezone
     from datetime import timedelta
+    import urllib.parse
 
     data = request.data
 
@@ -6020,8 +6020,8 @@ def registro_publico(request):
             tienda=tienda,
         )
 
-        # Crear suscripción en trial
-        suscripcion = Suscripcion.objects.create(
+        # Crear suscripción en trial (mp_preapproval_id se completará vía webhook)
+        suscripcion = Suscripcion.objects.create(  # noqa: F841
             tienda=tienda,
             plan=plan,
             estado='trial',
@@ -6033,17 +6033,19 @@ def registro_publico(request):
     # Generar tokens JWT para que el usuario quede logueado
     refresh = RefreshToken.for_user(user)
 
-    # Construir URLs de retorno para MP
-    frontend_url = django_settings.FRONTEND_URL
-    back_url          = f"{frontend_url}/suscripcion/resultado"
-    notification_url  = f"{request.scheme}://{request.get_host()}/api/mp-webhook-suscripcion/"
+    # Construir checkout URL del plan en MP
+    # MP creará el preapproval individual y nos notificará vía webhook
+    frontend_url = getattr(django_settings, 'FRONTEND_URL', 'http://localhost:3000')
+    back_url     = f"{frontend_url}/suscripcion/resultado"
+    init_point   = None
 
-    init_point = None
-    if django_settings.MP_ACCESS_TOKEN_SUSCRIPCIONES:
-        try:
-            init_point = crear_preaprobacion(suscripcion, back_url, notification_url)
-        except Exception as e:
-            logger.warning("No se pudo crear preaprobación MP para %s: %s", tienda.nombre, e)
+    if plan.mp_plan_id:
+        params = {
+            'preapproval_plan_id': plan.mp_plan_id,
+            'back_url':            back_url,
+            'external_reference':  str(tienda.id),  # UUID de la tienda; se recibe en el webhook
+        }
+        init_point = f"https://www.mercadopago.com.ar/subscriptions/checkout?{urllib.parse.urlencode(params)}"
 
     return Response({
         'token_access':  str(refresh.access_token),
@@ -6062,39 +6064,75 @@ def mp_webhook_suscripcion(request):
     """
     Webhook de Mercado Pago para eventos de suscripción (preaprobaciones).
     MP envía POST con { type, data: { id } }.
+
+    Flujo con planes de MP:
+      - subscription_preapproval: nueva suscripción o cambio de estado.
+        Si no conocemos el preapproval_id, buscamos la tienda por external_reference
+        (UUID de tienda, pasado en la URL de checkout) y guardamos el id.
+      - subscription_authorized_payment: cobro exitoso. Buscamos por preapproval_id
+        dentro de los datos del pago.
     """
     from .models import Suscripcion
     from .services.suscripcion_service import (
         activar_suscripcion, cancelar_suscripcion,
         pausar_suscripcion, obtener_preaprobacion,
     )
+    import datetime
 
-    payload = request.data
+    payload    = request.data
     event_type = payload.get('type', '')
-    resource_id = payload.get('data', {}).get('id', '')
+    resource_id = str(payload.get('data', {}).get('id', '')).strip()
 
     logger.info("Webhook MP suscripción: type=%s id=%s", event_type, resource_id)
 
     if not resource_id:
         return Response(status=200)
 
-    try:
-        suscripcion = Suscripcion.objects.select_related('plan').get(
-            mp_preapproval_id=resource_id
-        )
-    except Suscripcion.DoesNotExist:
-        # Puede ser un evento de otro recurso (pagos, etc.) — ignorar silenciosamente
-        return Response(status=200)
-
+    # ── subscription_preapproval ──────────────────────────────────────────────
     if event_type == 'subscription_preapproval':
-        # Consultar estado real en MP
+
+        # Intentar consultar el estado real en MP (necesario para external_reference)
         try:
             datos_mp = obtener_preaprobacion(resource_id)
-            estado_mp = datos_mp.get('status', '')
         except Exception as e:
             logger.error("Error consultando preaprobación %s: %s", resource_id, e)
             return Response(status=200)
 
+        estado_mp      = datos_mp.get('status', '')
+        external_ref   = datos_mp.get('external_reference', '')
+        payer_email    = datos_mp.get('payer_email', '') or datos_mp.get('payer', {}).get('email', '')
+
+        # Buscar la suscripción: primero por preapproval_id (ya conocida),
+        # luego por external_reference (primera vez que llega el webhook)
+        suscripcion = None
+        try:
+            suscripcion = Suscripcion.objects.select_related('plan').get(
+                mp_preapproval_id=resource_id
+            )
+        except Suscripcion.DoesNotExist:
+            if external_ref:
+                try:
+                    suscripcion = Suscripcion.objects.select_related('plan').get(
+                        tienda__id=external_ref
+                    )
+                    # Primera vez: guardar el preapproval_id
+                    suscripcion.mp_preapproval_id = resource_id
+                    if payer_email:
+                        suscripcion.mp_payer_email = payer_email
+                    suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
+                    logger.info(
+                        "Preapproval %s vinculado a tienda %s",
+                        resource_id, external_ref
+                    )
+                except Suscripcion.DoesNotExist:
+                    logger.warning(
+                        "No se encontró suscripción para external_reference=%s", external_ref
+                    )
+
+        if suscripcion is None:
+            return Response(status=200)
+
+        # Aplicar cambio de estado
         if estado_mp == 'authorized' and suscripcion.estado in ('trial', 'pending'):
             activar_suscripcion(suscripcion)
         elif estado_mp == 'cancelled':
@@ -6102,17 +6140,50 @@ def mp_webhook_suscripcion(request):
         elif estado_mp == 'paused':
             pausar_suscripcion(suscripcion)
 
+    # ── subscription_authorized_payment ──────────────────────────────────────
     elif event_type == 'subscription_authorized_payment':
-        # Cobro exitoso → si estaba en gracia, volver a activa
+        # resource_id es el ID del pago autorizado, no del preapproval.
+        # Buscamos el preapproval_id dentro de los datos del pago.
+        try:
+            from .services.suscripcion_service import _headers, MP_API_BASE
+            import requests as req_lib
+            pago_resp = req_lib.get(
+                f"{MP_API_BASE}/authorized_payments/{resource_id}",
+                headers=_headers(),
+                timeout=10,
+            )
+            pago_resp.raise_for_status()
+            preapproval_id = pago_resp.json().get('preapproval_id', '')
+        except Exception as e:
+            logger.error("Error obteniendo authorized_payment %s: %s", resource_id, e)
+            return Response(status=200)
+
+        if not preapproval_id:
+            return Response(status=200)
+
+        try:
+            suscripcion = Suscripcion.objects.get(mp_preapproval_id=preapproval_id)
+        except Suscripcion.DoesNotExist:
+            return Response(status=200)
+
+        # Cobro exitoso → si estaba en gracia, volver a activa; actualizar próximo cobro
+        from django.utils import timezone as tz
         if suscripcion.estado == 'gracia':
-            from django.utils import timezone as tz
             suscripcion.estado = 'activa'
             suscripcion.fecha_inicio_gracia = None
-            suscripcion.fecha_proximo_cobro = tz.now().replace(
-                day=1
-            ) + __import__('datetime').timedelta(days=32)
-            suscripcion.save(update_fields=['estado', 'fecha_inicio_gracia', 'fecha_proximo_cobro'])
-            logger.info("Suscripción reactivada tras cobro exitoso: %s", suscripcion.id)
+            logger.info("Suscripción reactivada tras cobro: %s", suscripcion.id)
+
+        # Avanzar próximo cobro un mes
+        ahora = tz.now()
+        proximo = ahora.replace(day=10)
+        if proximo <= ahora:
+            # Ya pasó el día 10 de este mes; ir al próximo mes
+            if ahora.month == 12:
+                proximo = proximo.replace(year=ahora.year + 1, month=1)
+            else:
+                proximo = proximo.replace(month=ahora.month + 1)
+        suscripcion.fecha_proximo_cobro = proximo
+        suscripcion.save(update_fields=['estado', 'fecha_inicio_gracia', 'fecha_proximo_cobro'])
 
     return Response(status=200)
 

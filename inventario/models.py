@@ -989,6 +989,8 @@ class Plan(models.Model):
     # Feature flags
     permite_factura_electronica    = models.BooleanField(default=False)
     permite_integracion_ecommerce  = models.BooleanField(default=False)  # ML + TN
+    # ID del plan de suscripción en Mercado Pago (preapproval_plan_id)
+    mp_plan_id       = models.CharField(max_length=100, blank=True, default='')
 
     class Meta:
         verbose_name = "Plan"
