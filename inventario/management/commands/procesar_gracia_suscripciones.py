@@ -34,6 +34,19 @@ class Command(BaseCommand):
 
         ahora = timezone.now()
 
+        # 0. Trials vencidos sin suscripción activa en MP → pausar
+        trials_vencidos = Suscripcion.objects.filter(
+            estado='trial',
+            fecha_fin_trial__lt=ahora,
+        ).select_related('plan', 'tienda')
+
+        for sus in trials_vencidos:
+            self.stdout.write(
+                self.style.WARNING(f"Trial vencido sin pago: {sus.tienda.nombre}")
+            )
+            pausar_suscripcion(sus)
+            self._enviar_aviso(sus, dia=-1)
+
         # 1. Suscripciones activas con cobro vencido (no en gracia todavía)
         vencidas = Suscripcion.objects.filter(
             estado='activa',
