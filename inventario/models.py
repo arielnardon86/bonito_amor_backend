@@ -1003,6 +1003,7 @@ class Plan(models.Model):
 
 class Suscripcion(models.Model):
     ESTADO_CHOICES = [
+        ('pending',   'Pendiente de pago'),
         ('trial',     'Período de prueba'),
         ('activa',    'Activa'),
         ('gracia',    'Período de gracia'),
@@ -1041,7 +1042,7 @@ class Suscripcion(models.Model):
 
     @property
     def esta_activa(self):
-        """True si la tienda puede operar. Incluye trial, activa y gracia."""
+        """True si la tienda puede operar. Pending y cancelada/pausada no tienen acceso."""
         return self.estado in ('trial', 'activa', 'gracia')
 
     @property

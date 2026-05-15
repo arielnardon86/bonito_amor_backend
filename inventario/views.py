@@ -6021,14 +6021,12 @@ def registro_publico(request):
             tienda=tienda,
         )
 
-        # Crear suscripción en trial (mp_preapproval_id se completará vía webhook)
+        # Crear suscripción pendiente — se activa cuando MP confirme vía webhook
         suscripcion = Suscripcion.objects.create(  # noqa: F841
             tienda=tienda,
             plan=plan,
-            estado='trial',
+            estado='pending',
             fecha_inicio=timezone.now(),
-            fecha_fin_trial=timezone.now() + timedelta(days=Suscripcion.DIAS_TRIAL),
-            fecha_proximo_cobro=timezone.now() + timedelta(days=Suscripcion.DIAS_TRIAL),
         )
 
     # Generar tokens JWT para que el usuario quede logueado
@@ -6133,8 +6131,8 @@ def mp_webhook_suscripcion(request):
         if suscripcion is None:
             return Response(status=200)
 
-        # Aplicar cambio de estado
-        if estado_mp == 'authorized' and suscripcion.estado in ('trial', 'pending'):
+        # Aplicar cambio de estado según MP
+        if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada'):
             activar_suscripcion(suscripcion)
         elif estado_mp == 'cancelled':
             cancelar_suscripcion(suscripcion)

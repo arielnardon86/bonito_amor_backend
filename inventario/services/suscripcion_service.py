@@ -127,17 +127,17 @@ def obtener_preaprobacion(preapproval_id: str) -> dict:
 
 def activar_suscripcion(suscripcion):
     """
-    Marca la suscripción como activa tras la autorización del usuario en MP.
-    Intenta cobrar $1 de verificación.
+    Marca la suscripción como trial tras la autorización de MP.
+    MP ya maneja el período de prueba y el cobro automático; no hacemos cobro manual.
     """
+    from django.utils import timezone as tz
+    from datetime import timedelta
     suscripcion.estado = "trial"
-    suscripcion.save(update_fields=["estado"])
-
-    try:
-        cobrar_verificacion(suscripcion)
-        logger.info("Cobro de verificación $1 OK — suscripción %s", suscripcion.id)
-    except Exception as e:
-        logger.warning("No se pudo cobrar $1 de verificación (%s): %s", suscripcion.id, e)
+    # Fecha de fin de trial referencial (MP la maneja, pero la guardamos para mostrar en UI)
+    if not suscripcion.fecha_fin_trial:
+        suscripcion.fecha_fin_trial = tz.now() + timedelta(days=suscripcion.DIAS_TRIAL)
+    suscripcion.save(update_fields=["estado", "fecha_fin_trial"])
+    logger.info("Suscripción activada (trial) tras confirmación MP: %s", suscripcion.id)
 
 
 def cancelar_suscripcion(suscripcion):
