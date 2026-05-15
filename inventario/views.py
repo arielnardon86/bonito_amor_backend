@@ -6011,12 +6011,13 @@ def registro_publico(request):
             telefono=data.get('telefono', ''),
         )
 
-        # Crear usuario admin de la tienda
+        # Crear usuario admin de la tienda (superuser para acceso completo al panel)
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
             is_staff=True,
+            is_superuser=True,
             tienda=tienda,
         )
 
