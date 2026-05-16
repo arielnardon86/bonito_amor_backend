@@ -322,3 +322,5 @@ AUTHENTICATION_BACKENDS = [
 # ── Suscripciones / Mercado Pago ─────────────────────────────────────────────
 MP_ACCESS_TOKEN_SUSCRIPCIONES = os.environ.get('MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+# URL pública del backend (para notification_url en MP). Ej: https://api.totalstock.com.ar
+BACKEND_URL = os.environ.get('BACKEND_URL', '')

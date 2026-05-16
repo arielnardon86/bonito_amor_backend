@@ -6053,11 +6053,14 @@ def registro_publico(request):
     init_point   = None
 
     if plan.mp_plan_id:
+        backend_url = getattr(django_settings, 'BACKEND_URL', '').rstrip('/')
         params = {
             'preapproval_plan_id': plan.mp_plan_id,
             'back_url':            back_url,
             'external_reference':  str(tienda.id),  # UUID de la tienda; se recibe en el webhook
         }
+        if backend_url:
+            params['notification_url'] = f"{backend_url}/api/mp-webhook-suscripcion/"
         init_point = f"https://www.mercadopago.com.ar/subscriptions/checkout?{urllib.parse.urlencode(params)}"
 
     return Response({
