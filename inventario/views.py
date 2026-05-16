@@ -6198,6 +6198,74 @@ def mi_suscripcion(request):
     return Response(info_suscripcion(tienda))
 
 
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def verificar_suscripcion_mp(request):
+    """
+    Llamado desde /suscripcion/resultado al volver de MP con ?preapproval_id=xxx.
+    Consulta el estado en MP, activa la suscripción si está autorizada,
+    y devuelve { estado, activa, username } para que el frontend pueda redirigir.
+    """
+    from .models import Suscripcion
+    from .services.suscripcion_service import (
+        obtener_preaprobacion, activar_suscripcion,
+    )
+
+    preapproval_id = request.query_params.get('preapproval_id', '').strip()
+    if not preapproval_id:
+        return Response({'error': 'preapproval_id requerido'}, status=400)
+
+    try:
+        datos_mp = obtener_preaprobacion(preapproval_id)
+    except Exception as e:
+        logger.error("verificar_suscripcion_mp: error consultando MP %s: %s", preapproval_id, e)
+        return Response({'estado': 'error_mp', 'activa': False})
+
+    estado_mp    = datos_mp.get('status', '')
+    external_ref = datos_mp.get('external_reference', '')
+    payer_email  = datos_mp.get('payer_email', '') or datos_mp.get('payer', {}).get('email', '')
+
+    # Buscar suscripción: por preapproval_id (ya vinculada) o external_reference (primera vez)
+    suscripcion = None
+    try:
+        suscripcion = Suscripcion.objects.select_related('tienda').get(
+            mp_preapproval_id=preapproval_id
+        )
+    except Suscripcion.DoesNotExist:
+        if external_ref:
+            try:
+                suscripcion = Suscripcion.objects.select_related('tienda').get(
+                    tienda__id=external_ref
+                )
+                suscripcion.mp_preapproval_id = preapproval_id
+                if payer_email:
+                    suscripcion.mp_payer_email = payer_email
+                suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
+            except Suscripcion.DoesNotExist:
+                pass
+
+    if suscripcion is None:
+        return Response({'estado': 'no_encontrada', 'activa': False})
+
+    # Activar si MP dice autorizado
+    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada'):
+        activar_suscripcion(suscripcion)
+        suscripcion.refresh_from_db()
+
+    # Devolver username para que el frontend sepa con qué cuenta loguearse
+    try:
+        admin_user = suscripcion.tienda.usuarios.filter(is_superuser=True).first()
+        username = admin_user.username if admin_user else ''
+    except Exception:
+        username = ''
+
+    return Response({
+        'estado':   suscripcion.estado,
+        'activa':   suscripcion.esta_activa,
+        'username': username,
+    })
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def cambiar_plan(request):
