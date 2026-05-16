@@ -4640,6 +4640,7 @@ class MetricasAPIView(APIView):
             'producto__nombre', 'producto__talle'
         ).annotate(
             cantidad_total=Sum('cantidad'),
+            monto_total=Sum('subtotal'),
             cantidad_pagados_ml=Sum(
                 Case(
                     When(venta__origen_mercadolibre=True, venta__ml_sale_fee__gt=0, then=F('cantidad')),
@@ -4647,7 +4648,7 @@ class MetricasAPIView(APIView):
                     output_field=DecimalField()
                 )
             )
-        ).order_by('-cantidad_total')[:10]
+        ).order_by('-cantidad_total')
         
         # Para ventas por usuario, también aplicar la lógica de diferencia
         # Optimización: usar el mapa ya creado en lugar de hacer .first() en cada iteración
