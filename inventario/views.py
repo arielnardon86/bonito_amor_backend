@@ -6355,13 +6355,15 @@ def cancelar_suscripcion_view(request):
 @permission_classes([permissions.IsAuthenticated])
 def cambiar_plan(request):
     """
-    Cambia el plan de la tienda del usuario autenticado.
-    El cambio es inmediato (features/límites); el cobro del nuevo precio
-    empieza en el próximo ciclo.
+    Upgrade/downgrade de plan.
+    Cancela el preapproval anterior en MP y devuelve el checkout URL del nuevo
+    plan para que el usuario complete la nueva suscripción.
     Body: { plan: 'starter' | 'pro' | 'advanced' }
     """
+    import urllib.parse
+    from django.conf import settings as dj_settings
     from .models import Plan, Suscripcion
-    from .services.suscripcion_service import cambiar_plan_mp
+    from .services.suscripcion_service import cancelar_preaprobacion_mp
 
     user = request.user
     tienda = user.tienda
@@ -6382,13 +6384,47 @@ def cambiar_plan(request):
     if plan_nuevo == suscripcion.plan:
         return Response({'error': 'Ya estás en ese plan.'}, status=400)
 
-    suscripcion.plan = plan_nuevo
-    suscripcion.save(update_fields=['plan'])
+    # Cancelar preapproval anterior en MP para evitar cobro doble
+    if suscripcion.mp_preapproval_id:
+        try:
+            cancelar_preaprobacion_mp(suscripcion.mp_preapproval_id)
+            logger.info(
+                "Preapproval %s cancelado por upgrade de plan (%s → %s) — tienda %s",
+                suscripcion.mp_preapproval_id, suscripcion.plan.nombre,
+                plan_nuevo.nombre, tienda.nombre,
+            )
+        except Exception as e:
+            logger.error("Error cancelando preapproval anterior en MP: %s", e)
+            # Continuamos igual: el usuario debe poder hacer upgrade aunque falle la cancelación en MP
 
-    # Sincronizar nuevo monto en MP (se cobra al próximo ciclo)
-    cambiar_plan_mp(suscripcion, plan_nuevo)
+    # Actualizar plan y resetear estado para que el usuario complete el nuevo checkout
+    suscripcion.plan = plan_nuevo
+    suscripcion.estado = 'pending'
+    suscripcion.mp_preapproval_id = None
+    suscripcion.mp_payer_email = None
+    suscripcion.fecha_proximo_cobro = None
+    suscripcion.fecha_inicio_gracia = None
+    suscripcion.save(update_fields=[
+        'plan', 'estado', 'mp_preapproval_id', 'mp_payer_email',
+        'fecha_proximo_cobro', 'fecha_inicio_gracia',
+    ])
+
+    # Construir checkout URL del nuevo plan
+    checkout_url = None
+    if plan_nuevo.mp_plan_id:
+        frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+        backend_url  = getattr(dj_settings, 'BACKEND_URL', '').rstrip('/')
+        params = {
+            'preapproval_plan_id': plan_nuevo.mp_plan_id,
+            'back_url':            f"{frontend_url}/suscripcion/resultado",
+            'external_reference':  str(tienda.id),
+        }
+        if backend_url:
+            params['notification_url'] = f"{backend_url}/api/mp-webhook-suscripcion/"
+        checkout_url = f"https://www.mercadopago.com.ar/subscriptions/checkout?{urllib.parse.urlencode(params)}"
 
     return Response({
-        'mensaje': f'Plan cambiado a {plan_nuevo.get_nombre_display()} exitosamente.',
-        'plan': plan_nuevo.nombre,
+        'mensaje':      f'Redirigiendo al checkout de Mercado Pago para el plan {plan_nuevo.get_nombre_display()}.',
+        'plan':         plan_nuevo.nombre,
+        'checkout_url': checkout_url,
     })
