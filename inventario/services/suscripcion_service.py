@@ -21,8 +21,8 @@ Webhooks MP → manejar en views.py:
 import logging
 import requests
 from datetime import timedelta
-from django.utils import timezone
 from django.conf import settings
+from django.utils import timezone as tz
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,22 @@ MP_API_BASE = "https://api.mercadopago.com"
 
 # Importe del cargo de verificación durante el trial
 MONTO_VERIFICACION = 1.00
+
+
+def _proximo_dia_10(desde=None):
+    """
+    Devuelve el próximo día 10 de cobro de MP a partir de `desde`.
+    Si `desde` ya pasó el día 10 del mes, devuelve el día 10 del mes siguiente.
+    """
+    if desde is None:
+        desde = tz.now()
+    candidate = desde.replace(day=10, hour=0, minute=0, second=0, microsecond=0)
+    if candidate <= desde:
+        if desde.month == 12:
+            candidate = candidate.replace(year=desde.year + 1, month=1)
+        else:
+            candidate = candidate.replace(month=desde.month + 1)
+    return candidate
 
 
 def _headers():
@@ -48,7 +64,7 @@ def crear_preaprobacion(suscripcion, back_url: str, notification_url: str) -> st
     - Luego se cobra el precio mensual del plan automáticamente.
     """
     plan = suscripcion.plan
-    fecha_inicio_cobro = timezone.now() + timedelta(days=suscripcion.DIAS_TRIAL)
+    fecha_inicio_cobro = tz.now() + timedelta(days=suscripcion.DIAS_TRIAL)
 
     payload = {
         "reason": f"Total Stock — Plan {plan.get_nombre_display()}",
@@ -127,17 +143,32 @@ def obtener_preaprobacion(preapproval_id: str) -> dict:
 
 def activar_suscripcion(suscripcion):
     """
-    Marca la suscripción como trial tras la autorización de MP.
-    MP ya maneja el período de prueba y el cobro automático; no hacemos cobro manual.
+    Marca la suscripción como trial tras la primera autorización de MP (pending → trial).
+    Setea fecha_proximo_cobro al próximo día 10 después del período de trial,
+    que es la fecha en que MP comenzará a cobrar mensualmente.
     """
-    from django.utils import timezone as tz
-    from datetime import timedelta
+    ahora = tz.now()
     suscripcion.estado = "trial"
-    # Fecha de fin de trial referencial (MP la maneja, pero la guardamos para mostrar en UI)
     if not suscripcion.fecha_fin_trial:
-        suscripcion.fecha_fin_trial = tz.now() + timedelta(days=suscripcion.DIAS_TRIAL)
-    suscripcion.save(update_fields=["estado", "fecha_fin_trial"])
+        suscripcion.fecha_fin_trial = ahora + timedelta(days=suscripcion.DIAS_TRIAL)
+    # El primer cobro de MP será el día 10 que quede después del trial
+    fin_trial = suscripcion.fecha_fin_trial or (ahora + timedelta(days=suscripcion.DIAS_TRIAL))
+    suscripcion.fecha_proximo_cobro = _proximo_dia_10(fin_trial)
+    suscripcion.save(update_fields=["estado", "fecha_fin_trial", "fecha_proximo_cobro"])
     logger.info("Suscripción activada (trial) tras confirmación MP: %s", suscripcion.id)
+
+
+def renovar_suscripcion(suscripcion):
+    """
+    Confirma el pago mensual de MP y avanza fecha_proximo_cobro al siguiente día 10.
+    Se llama desde el webhook subscription_authorized_payment o subscription_preapproval
+    cuando el estado de MP es 'authorized' en un ciclo de renovación.
+    """
+    suscripcion.estado = "activa"
+    suscripcion.fecha_inicio_gracia = None
+    suscripcion.fecha_proximo_cobro = _proximo_dia_10()
+    suscripcion.save(update_fields=["estado", "fecha_inicio_gracia", "fecha_proximo_cobro"])
+    logger.info("Suscripción renovada (activa) tras cobro MP: %s", suscripcion.id)
 
 
 def cancelar_suscripcion(suscripcion):
@@ -161,7 +192,7 @@ def iniciar_periodo_gracia(suscripcion):
     """
     if suscripcion.estado != "gracia":
         suscripcion.estado = "gracia"
-        suscripcion.fecha_inicio_gracia = timezone.now()
+        suscripcion.fecha_inicio_gracia = tz.now()
         suscripcion.save(update_fields=["estado", "fecha_inicio_gracia"])
         logger.info("Período de gracia iniciado: %s", suscripcion.id)
 

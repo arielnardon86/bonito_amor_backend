@@ -4,11 +4,14 @@ Management command para procesar el período de gracia de suscripciones.
 Ejecutar diariamente (ej. cron job en Render):
     python manage.py procesar_gracia_suscripciones
 
-Lógica:
-  1. Detecta suscripciones activas cuyo fecha_proximo_cobro haya pasado.
-  2. Si no estaban en gracia → las pone en gracia (día 0).
-  3. Si ya estaban en gracia → reintenta el cobro en MP y advierte al usuario.
-  4. Si llevan 5+ días en gracia → las pausa (bloqueo de acceso).
+Lógica (MP cobra el día 10 de cada mes):
+  1. Suscripciones en trial/activa cuyo fecha_proximo_cobro ya pasó y no llegó
+     webhook de pago → iniciar gracia (5 días).
+  2. Suscripciones ya en gracia → avanzar contador y avisar.
+  3. Si llevan DIAS_GRACIA días en gracia → pausar (sin pérdida de datos).
+
+Nota: los webhooks de MP son la fuente primaria. Este comando es el safety net
+para cuando un webhook no llega o llega tarde.
 """
 
 import logging
@@ -22,43 +25,34 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Procesa período de gracia de suscripciones con cobros fallidos."
+    help = "Procesa período de gracia de suscripciones con cobros pendientes."
 
     def handle(self, *args, **options):
         from inventario.models import Suscripcion
         from inventario.services.suscripcion_service import (
             iniciar_periodo_gracia,
-            reintentar_cobro_mp,
             pausar_suscripcion,
         )
 
         ahora = timezone.now()
 
-        # 0. Trials vencidos sin suscripción activa en MP → pausar
-        trials_vencidos = Suscripcion.objects.filter(
-            estado='trial',
-            fecha_fin_trial__lt=ahora,
-        ).select_related('plan', 'tienda')
-
-        for sus in trials_vencidos:
-            self.stdout.write(
-                self.style.WARNING(f"Trial vencido sin pago: {sus.tienda.nombre}")
-            )
-            pausar_suscripcion(sus)
-            self._enviar_aviso(sus, dia=-1)
-
-        # 1. Suscripciones activas con cobro vencido (no en gracia todavía)
-        vencidas = Suscripcion.objects.filter(
-            estado='activa',
+        # 1. Suscripciones trial/activa con fecha_proximo_cobro vencida
+        #    (el día 10 pasó y MP no notificó pago exitoso)
+        sin_cobro = Suscripcion.objects.filter(
+            estado__in=('trial', 'activa'),
+            fecha_proximo_cobro__isnull=False,
             fecha_proximo_cobro__lt=ahora,
         ).select_related('plan', 'tienda')
 
-        for sus in vencidas:
-            self.stdout.write(f"Iniciando gracia: {sus.tienda.nombre} ({sus.plan.nombre})")
+        for sus in sin_cobro:
+            self.stdout.write(
+                f"Sin cobro confirmado: {sus.tienda.nombre} ({sus.plan.nombre}) "
+                f"— vencido el {sus.fecha_proximo_cobro:%d/%m/%Y}"
+            )
             iniciar_periodo_gracia(sus)
             self._enviar_aviso(sus, dia=0)
 
-        # 2. Suscripciones ya en gracia → reintentar y avisar
+        # 2. Suscripciones en gracia → avanzar y avisar o pausar
         en_gracia = Suscripcion.objects.filter(
             estado='gracia',
             fecha_inicio_gracia__isnull=False,
@@ -68,21 +62,20 @@ class Command(BaseCommand):
             dias_en_gracia = (ahora - sus.fecha_inicio_gracia).days
 
             if dias_en_gracia >= sus.DIAS_GRACIA:
-                # Período de gracia agotado → pausar
                 self.stdout.write(
                     self.style.WARNING(
-                        f"Pausando por gracia agotada: {sus.tienda.nombre}"
+                        f"Pausando por gracia agotada: {sus.tienda.nombre} "
+                        f"({dias_en_gracia} días sin pago)"
                     )
                 )
                 pausar_suscripcion(sus)
-                self._enviar_aviso(sus, dia=-1)  # -1 = suspendida
+                self._enviar_aviso(sus, dia=-1)
             else:
-                # Reintentar cobro y avisar
+                dias_restantes = sus.DIAS_GRACIA - dias_en_gracia
                 self.stdout.write(
-                    f"Reintentando cobro (día {dias_en_gracia + 1}): {sus.tienda.nombre}"
+                    f"En gracia día {dias_en_gracia + 1}: {sus.tienda.nombre} "
+                    f"— {dias_restantes} día(s) restante(s)"
                 )
-                if sus.mp_preapproval_id:
-                    reintentar_cobro_mp(sus.mp_preapproval_id)
                 self._enviar_aviso(sus, dia=dias_en_gracia + 1)
 
         self.stdout.write(self.style.SUCCESS("procesar_gracia_suscripciones completado."))
@@ -93,36 +86,41 @@ class Command(BaseCommand):
         if not email_destino:
             return
 
+        nombre_tienda = sus.tienda.nombre
+        nombre_plan   = sus.plan.get_nombre_display()
+
         if dia == 0:
-            asunto = "⚠️ Total Stock: problema con el cobro de tu suscripción"
+            asunto = "⚠️ Total Stock: tu suscripción tiene un pago pendiente"
             cuerpo = (
                 f"Hola,\n\n"
-                f"No pudimos procesar el cobro de tu suscripción "
-                f"({sus.plan.get_nombre_display()}) para la tienda {sus.tienda.nombre}.\n\n"
-                f"Tenés {sus.DIAS_GRACIA} días para regularizar el pago antes de que "
-                f"tu acceso sea suspendido.\n\n"
-                f"Por favor verificá tus datos de pago en Mercado Pago.\n\n"
+                f"Mercado Pago aún no confirmó el cobro de tu suscripción "
+                f"({nombre_plan}) para la tienda {nombre_tienda}.\n\n"
+                f"Tenés {sus.DIAS_GRACIA} días para regularizar el pago. "
+                f"Si no se confirma, tu acceso será suspendido temporalmente "
+                f"(sin pérdida de datos).\n\n"
+                f"Verificá tu método de pago en Mercado Pago.\n\n"
                 f"— El equipo de Total Stock"
             )
         elif dia == -1:
-            asunto = "🚫 Total Stock: tu suscripción fue suspendida"
+            asunto = "🚫 Total Stock: tu cuenta fue suspendida por falta de pago"
             cuerpo = (
                 f"Hola,\n\n"
-                f"Lamentablemente tu suscripción de {sus.tienda.nombre} fue suspendida "
+                f"Lamentablemente tu suscripción de {nombre_tienda} fue suspendida "
                 f"por falta de pago.\n\n"
-                f"Para reactivarla, contactanos o actualizá tu método de pago en "
-                f"Mercado Pago.\n\n"
+                f"Tus datos están intactos. Para reactivar tu cuenta, "
+                f"actualizá tu método de pago en Mercado Pago o contactanos.\n\n"
                 f"— El equipo de Total Stock"
             )
         else:
             dias_restantes = sus.DIAS_GRACIA - dia
-            asunto = f"⚠️ Total Stock: {dias_restantes} día(s) para regularizar tu suscripción"
+            asunto = f"⚠️ Total Stock: {dias_restantes} día(s) para regularizar tu pago"
             cuerpo = (
                 f"Hola,\n\n"
-                f"Seguimos sin poder cobrar tu suscripción "
-                f"({sus.plan.get_nombre_display()}) para {sus.tienda.nombre}.\n\n"
-                f"Te quedan {dias_restantes} día(s) antes de que tu acceso sea suspendido.\n\n"
-                f"Verificá tus datos de pago en Mercado Pago.\n\n"
+                f"Seguimos sin confirmar el cobro de tu suscripción "
+                f"({nombre_plan}) para {nombre_tienda}.\n\n"
+                f"Te quedan {dias_restantes} día(s) antes de que tu cuenta sea suspendida. "
+                f"No perderás ningún dato.\n\n"
+                f"Verificá tu método de pago en Mercado Pago.\n\n"
                 f"— El equipo de Total Stock"
             )
 
@@ -134,6 +132,6 @@ class Command(BaseCommand):
                 recipient_list=[email_destino],
                 fail_silently=True,
             )
-            logger.info("Aviso de gracia enviado a %s (día %s)", email_destino, dia)
+            logger.info("Aviso enviado a %s (día %s)", email_destino, dia)
         except Exception as e:
             logger.warning("No se pudo enviar aviso a %s: %s", email_destino, e)

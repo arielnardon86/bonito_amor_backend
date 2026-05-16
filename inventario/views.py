@@ -6087,8 +6087,9 @@ def mp_webhook_suscripcion(request):
     """
     from .models import Suscripcion
     from .services.suscripcion_service import (
-        activar_suscripcion, cancelar_suscripcion,
-        pausar_suscripcion, obtener_preaprobacion,
+        activar_suscripcion, renovar_suscripcion,
+        cancelar_suscripcion, pausar_suscripcion,
+        iniciar_periodo_gracia, obtener_preaprobacion,
     )
     import datetime
 
@@ -6146,12 +6147,18 @@ def mp_webhook_suscripcion(request):
             return Response(status=200)
 
         # Aplicar cambio de estado según MP
-        if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada'):
-            activar_suscripcion(suscripcion)
+        if estado_mp == 'authorized':
+            if suscripcion.estado == 'pending':
+                # Primera autorización: iniciar trial
+                activar_suscripcion(suscripcion)
+            elif suscripcion.estado in ('trial', 'gracia', 'pausada'):
+                # MP confirmó renovación o reactivación → activa
+                renovar_suscripcion(suscripcion)
+        elif estado_mp == 'paused':
+            # MP no pudo cobrar → iniciar gracia (5 días antes de suspender)
+            iniciar_periodo_gracia(suscripcion)
         elif estado_mp == 'cancelled':
             cancelar_suscripcion(suscripcion)
-        elif estado_mp == 'paused':
-            pausar_suscripcion(suscripcion)
 
     # ── subscription_authorized_payment ──────────────────────────────────────
     elif event_type == 'subscription_authorized_payment':
@@ -6179,24 +6186,10 @@ def mp_webhook_suscripcion(request):
         except Suscripcion.DoesNotExist:
             return Response(status=200)
 
-        # Cobro exitoso → si estaba en gracia, volver a activa; actualizar próximo cobro
-        from django.utils import timezone as tz
-        if suscripcion.estado == 'gracia':
-            suscripcion.estado = 'activa'
-            suscripcion.fecha_inicio_gracia = None
-            logger.info("Suscripción reactivada tras cobro: %s", suscripcion.id)
-
-        # Avanzar próximo cobro un mes
-        ahora = tz.now()
-        proximo = ahora.replace(day=10)
-        if proximo <= ahora:
-            # Ya pasó el día 10 de este mes; ir al próximo mes
-            if ahora.month == 12:
-                proximo = proximo.replace(year=ahora.year + 1, month=1)
-            else:
-                proximo = proximo.replace(month=ahora.month + 1)
-        suscripcion.fecha_proximo_cobro = proximo
-        suscripcion.save(update_fields=['estado', 'fecha_inicio_gracia', 'fecha_proximo_cobro'])
+        # Cobro exitoso → renovar suscripción (trial o gracia → activa, próximo cobro día 10)
+        from .services.suscripcion_service import renovar_suscripcion as _renovar
+        _renovar(suscripcion)
+        logger.info("Suscripción renovada por authorized_payment: %s", suscripcion.id)
 
     return Response(status=200)
 
