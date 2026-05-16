@@ -6120,8 +6120,11 @@ def mp_webhook_suscripcion(request):
                 hashlib.sha256,
             ).hexdigest()
             if not hmac.compare_digest(expected, v1):
-                logger.warning("Webhook MP: firma inválida — posible intento no autorizado")
-                return Response(status=401)
+                # Firma inválida: puede ser el test del panel de MP (usa datos ficticios)
+                # o un intento no autorizado. En ambos casos devolvemos 200 para que MP
+                # no reintente, pero no procesamos el payload.
+                logger.warning("Webhook MP: firma inválida, payload ignorado (id=%s)", data_id)
+                return Response(status=200)
 
     payload    = request.data
     event_type = payload.get('type', '')
