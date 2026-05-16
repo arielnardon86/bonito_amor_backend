@@ -243,7 +243,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         if self.request.user.is_supervisor and not self.request.user.is_superuser:
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Los supervisores no pueden editar productos.")
+            campos_enviados = set(self.request.data.keys())
+            if not campos_enviados.issubset({'stock'}):
+                raise PermissionDenied("Los supervisores no pueden editar productos.")
         serializer.save()
 
     def perform_destroy(self, instance):
