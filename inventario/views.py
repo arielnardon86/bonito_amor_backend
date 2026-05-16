@@ -5836,9 +5836,23 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         if cierre.fecha_cierre:
             qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
 
+        # Para efectivo puro, mostrar monto_efectivo (cash real) en lugar del total del producto.
+        # Esto evita que ventas de cambio/devolución inflen el total mostrado por método.
+        from django.db.models import Case, When, F, Q as _Q
+        from django.db.models import DecimalField as _Dec
+        qs_con_importe = qs.annotate(
+            importe_metodo=Case(
+                When(
+                    _Q(metodo_pago__icontains='efectivo') & ~_Q(metodo_pago__contains='+') & _Q(monto_efectivo__isnull=False),
+                    then=F('monto_efectivo')
+                ),
+                default=F('total'),
+                output_field=_Dec(max_digits=12, decimal_places=2)
+            )
+        )
         por_metodo = list(
-            qs.values('metodo_pago')
-              .annotate(total=Sum('total'), cantidad=Count('id'))
+            qs_con_importe.values('metodo_pago')
+              .annotate(total=Sum('importe_metodo'), cantidad=Count('id'))
               .order_by('metodo_pago')
         )
 
