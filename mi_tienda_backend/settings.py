@@ -322,5 +322,7 @@ AUTHENTICATION_BACKENDS = [
 # ── Suscripciones / Mercado Pago ─────────────────────────────────────────────
 MP_ACCESS_TOKEN_SUSCRIPCIONES = os.environ.get('MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-# URL pública del backend (para notification_url en MP). Ej: https://api.totalstock.com.ar
+# URL pública del backend (para notification_url en MP). Ej: https://bonito-amor-backend.onrender.com
 BACKEND_URL = os.environ.get('BACKEND_URL', '')
+# Clave secreta para validar firma de webhooks de MP (Configurar notificaciones → clave secreta)
+MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')

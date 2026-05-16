@@ -6089,13 +6089,39 @@ def mp_webhook_suscripcion(request):
       - subscription_authorized_payment: cobro exitoso. Buscamos por preapproval_id
         dentro de los datos del pago.
     """
+    import hashlib
+    import hmac
+    from django.conf import settings as dj_settings
     from .models import Suscripcion
     from .services.suscripcion_service import (
         activar_suscripcion, renovar_suscripcion,
         cancelar_suscripcion, pausar_suscripcion,
         iniciar_periodo_gracia, obtener_preaprobacion,
     )
-    import datetime
+
+    # Validar firma de MP si la clave secreta está configurada
+    webhook_secret = getattr(dj_settings, 'MP_WEBHOOK_SECRET', '')
+    if webhook_secret:
+        x_signature   = request.headers.get('x-signature', '')
+        x_request_id  = request.headers.get('x-request-id', '')
+        # x-signature tiene formato: ts=<timestamp>,v1=<hash>
+        ts = v1 = ''
+        for part in x_signature.split(','):
+            if part.startswith('ts='):
+                ts = part[3:]
+            elif part.startswith('v1='):
+                v1 = part[3:]
+        if ts and v1:
+            data_id = str(request.data.get('data', {}).get('id', ''))
+            manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts}"
+            expected = hmac.new(
+                webhook_secret.encode(),
+                manifest.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            if not hmac.compare_digest(expected, v1):
+                logger.warning("Webhook MP: firma inválida — posible intento no autorizado")
+                return Response(status=401)
 
     payload    = request.data
     event_type = payload.get('type', '')
