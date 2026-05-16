@@ -2,7 +2,9 @@
 # BONITO_AMOR/backend/inventario/admin.py
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda, Factura 
+from django.utils.html import format_html
+from django.utils import timezone
+from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda, Factura, Plan, Suscripcion
 
 # Configuración para el modelo de Usuario personalizado
 @admin.register(User)
@@ -345,3 +347,143 @@ class FacturaAdmin(admin.ModelAdmin):
         elif request.user.tienda:
             return qs.filter(tienda=request.user.tienda).select_related('venta', 'tienda')
         return qs.none()
+
+
+# ── Plan ──────────────────────────────────────────────────────────────────────
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display  = ('nombre', 'get_nombre_display', 'precio_mensual', 'max_productos',
+                     'max_usuarios', 'permite_factura_electronica',
+                     'permite_integracion_ecommerce', 'mp_plan_id')
+    list_editable = ('precio_mensual', 'max_productos', 'max_usuarios',
+                     'permite_factura_electronica', 'permite_integracion_ecommerce')
+    search_fields = ('nombre', 'mp_plan_id')
+    fieldsets = (
+        ('Identificación', {
+            'fields': ('nombre', 'mp_plan_id'),
+        }),
+        ('Precios y límites', {
+            'fields': ('precio_mensual', 'max_productos', 'max_usuarios'),
+        }),
+        ('Features', {
+            'fields': ('permite_factura_electronica', 'permite_integracion_ecommerce'),
+        }),
+    )
+
+
+# ── Suscripcion ───────────────────────────────────────────────────────────────
+
+class SuscripcionInline(admin.StackedInline):
+    model        = Suscripcion
+    extra        = 0
+    can_delete   = False
+    show_change_link = True
+    readonly_fields  = ('id', 'fecha_creacion', 'fecha_actualizacion', 'mp_preapproval_id',
+                        'mp_payer_email', 'estado_badge')
+    fields = ('estado_badge', 'plan', 'estado', 'fecha_inicio', 'fecha_fin_trial',
+              'fecha_proximo_cobro', 'fecha_inicio_gracia',
+              'mp_preapproval_id', 'mp_payer_email')
+
+    def estado_badge(self, obj):
+        colores = {
+            'pending':   '#f59e0b',
+            'trial':     '#3b82f6',
+            'activa':    '#16a34a',
+            'gracia':    '#f97316',
+            'pausada':   '#dc2626',
+            'cancelada': '#6b7280',
+        }
+        color = colores.get(obj.estado, '#6b7280')
+        return format_html(
+            '<span style="background:{};color:#fff;padding:3px 10px;border-radius:12px;'
+            'font-weight:600;font-size:12px">{}</span>',
+            color, obj.get_estado_display()
+        )
+    estado_badge.short_description = 'Estado actual'
+
+
+def _accion_activar(modeladmin, request, queryset):
+    from inventario.services.suscripcion_service import activar_suscripcion
+    for sus in queryset:
+        activar_suscripcion(sus)
+    modeladmin.message_user(request, f'{queryset.count()} suscripción(es) activada(s).')
+_accion_activar.short_description = '✅ Activar suscripción (→ trial)'
+
+
+def _accion_pausar(modeladmin, request, queryset):
+    from inventario.services.suscripcion_service import pausar_suscripcion
+    for sus in queryset:
+        pausar_suscripcion(sus)
+    modeladmin.message_user(request, f'{queryset.count()} suscripción(es) pausada(s).')
+_accion_pausar.short_description = '⏸ Pausar suscripción'
+
+
+def _accion_cancelar(modeladmin, request, queryset):
+    from inventario.services.suscripcion_service import cancelar_suscripcion
+    for sus in queryset:
+        cancelar_suscripcion(sus)
+    modeladmin.message_user(request, f'{queryset.count()} suscripción(es) cancelada(s).')
+_accion_cancelar.short_description = '🚫 Cancelar suscripción'
+
+
+@admin.register(Suscripcion)
+class SuscripcionAdmin(admin.ModelAdmin):
+    list_display  = ('tienda_nombre', 'tienda_email', 'plan', 'estado_badge',
+                     'fecha_inicio', 'fecha_fin_trial', 'fecha_proximo_cobro',
+                     'mp_preapproval_id')
+    list_filter   = ('estado', 'plan')
+    search_fields = ('tienda__nombre', 'tienda__email', 'mp_preapproval_id', 'mp_payer_email')
+    actions       = [_accion_activar, _accion_pausar, _accion_cancelar]
+    readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion',
+                       'mp_preapproval_id', 'mp_payer_email', 'estado_badge')
+    fieldsets = (
+        ('Tienda', {
+            'fields': ('tienda',),
+        }),
+        ('Plan y estado', {
+            'fields': ('estado_badge', 'plan', 'estado'),
+        }),
+        ('Fechas', {
+            'fields': ('fecha_inicio', 'fecha_fin_trial',
+                       'fecha_proximo_cobro', 'fecha_inicio_gracia'),
+        }),
+        ('Mercado Pago', {
+            'fields': ('mp_preapproval_id', 'mp_payer_email'),
+        }),
+        ('Sistema', {
+            'fields': ('id', 'fecha_creacion', 'fecha_actualizacion'),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def tienda_nombre(self, obj):
+        return obj.tienda.nombre
+    tienda_nombre.short_description = 'Tienda'
+    tienda_nombre.admin_order_field = 'tienda__nombre'
+
+    def tienda_email(self, obj):
+        return obj.tienda.email
+    tienda_email.short_description = 'Email'
+    tienda_email.admin_order_field = 'tienda__email'
+
+    def estado_badge(self, obj):
+        colores = {
+            'pending':   '#f59e0b',
+            'trial':     '#3b82f6',
+            'activa':    '#16a34a',
+            'gracia':    '#f97316',
+            'pausada':   '#dc2626',
+            'cancelada': '#6b7280',
+        }
+        color = colores.get(obj.estado, '#6b7280')
+        return format_html(
+            '<span style="background:{};color:#fff;padding:3px 10px;border-radius:12px;'
+            'font-weight:600;font-size:12px">{}</span>',
+            color, obj.get_estado_display()
+        )
+    estado_badge.short_description = 'Estado'
+
+
+# Agregar inline de suscripción a TiendaAdmin
+TiendaAdmin.inlines = [SuscripcionInline]
