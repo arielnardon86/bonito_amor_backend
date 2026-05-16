@@ -171,10 +171,31 @@ def renovar_suscripcion(suscripcion):
     logger.info("Suscripción renovada (activa) tras cobro MP: %s", suscripcion.id)
 
 
+def cancelar_preaprobacion_mp(preapproval_id: str):
+    """Cancela la preaprobación en MP (para bajas iniciadas desde nuestro panel)."""
+    try:
+        resp = requests.put(
+            f"{MP_API_BASE}/preapproval/{preapproval_id}",
+            json={"status": "cancelled"},
+            headers=_headers(),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        logger.info("Preaprobación %s cancelada en MP", preapproval_id)
+    except Exception as e:
+        logger.error("Error cancelando preaprobación %s en MP: %s", preapproval_id, e)
+        raise
+
+
 def cancelar_suscripcion(suscripcion):
-    """Cancela la suscripción (por webhook o acción del usuario)."""
+    """
+    Cancela la suscripción en nuestra BD.
+    Los datos se mantienen 30 días; luego el cron los elimina.
+    Llamar cancelar_preaprobacion_mp() ANTES si la baja viene del usuario (no de MP).
+    """
     suscripcion.estado = "cancelada"
-    suscripcion.save(update_fields=["estado"])
+    suscripcion.fecha_cancelacion = tz.now()
+    suscripcion.save(update_fields=["estado", "fecha_cancelacion"])
     logger.info("Suscripción cancelada: %s", suscripcion.id)
 
 

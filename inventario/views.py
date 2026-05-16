@@ -6275,6 +6275,49 @@ def verificar_suscripcion_mp(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+def cancelar_suscripcion_view(request):
+    """
+    Baja iniciada por el usuario desde el panel "Mi Plan".
+    Cancela la preaprobación en MP y marca la suscripción como cancelada.
+    Los datos permanecen 30 días antes del borrado automático.
+    """
+    from .models import Suscripcion
+    from .services.suscripcion_service import (
+        cancelar_preaprobacion_mp, cancelar_suscripcion,
+    )
+
+    try:
+        suscripcion = request.user.tienda.suscripcion
+    except (AttributeError, Suscripcion.DoesNotExist):
+        return Response({'error': 'No se encontró suscripción activa.'}, status=404)
+
+    if suscripcion.estado == 'cancelada':
+        return Response({'error': 'La suscripción ya está cancelada.'}, status=400)
+
+    # Cancelar primero en MP para que no siga cobrando
+    if suscripcion.mp_preapproval_id:
+        try:
+            cancelar_preaprobacion_mp(suscripcion.mp_preapproval_id)
+        except Exception as e:
+            logger.error("Error cancelando en MP para suscripción %s: %s", suscripcion.id, e)
+            return Response(
+                {'error': 'No se pudo cancelar en Mercado Pago. Intentá nuevamente.'},
+                status=502,
+            )
+
+    cancelar_suscripcion(suscripcion)
+    logger.info(
+        "Baja iniciada por usuario %s — tienda %s",
+        request.user.username, request.user.tienda.nombre
+    )
+    return Response({
+        'ok': True,
+        'mensaje': 'Tu suscripción fue cancelada. Tus datos estarán disponibles por 30 días.',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
 def cambiar_plan(request):
     """
     Cambia el plan de la tienda del usuario autenticado.

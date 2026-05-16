@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Procesa período de gracia de suscripciones con cobros pendientes."
 
+    DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
+
     def handle(self, *args, **options):
         from inventario.models import Suscripcion
         from inventario.services.suscripcion_service import (
@@ -35,6 +37,28 @@ class Command(BaseCommand):
         )
 
         ahora = timezone.now()
+
+        # 0. Canceladas hace más de 30 días → eliminar todos los datos
+        limite_borrado = ahora - timedelta(days=self.DIAS_RETENCION)
+        a_borrar = Suscripcion.objects.filter(
+            estado='cancelada',
+            fecha_cancelacion__isnull=False,
+            fecha_cancelacion__lt=limite_borrado,
+        ).select_related('tienda')
+
+        for sus in a_borrar:
+            tienda = sus.tienda
+            nombre = tienda.nombre
+            try:
+                tienda.delete()  # Cascade: elimina productos, ventas, usuarios, etc.
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Datos eliminados (30 días post-cancelación): {nombre}"
+                    )
+                )
+                logger.info("Tienda eliminada por cancelación: %s", nombre)
+            except Exception as e:
+                logger.error("Error eliminando tienda %s: %s", nombre, e)
 
         # 1. Suscripciones trial/activa con fecha_proximo_cobro vencida
         #    (el día 10 pasó y MP no notificó pago exitoso)

@@ -1025,6 +1025,7 @@ class Suscripcion(models.Model):
     fecha_fin_trial     = models.DateTimeField(null=True, blank=True)
     fecha_proximo_cobro = models.DateTimeField(null=True, blank=True)
     fecha_inicio_gracia = models.DateTimeField(null=True, blank=True)
+    fecha_cancelacion   = models.DateTimeField(null=True, blank=True)
 
     # Mercado Pago
     mp_preapproval_id = models.CharField(max_length=255, blank=True, null=True)
