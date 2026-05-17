@@ -34,6 +34,7 @@ from inventario.views import (
     verificar_database_config, registrar_token_fcm, eliminar_token_fcm,
     planes_publicos, registro_publico, mp_webhook_suscripcion, cambiar_plan,
     mi_suscripcion, verificar_suscripcion_mp, cancelar_suscripcion_view,
+    verificar_pago_pendiente,
 )
 # Importación condicional de CambioDevolucionViewSet
 try:
@@ -107,4 +108,5 @@ urlpatterns += [
     path('api/suscripcion/mi-plan/', mi_suscripcion, name='mi-suscripcion'),
     path('api/suscripcion/verificar/', verificar_suscripcion_mp, name='verificar-suscripcion-mp'),
     path('api/suscripcion/cancelar/', cancelar_suscripcion_view, name='cancelar-suscripcion'),
+    path('api/suscripcion/verificar-pago/', verificar_pago_pendiente, name='verificar-pago-pendiente'),
 ]

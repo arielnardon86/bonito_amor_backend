@@ -6289,6 +6289,59 @@ def verificar_suscripcion_mp(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+def verificar_pago_pendiente(request):
+    """
+    Endpoint autenticado: el usuario que está bloqueado en la pantalla de
+    suscripción pendiente pulsa "Ya pagué — Verificar".
+    Busca la suscripción de su tienda, consulta MP y la activa si corresponde.
+    """
+    from .models import Suscripcion
+    from .services.suscripcion_service import (
+        obtener_preaprobacion, activar_suscripcion,
+    )
+
+    tienda = getattr(request.user, 'tienda', None)
+    if not tienda:
+        return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
+
+    try:
+        suscripcion = Suscripcion.objects.select_related('tienda').get(tienda=tienda)
+    except Suscripcion.DoesNotExist:
+        return Response({'error': 'No se encontró suscripción para esta tienda.'}, status=404)
+
+    if suscripcion.esta_activa:
+        return Response({'estado': suscripcion.estado, 'activa': True})
+
+    preapproval_id = suscripcion.mp_preapproval_id
+    if not preapproval_id:
+        return Response({'estado': suscripcion.estado, 'activa': False,
+                         'mensaje': 'No hay ID de pago registrado. Completá el proceso en Mercado Pago.'})
+
+    try:
+        datos_mp = obtener_preaprobacion(preapproval_id)
+    except Exception as e:
+        logger.error("verificar_pago_pendiente: error consultando MP %s: %s", preapproval_id, e)
+        return Response({'estado': 'error_mp', 'activa': False,
+                         'mensaje': 'No pudimos consultar Mercado Pago. Intentá de nuevo en unos minutos.'})
+
+    estado_mp = datos_mp.get('status', '')
+
+    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia'):
+        activar_suscripcion(suscripcion)
+        suscripcion.refresh_from_db()
+        return Response({'estado': suscripcion.estado, 'activa': True,
+                         'mensaje': '¡Suscripción activada! Recargá la página.'})
+
+    return Response({
+        'estado': suscripcion.estado,
+        'activa': False,
+        'estado_mp': estado_mp,
+        'mensaje': 'El pago aún no fue confirmado por Mercado Pago. Puede demorar unos minutos.',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
 def cancelar_suscripcion_view(request):
     """
     Baja iniciada por el usuario desde el panel "Mi Plan".
