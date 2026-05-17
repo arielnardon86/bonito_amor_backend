@@ -4006,46 +4006,25 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
                 return ArancelMetodoTienda.objects.none()
             return queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre', 'nombre_plan')
 
-        # Usuarios staff solo pueden ver aranceles de su tienda
-        elif user.is_staff and user.tienda:
-            # Normalizar comparación (sin case sensitivity)
-            tienda_nombre_usuario = user.tienda.nombre.strip() if user.tienda.nombre else None
-            tienda_slug_normalizado = tienda_slug.strip() if tienda_slug else None
-            
-            logger.info(f"🔍 Staff user '{user.username}' - Verificando aranceles. Usuario.tienda='{tienda_nombre_usuario}', tienda_slug='{tienda_slug_normalizado}'")
-            logger.info(f"🔍 Staff user '{user.username}' - user.tienda.id={user.tienda.id if user.tienda else 'None'}")
-            
-            # Si viene tienda_slug, verificar que coincida con la tienda del usuario (comparación flexible)
+        # Usuarios staff: pueden ver aranceles de su tienda principal + tiendas autorizadas
+        elif user.is_staff:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                logger.warning(f"⚠️ Staff '{user.username}' sin tiendas asignadas.")
+                return ArancelMetodoTienda.objects.none()
             if tienda_slug:
-                # Comparar con y sin case sensitivity, y también comparar sin espacios
-                if (tienda_nombre_usuario == tienda_slug_normalizado or 
-                    tienda_nombre_usuario.lower() == tienda_slug_normalizado.lower()):
-                    result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
-                    logger.info(f"✅ Staff user '{user.username}' - Aranceles para tienda '{tienda_nombre_usuario}': {result.count()} aranceles")
-                    # Log detallado de los aranceles encontrados
-                    if result.exists():
-                        for arancel in result[:5]:  # Log primeros 5
-                            logger.info(f"  📋 Arancel: {arancel.metodo_pago.nombre if arancel.metodo_pago else 'N/A'} - {arancel.nombre_plan}")
+                if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
+                    result = queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+                    logger.info(f"✅ Staff '{user.username}' - Aranceles para tienda '{tienda_slug}': {result.count()}")
                     return result
-                else:
-                    logger.warning(f"⚠️ Staff user '{user.username}' - Tienda no coincide: usuario.tienda='{tienda_nombre_usuario}' vs tienda_slug='{tienda_slug_normalizado}'")
-                    # Intentar buscar por ID también
-                    try:
-                        tienda_obj = Tienda.objects.get(nombre=tienda_slug_normalizado)
-                        if tienda_obj.id == user.tienda.id:
-                            logger.info(f"✅ Staff user '{user.username}' - Coincidencia encontrada por ID, retornando aranceles")
-                            result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
-                            return result
-                    except Tienda.DoesNotExist:
-                        pass
-                    return ArancelMetodoTienda.objects.none()
-            # Si no viene tienda_slug, filtrar por la tienda del usuario
-            result = queryset.filter(tienda=user.tienda).order_by('metodo_pago__nombre', 'nombre_plan')
-            logger.info(f"✅ Staff user '{user.username}' - Aranceles para tienda '{tienda_nombre_usuario}' (sin slug): {result.count()} aranceles")
+                logger.warning(f"⚠️ Staff '{user.username}' - Tienda '{tienda_slug}' no autorizada.")
+                return ArancelMetodoTienda.objects.none()
+            result = queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre', 'nombre_plan')
+            logger.info(f"✅ Staff '{user.username}' - Aranceles de todas sus tiendas: {result.count()}")
             return result
-        
+
         # Si no es superuser ni staff, no puede ver aranceles
-        logger.warning(f"⚠️ User '{user.username}' - No es superuser ni staff con tienda asignada. No puede ver aranceles.")
+        logger.warning(f"⚠️ User '{user.username}' - Sin permisos para ver aranceles.")
         return ArancelMetodoTienda.objects.none()
 
     def perform_create(self, serializer):
