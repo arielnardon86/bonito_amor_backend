@@ -34,6 +34,9 @@ def _registrar_accion(tienda, usuario, accion, detalle, objeto_id=None):
             tienda=tienda, usuario=usuario,
             accion=accion, detalle=detalle, objeto_id=objeto_id,
         )
+        # Limpiar registros con más de 90 días de esta tienda
+        corte = timezone.now() - timedelta(days=90)
+        HistorialAccion.objects.filter(tienda=tienda, fecha__lt=corte).delete()
     except Exception as e:
         logger.warning("No se pudo registrar historial accion '%s': %s", accion, e)
 
