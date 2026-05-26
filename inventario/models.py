@@ -865,6 +865,31 @@ class FCMToken(models.Model):
         return f"{self.user.username} - {self.device_info or 'Dispositivo desconocido'}"
 
 
+class HistorialAccion(models.Model):
+    ACCION_CHOICES = [
+        ('anulacion_venta',   'Anulación de venta'),
+        ('anulacion_item',    'Anulación de ítem'),
+        ('ingreso_stock',     'Ingreso de stock'),
+        ('cambio_devolucion', 'Cambio / Devolución'),
+    ]
+    id       = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda   = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='historial_acciones')
+    usuario  = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='historial_acciones')
+    accion   = models.CharField(max_length=30, choices=ACCION_CHOICES)
+    detalle  = models.CharField(max_length=500)
+    objeto_id = models.UUIDField(null=True, blank=True)
+    fecha    = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = 'Historial de acción'
+        verbose_name_plural = 'Historial de acciones'
+        indexes = [models.Index(fields=['tienda', '-fecha'], name='historial_tienda_fecha_idx')]
+
+    def __str__(self):
+        return f"{self.get_accion_display()} · {self.usuario} · {self.fecha:%d/%m/%Y %H:%M}"
+
+
 class CompraStock(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='compras_stock')

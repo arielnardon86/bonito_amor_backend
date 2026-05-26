@@ -26,6 +26,18 @@ from django.core.cache import cache
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
+
+
+def _registrar_accion(tienda, usuario, accion, detalle, objeto_id=None):
+    try:
+        HistorialAccion.objects.create(
+            tienda=tienda, usuario=usuario,
+            accion=accion, detalle=detalle, objeto_id=objeto_id,
+        )
+    except Exception as e:
+        logger.warning("No se pudo registrar historial accion '%s': %s", accion, e)
+
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, A4
@@ -44,7 +56,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -248,10 +260,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied("Los supervisores no pueden editar productos.")
 
         nuevo_stock = serializer.validated_data.get('stock')
-        if nuevo_stock is not None and nuevo_stock > (serializer.instance.stock or 0):
+        instancia = serializer.instance
+        if nuevo_stock is not None and nuevo_stock > (instancia.stock or 0):
             serializer.save(
                 stock_ultimo_ingreso=nuevo_stock,
                 fecha_ultimo_ingreso=timezone.now(),
+            )
+            diff = nuevo_stock - (instancia.stock or 0)
+            talle_str = f' (T: {instancia.talle})' if instancia.talle else ''
+            _registrar_accion(
+                tienda=instancia.tienda,
+                usuario=self.request.user,
+                accion='ingreso_stock',
+                detalle=f'Ingreso +{diff} · {instancia.nombre}{talle_str} · stock anterior: {instancia.stock} → nuevo: {nuevo_stock}',
+                objeto_id=instancia.id,
             )
         else:
             serializer.save()
@@ -3595,6 +3617,13 @@ class VentaViewSet(viewsets.ModelViewSet):
                     producto.save()
                     logger.info(f"✅ Stock restaurado para venta normal: {producto.nombre} (+{detalle.cantidad})")
         
+        _registrar_accion(
+            tienda=venta.tienda,
+            usuario=request.user,
+            accion='anulacion_venta',
+            detalle=f'Anulación venta #{str(venta.id)[:8]} · ${venta.total} · {venta.metodo_pago or ""}',
+            objeto_id=venta.id,
+        )
         return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['patch'])
@@ -3657,7 +3686,15 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.anulada = True
 
             venta.save()
-            
+            nombre_prod = detalle.producto.nombre if detalle.producto else 'producto eliminado'
+            talle_str = f' T:{detalle.producto.talle}' if detalle.producto and detalle.producto.talle else ''
+            _registrar_accion(
+                tienda=venta.tienda,
+                usuario=request.user,
+                accion='anulacion_item',
+                detalle=f'Anulación ítem: {nombre_prod}{talle_str} x{detalle.cantidad} · ${detalle.subtotal} · Venta #{str(venta.id)[:8]}',
+                objeto_id=venta.id,
+            )
             return Response({"status": "Detalle de venta anulado con éxito y stock restaurado."}, status=status.HTTP_200_OK)
         else:
             detalle.anulado_individualmente = True
@@ -3668,6 +3705,15 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.anulada = True
                 venta.save()
 
+            nombre_prod = detalle.producto.nombre if detalle.producto else 'producto eliminado'
+            talle_str = f' T:{detalle.producto.talle}' if detalle.producto and detalle.producto.talle else ''
+            _registrar_accion(
+                tienda=venta.tienda,
+                usuario=request.user,
+                accion='anulacion_item',
+                detalle=f'Anulación ítem: {nombre_prod}{talle_str} x{detalle.cantidad} · ${detalle.subtotal} · Venta #{str(venta.id)[:8]}',
+                objeto_id=venta.id,
+            )
             return Response({"status": "Detalle de venta anulado con éxito, sin stock que restaurar."}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -4138,6 +4184,30 @@ class CompraStockViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         close_old_connections()
         return super().list(request, *args, **kwargs)
+
+
+class HistorialAccionViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        from .serializers import HistorialAccionSerializer
+        return HistorialAccionSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_superuser:
+            return HistorialAccion.objects.none()
+        qs = HistorialAccion.objects.select_related('usuario').filter(tienda=user.tienda)
+        fecha_desde = self.request.query_params.get('fecha_desde')
+        fecha_hasta = self.request.query_params.get('fecha_hasta')
+        usuario_id  = self.request.query_params.get('usuario_id')
+        if fecha_desde:
+            qs = qs.filter(fecha__date__gte=fecha_desde)
+        if fecha_hasta:
+            qs = qs.filter(fecha__date__lte=fecha_hasta)
+        if usuario_id:
+            qs = qs.filter(usuario__id=usuario_id)
+        return qs
 
 
 # VIEWSET: Aranceles Mercado Libre por Producto (arancel % + costo envío por producto)
@@ -5552,8 +5622,24 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                         "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
                     })
             
+            tipo_label = 'Cambio' if tipo == 'CAMBIO' else 'Devolución'
+            try:
+                prods = ', '.join(
+                    d.detalle_venta_original.producto.nombre
+                    for d in cambio_devolucion.detalles.all()
+                    if d.detalle_venta_original and d.detalle_venta_original.producto
+                )
+            except Exception:
+                prods = '—'
+            _registrar_accion(
+                tienda=cambio_devolucion.tienda,
+                usuario=user,
+                accion='cambio_devolucion',
+                detalle=f'{tipo_label}: {prods} · dif. ${cambio_devolucion.monto_diferencia}' + (f' · {motivo}' if motivo else ''),
+                objeto_id=cambio_devolucion.id,
+            )
             return cambio_devolucion
-        
+
         @action(detail=True, methods=['get'], url_path='obtener-venta-diferencia')
         def obtener_venta_diferencia(self, request, pk=None):
             cambio_devolucion = get_object_or_404(CambioDevolucion, pk=pk)

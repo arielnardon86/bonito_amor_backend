@@ -7,7 +7,7 @@ from inventario.views import (
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
     ArancelMetodoTiendaViewSet, FacturaViewSet, NotaCreditoViewSet,
-    CierreCajaViewSet, EgresoCajaViewSet,
+    CierreCajaViewSet, EgresoCajaViewSet, HistorialAccionViewSet,
 )
 # Importación condicional de ArancelMercadoLibreViewSet y ArancelMercadoLibreProductoViewSet
 try:
@@ -66,6 +66,7 @@ router.register(r'cierre-caja', CierreCajaViewSet, basename='cierre-caja')
 router.register(r'egresos-caja', EgresoCajaViewSet, basename='egresos-caja')
 router.register(r'facturas', FacturaViewSet, basename='facturas')
 router.register(r'notas-credito', NotaCreditoViewSet, basename='notas-credito')
+router.register(r'historial-acciones', HistorialAccionViewSet, basename='historial-acciones')
 # Registrar CambioDevolucionViewSet solo si existe (migración aplicada)
 if CambioDevolucionViewSet is not None:
     router.register(r'cambios-devoluciones', CambioDevolucionViewSet, basename='cambios-devoluciones') # NUEVA RUTA

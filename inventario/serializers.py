@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -1211,3 +1211,12 @@ else:
         pass
     class CambioDevolucionCreateSerializer(serializers.Serializer):
         pass
+
+
+class HistorialAccionSerializer(serializers.ModelSerializer):
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True, default='—')
+    accion_display = serializers.CharField(source='get_accion_display', read_only=True)
+
+    class Meta:
+        model = HistorialAccion
+        fields = ['id', 'accion', 'accion_display', 'detalle', 'usuario_username', 'objeto_id', 'fecha']
