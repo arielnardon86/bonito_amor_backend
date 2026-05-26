@@ -308,6 +308,9 @@ class Producto(models.Model):
         help_text="Indica si este producto está sincronizado con Tienda Nube"
     )
 
+    stock_ultimo_ingreso = models.IntegerField(null=True, blank=True, help_text="Stock registrado tras el último ingreso manual")
+    fecha_ultimo_ingreso = models.DateTimeField(null=True, blank=True, help_text="Fecha del último ingreso manual de stock")
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 

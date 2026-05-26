@@ -24,7 +24,8 @@ class VarianteSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
         fields = ['id', 'nombre', 'talle', 'precio', 'stock', 'codigo_barras',
-                  'tn_product_id', 'tn_variant_id', 'tn_sincronizado']
+                  'tn_product_id', 'tn_variant_id', 'tn_sincronizado',
+                  'stock_ultimo_ingreso', 'fecha_ultimo_ingreso']
 
 
 class ProductoSerializer(serializers.ModelSerializer):

@@ -246,7 +246,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
             campos_enviados = set(self.request.data.keys())
             if not campos_enviados.issubset({'stock'}):
                 raise PermissionDenied("Los supervisores no pueden editar productos.")
-        serializer.save()
+
+        nuevo_stock = serializer.validated_data.get('stock')
+        if nuevo_stock is not None and nuevo_stock > (serializer.instance.stock or 0):
+            serializer.save(
+                stock_ultimo_ingreso=nuevo_stock,
+                fecha_ultimo_ingreso=timezone.now(),
+            )
+        else:
+            serializer.save()
 
     def perform_destroy(self, instance):
         if self.request.user.is_supervisor and not self.request.user.is_superuser:
