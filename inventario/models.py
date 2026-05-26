@@ -870,6 +870,7 @@ class HistorialAccion(models.Model):
         ('anulacion_venta',   'Anulación de venta'),
         ('anulacion_item',    'Anulación de ítem'),
         ('ingreso_stock',     'Ingreso de stock'),
+        ('ajuste_stock',      'Ajuste de stock'),
         ('cambio_devolucion', 'Cambio / Devolución'),
     ]
     id       = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

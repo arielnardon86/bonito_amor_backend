@@ -264,20 +264,32 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         nuevo_stock = serializer.validated_data.get('stock')
         instancia = serializer.instance
-        if nuevo_stock is not None and nuevo_stock > (instancia.stock or 0):
-            serializer.save(
-                stock_ultimo_ingreso=nuevo_stock,
-                fecha_ultimo_ingreso=timezone.now(),
-            )
-            diff = nuevo_stock - (instancia.stock or 0)
+        if nuevo_stock is not None and nuevo_stock != (instancia.stock or 0):
             talle_str = f' (T: {instancia.talle})' if instancia.talle else ''
-            _registrar_accion(
-                tienda=instancia.tienda,
-                usuario=self.request.user,
-                accion='ingreso_stock',
-                detalle=f'Ingreso +{diff} · {instancia.nombre}{talle_str} · stock anterior: {instancia.stock} → nuevo: {nuevo_stock}',
-                objeto_id=instancia.id,
-            )
+            stock_anterior = instancia.stock or 0
+            if nuevo_stock > stock_anterior:
+                serializer.save(
+                    stock_ultimo_ingreso=nuevo_stock,
+                    fecha_ultimo_ingreso=timezone.now(),
+                )
+                diff = nuevo_stock - stock_anterior
+                _registrar_accion(
+                    tienda=instancia.tienda,
+                    usuario=self.request.user,
+                    accion='ingreso_stock',
+                    detalle=f'Ingreso +{diff} · {instancia.nombre}{talle_str} · stock anterior: {stock_anterior} → nuevo: {nuevo_stock}',
+                    objeto_id=instancia.id,
+                )
+            else:
+                serializer.save()
+                diff = stock_anterior - nuevo_stock
+                _registrar_accion(
+                    tienda=instancia.tienda,
+                    usuario=self.request.user,
+                    accion='ajuste_stock',
+                    detalle=f'Ajuste -{diff} · {instancia.nombre}{talle_str} · stock anterior: {stock_anterior} → nuevo: {nuevo_stock}',
+                    objeto_id=instancia.id,
+                )
         else:
             serializer.save()
 
