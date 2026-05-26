@@ -5416,12 +5416,16 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
         
         def perform_create(self, serializer):
             """Procesa el cambio/devolución: actualiza stock, genera nota de crédito si aplica"""
+            with transaction.atomic():
+                return self._perform_create_inner(serializer)
+
+        def _perform_create_inner(self, serializer):
             validated_data = serializer.validated_data
             venta_original = validated_data['venta_original']
             detalles_data = validated_data['detalles']
             tipo = validated_data.get('tipo', 'CAMBIO')
             motivo = validated_data.get('motivo', '')
-            
+
             # Verificar permisos
             user = self.request.user
             if not user.is_superuser and user.tienda != venta_original.tienda:
@@ -5533,40 +5537,40 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                     # Devolver stock del producto original
                     if detalle_venta_original and detalle_venta_original.producto:
                         producto = detalle_venta_original.producto
-                        producto.stock += cantidad
-                        producto.save()
-                        
+                        producto.stock = (producto.stock or 0) + cantidad
+                        producto.save(update_fields=['stock'])
+
                         # Anular el detalle de venta si se devuelve todo
                         if cantidad >= detalle_venta_original.cantidad:
                             detalle_venta_original.anulado_individualmente = True
-                            detalle_venta_original.save()
-                
+                            detalle_venta_original.save(update_fields=['anulado_individualmente'])
+
                 elif accion == 'CAMBIAR':
                     # Devolver stock del producto original
                     if detalle_venta_original and detalle_venta_original.producto:
                         producto = detalle_venta_original.producto
-                        producto.stock += cantidad
-                        producto.save()
-                        
+                        producto.stock = (producto.stock or 0) + cantidad
+                        producto.save(update_fields=['stock'])
+
                         # Anular el detalle de venta si se cambia todo
                         if cantidad >= detalle_venta_original.cantidad:
                             detalle_venta_original.anulado_individualmente = True
-                            detalle_venta_original.save()
-                    
+                            detalle_venta_original.save(update_fields=['anulado_individualmente'])
+
                     # Reducir stock del producto nuevo
                     if producto_nuevo:
-                        if producto_nuevo.stock < cantidad:
+                        if (producto_nuevo.stock or 0) < cantidad:
                             raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                        producto_nuevo.stock -= cantidad
-                        producto_nuevo.save()
-                
+                        producto_nuevo.stock = (producto_nuevo.stock or 0) - cantidad
+                        producto_nuevo.save(update_fields=['stock'])
+
                 elif accion == 'AGREGAR':
                     # Reducir stock del producto nuevo
                     if producto_nuevo:
-                        if producto_nuevo.stock < cantidad:
+                        if (producto_nuevo.stock or 0) < cantidad:
                             raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
-                        producto_nuevo.stock -= cantidad
-                        producto_nuevo.save()
+                        producto_nuevo.stock = (producto_nuevo.stock or 0) - cantidad
+                        producto_nuevo.save(update_fields=['stock'])
             
             # Después de procesar todos los detalles: calcular montos totales y generar nota de crédito/venta pendiente
             monto_diferencia = monto_nuevo - monto_devolucion
@@ -5686,26 +5690,25 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             
             nuevo_estado = request.data.get('estado')
             if nuevo_estado == 'CANCELADO':
-                for detalle in cambio_devolucion.detalles.all():
-                    if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
-                        if detalle.detalle_venta_original.producto:
-                            producto = detalle.detalle_venta_original.producto
-                            producto.stock -= detalle.cantidad
-                            producto.save()
-                            
+                with transaction.atomic():
+                    for detalle in cambio_devolucion.detalles.all():
+                        if detalle.accion in ['DEVOLVER', 'CAMBIAR'] and detalle.detalle_venta_original:
+                            if detalle.detalle_venta_original.producto:
+                                producto = detalle.detalle_venta_original.producto
+                                producto.stock = (producto.stock or 0) - detalle.cantidad
+                                producto.save(update_fields=['stock'])
+
                             if detalle.detalle_venta_original.anulado_individualmente:
                                 detalle.detalle_venta_original.anulado_individualmente = False
-                                detalle.detalle_venta_original.cantidad += detalle.cantidad
-                                detalle.detalle_venta_original.subtotal = detalle.detalle_venta_original.precio_unitario * detalle.detalle_venta_original.cantidad
-                                detalle.detalle_venta_original.save()
-                    
-                    if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
-                        producto = detalle.producto_nuevo
-                        producto.stock += detalle.cantidad
-                        producto.save()
-                
-                cambio_devolucion.estado = 'CANCELADO'
-                cambio_devolucion.save()
+                                detalle.detalle_venta_original.save(update_fields=['anulado_individualmente'])
+
+                        if detalle.accion in ['CAMBIAR', 'AGREGAR'] and detalle.producto_nuevo:
+                            producto = detalle.producto_nuevo
+                            producto.stock = (producto.stock or 0) + detalle.cantidad
+                            producto.save(update_fields=['stock'])
+
+                    cambio_devolucion.estado = 'CANCELADO'
+                    cambio_devolucion.save()
                 logger.info(f"✅ Cambio/Devolución {cambio_devolucion.id} cancelado. Stock revertido.")
                 
                 return Response({
