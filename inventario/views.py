@@ -281,7 +281,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     objeto_id=instancia.id,
                 )
             else:
-                serializer.save()
+                serializer.save(
+                    stock_ultimo_ingreso=nuevo_stock,
+                    fecha_ultimo_ingreso=timezone.now(),
+                )
                 diff = stock_anterior - nuevo_stock
                 _registrar_accion(
                     tienda=instancia.tienda,
