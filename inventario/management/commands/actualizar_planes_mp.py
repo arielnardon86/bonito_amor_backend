@@ -50,13 +50,32 @@ class Command(BaseCommand):
 
         for plan in planes:
             try:
-                resp = requests.put(
+                # Obtener datos actuales del plan en MP
+                get_resp = requests.get(
                     f"{MP_API_BASE}/preapproval_plan/{plan.mp_plan_id}",
-                    json={"notification_url": notification_url},
                     headers=headers,
                     timeout=15,
                 )
-                resp.raise_for_status()
+                get_resp.raise_for_status()
+                datos_mp = get_resp.json()
+
+                # Construir payload con los campos requeridos + notification_url
+                payload = {
+                    "reason":           datos_mp.get("reason", plan.nombre),
+                    "auto_recurring":   datos_mp.get("auto_recurring", {}),
+                    "notification_url": notification_url,
+                }
+                # Preservar back_url si existe
+                if datos_mp.get("back_url"):
+                    payload["back_url"] = datos_mp["back_url"]
+
+                put_resp = requests.put(
+                    f"{MP_API_BASE}/preapproval_plan/{plan.mp_plan_id}",
+                    json=payload,
+                    headers=headers,
+                    timeout=15,
+                )
+                put_resp.raise_for_status()
                 self.stdout.write(self.style.SUCCESS(
                     f"✓ Plan '{plan.nombre}' ({plan.mp_plan_id}) actualizado"
                 ))
