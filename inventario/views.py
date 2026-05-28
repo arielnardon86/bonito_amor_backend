@@ -225,7 +225,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Producto.objects.select_related('tienda').all()
+        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').all()
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if user.is_superuser:
