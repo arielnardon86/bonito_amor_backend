@@ -79,20 +79,38 @@ class Command(BaseCommand):
                 estado_mp = pa.get("status", "")
                 payer_email = pa.get("payer_email", "") or pa.get("payer", {}).get("email", "")
 
-                if not external_ref:
-                    self.stdout.write(f"  — Preapproval {pa_id}: sin external_reference, se omite")
-                    continue
+                # Buscar la suscripción: primero por UUID en external_reference,
+                # luego por payer_email (cuando external_reference es texto del plan)
+                sus = None
+                import uuid as uuid_lib
+                if external_ref:
+                    try:
+                        uuid_lib.UUID(external_ref)
+                        sus = Suscripcion.objects.select_related('tienda', 'plan').get(
+                            tienda__id=external_ref
+                        )
+                    except (ValueError, Suscripcion.DoesNotExist):
+                        pass
 
-                # Buscar la suscripción por UUID de tienda
-                try:
-                    sus = Suscripcion.objects.select_related('tienda', 'plan').get(
-                        tienda__id=external_ref
+                if sus is None and payer_email:
+                    try:
+                        from django.contrib.auth import get_user_model
+                        User = get_user_model()
+                        user = User.objects.filter(
+                            email__iexact=payer_email
+                        ).select_related('tienda').first()
+                        if user and hasattr(user, 'tienda') and user.tienda:
+                            sus = Suscripcion.objects.select_related('tienda', 'plan').get(
+                                tienda=user.tienda
+                            )
+                    except Suscripcion.DoesNotExist:
+                        pass
+
+                if sus is None:
+                    self.stdout.write(
+                        f"  — Preapproval {pa_id}: no se encontró suscripción "
+                        f"(external_ref={external_ref}, payer={payer_email})"
                     )
-                except Suscripcion.DoesNotExist:
-                    self.stdout.write(f"  — Preapproval {pa_id}: tienda {external_ref} no encontrada en BD")
-                    continue
-                except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"  Error buscando suscripción: {e}"))
                     continue
 
                 fields_to_save = []

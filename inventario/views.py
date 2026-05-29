@@ -6245,35 +6245,52 @@ def mp_webhook_suscripcion(request):
         external_ref   = datos_mp.get('external_reference', '')
         payer_email    = datos_mp.get('payer_email', '') or datos_mp.get('payer', {}).get('email', '')
 
-        # Buscar la suscripción: primero por preapproval_id (ya conocida),
-        # luego por external_reference (primera vez que llega el webhook)
+        # Buscar suscripción: 1) por preapproval_id, 2) por UUID en external_reference,
+        # 3) por payer_email (cuando external_reference es texto del plan, no UUID)
+        import uuid as _uuid
         suscripcion = None
+
         try:
             suscripcion = Suscripcion.objects.select_related('plan').get(
                 mp_preapproval_id=resource_id
             )
         except Suscripcion.DoesNotExist:
-            if external_ref:
-                try:
+            pass
+
+        if suscripcion is None and external_ref:
+            try:
+                _uuid.UUID(external_ref)   # valida que sea un UUID real
+                suscripcion = Suscripcion.objects.select_related('plan').get(
+                    tienda__id=external_ref
+                )
+            except (ValueError, Suscripcion.DoesNotExist):
+                pass
+
+        if suscripcion is None and payer_email:
+            try:
+                user_obj = User.objects.filter(
+                    email__iexact=payer_email
+                ).select_related('tienda').first()
+                if user_obj and hasattr(user_obj, 'tienda') and user_obj.tienda:
                     suscripcion = Suscripcion.objects.select_related('plan').get(
-                        tienda__id=external_ref
+                        tienda=user_obj.tienda
                     )
-                    # Primera vez: guardar el preapproval_id
-                    suscripcion.mp_preapproval_id = resource_id
-                    if payer_email:
-                        suscripcion.mp_payer_email = payer_email
-                    suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
-                    logger.info(
-                        "Preapproval %s vinculado a tienda %s",
-                        resource_id, external_ref
-                    )
-                except Suscripcion.DoesNotExist:
-                    logger.warning(
-                        "No se encontró suscripción para external_reference=%s", external_ref
-                    )
+            except Suscripcion.DoesNotExist:
+                pass
 
         if suscripcion is None:
+            logger.warning(
+                "Webhook MP: no se encontró suscripción (preapproval=%s, ref=%s, email=%s)",
+                resource_id, external_ref, payer_email,
+            )
             return Response(status=200)
+
+        # Vincular preapproval_id si es la primera vez
+        if not suscripcion.mp_preapproval_id:
+            suscripcion.mp_preapproval_id = resource_id
+            suscripcion.mp_payer_email = payer_email or suscripcion.mp_payer_email
+            suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
+            logger.info("Preapproval %s vinculado a tienda %s", resource_id, suscripcion.tienda_id)
 
         # Aplicar cambio de estado según MP
         if estado_mp == 'authorized':
@@ -6361,27 +6378,48 @@ def verificar_suscripcion_mp(request):
     external_ref = datos_mp.get('external_reference', '')
     payer_email  = datos_mp.get('payer_email', '') or datos_mp.get('payer', {}).get('email', '')
 
-    # Buscar suscripción: por preapproval_id (ya vinculada) o external_reference (primera vez)
+    # Buscar suscripción: 1) por preapproval_id, 2) UUID en external_reference,
+    # 3) payer_email (cuando external_reference es el nombre del plan, no UUID)
+    import uuid as _uuid
     suscripcion = None
+
     try:
         suscripcion = Suscripcion.objects.select_related('tienda').get(
             mp_preapproval_id=preapproval_id
         )
     except Suscripcion.DoesNotExist:
-        if external_ref:
-            try:
+        pass
+
+    if suscripcion is None and external_ref:
+        try:
+            _uuid.UUID(external_ref)
+            suscripcion = Suscripcion.objects.select_related('tienda').get(
+                tienda__id=external_ref
+            )
+        except (ValueError, Suscripcion.DoesNotExist):
+            pass
+
+    if suscripcion is None and payer_email:
+        try:
+            user_obj = User.objects.filter(
+                email__iexact=payer_email
+            ).select_related('tienda').first()
+            if user_obj and hasattr(user_obj, 'tienda') and user_obj.tienda:
                 suscripcion = Suscripcion.objects.select_related('tienda').get(
-                    tienda__id=external_ref
+                    tienda=user_obj.tienda
                 )
-                suscripcion.mp_preapproval_id = preapproval_id
-                if payer_email:
-                    suscripcion.mp_payer_email = payer_email
-                suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
-            except Suscripcion.DoesNotExist:
-                pass
+        except Suscripcion.DoesNotExist:
+            pass
 
     if suscripcion is None:
         return Response({'estado': 'no_encontrada', 'activa': False})
+
+    # Vincular preapproval_id si es la primera vez
+    if not suscripcion.mp_preapproval_id:
+        suscripcion.mp_preapproval_id = preapproval_id
+        if payer_email:
+            suscripcion.mp_payer_email = payer_email
+        suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
 
     # Activar si MP dice autorizado
     if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada'):
