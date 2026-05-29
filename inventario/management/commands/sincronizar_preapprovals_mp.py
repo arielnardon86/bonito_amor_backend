@@ -75,9 +75,27 @@ class Command(BaseCommand):
 
             for pa in preapprovals:
                 pa_id = pa.get("id", "")
+
+                # La búsqueda no devuelve payer completo: hacer GET individual
+                try:
+                    det_resp = requests.get(
+                        f"{MP_API_BASE}/preapproval/{pa_id}",
+                        headers=headers,
+                        timeout=15,
+                    )
+                    det_resp.raise_for_status()
+                    pa = det_resp.json()
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(f"  ⚠ No se pudo obtener detalle de {pa_id}: {e}"))
+
                 external_ref = pa.get("external_reference", "")
                 estado_mp = pa.get("status", "")
-                payer_email = pa.get("payer_email", "") or pa.get("payer", {}).get("email", "")
+                payer_email = (
+                    pa.get("payer_email", "")
+                    or pa.get("payer", {}).get("email", "")
+                    or pa.get("summarized", {}).get("payer_email", "")
+                )
+                self.stdout.write(f"  Preapproval {pa_id}: status={estado_mp}, payer={payer_email}")
 
                 # Buscar la suscripción: primero por UUID en external_reference,
                 # luego por payer_email (cuando external_reference es texto del plan)
