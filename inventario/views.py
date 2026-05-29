@@ -225,7 +225,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').all()
+        # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
+        # Esto evita que variantes ocupen slots de paginación y desplacen el padre a la pág 2.
+        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True)
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if user.is_superuser:
