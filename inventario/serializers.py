@@ -732,15 +732,24 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         if cambio_devolucion_id:
             try:
                 from .models import CambioDevolucion
+                import logging as _logging
+                _logger = _logging.getLogger(__name__)
                 cambio_devolucion = CambioDevolucion.objects.get(id=cambio_devolucion_id)
-                # Eliminar la venta Pendiente placeholder creada automáticamente al procesar el cambio
+                # Reemplazar la venta Pendiente placeholder por la venta real
                 old_pendiente = cambio_devolucion.venta_diferencia_pendiente
                 cambio_devolucion.venta_diferencia_pendiente = venta
                 cambio_devolucion.save()
                 if old_pendiente and old_pendiente.id != venta.id and old_pendiente.metodo_pago == 'Pendiente':
-                    old_pendiente.delete()
+                    try:
+                        old_pendiente.delete()
+                    except Exception as e:
+                        # No fallar la venta si no se puede borrar el placeholder
+                        _logger.warning("No se pudo eliminar venta Pendiente %s al procesar cambio/devolución: %s", old_pendiente.id, e)
             except CambioDevolucion.DoesNotExist:
-                pass  # Si no existe, continuar sin relacionar
+                pass
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("Error al vincular venta %s con CambioDevolucion %s: %s", venta.id, cambio_devolucion_id, e)
         
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
