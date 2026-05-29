@@ -325,7 +325,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            producto = self.get_queryset().get(codigo_barras=codigo, tienda__nombre=tienda_slug)
+            producto = Producto.objects.get(codigo_barras=codigo, tienda__nombre=tienda_slug)
             serializer = self.get_serializer(producto)
             return Response(serializer.data)
         except Producto.DoesNotExist:
