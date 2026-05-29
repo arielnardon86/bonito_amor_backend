@@ -698,15 +698,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             else:
                 monto_efectivo = Decimal('0.00')
 
-        # Para ventas de cambio/devolución en efectivo, el efectivo recibido es solo la
-        # diferencia a pagar (monto_diferencia), no el precio completo del producto nuevo.
-        # Sin esto, el cierre de caja cuenta el total del producto nuevo en lugar de la
-        # diferencia real pagada, generando una diferencia de caja incorrecta.
-        if cambio_devolucion_id and 'efectivo' in metodo.lower() and '+' not in metodo:
+        # Para ventas de cambio/devolución, el total y el efectivo recibido deben ser
+        # solo la diferencia a pagar, no el precio completo del producto nuevo.
+        # El frontend envía los items del carrito a precio completo, pero lo que se cobra
+        # es únicamente la diferencia (precio_nuevo - crédito_por_devuelto).
+        if cambio_devolucion_id:
             try:
                 from .models import CambioDevolucion as _CD
                 cd = _CD.objects.get(id=cambio_devolucion_id)
-                monto_efectivo = cd.monto_diferencia
+                validated_data['total'] = cd.monto_diferencia
+                if 'efectivo' in metodo.lower() and '+' not in metodo:
+                    monto_efectivo = cd.monto_diferencia
             except Exception:
                 pass
 
