@@ -6446,11 +6446,13 @@ def verificar_suscripcion_mp(request):
 @permission_classes([permissions.IsAuthenticated])
 def verificar_pago_pendiente(request):
     """
-    Endpoint autenticado: el usuario que está bloqueado en la pantalla de
-    suscripción pendiente pulsa "Ya pagué — Verificar".
-    Busca la suscripción de su tienda, consulta MP y la activa si corresponde.
+    Endpoint autenticado: el usuario bloqueado en la pantalla de suscripción
+    pendiente pulsa "Ya pagué — Verificar".
+    Si mp_preapproval_id es NULL (webhook nunca llegó / SPA no cargó tras el pago),
+    busca el preapproval en MP usando el email del usuario.
     """
-    from .models import Suscripcion
+    import requests as req_lib
+    from .models import Suscripcion, Plan
     from .services.suscripcion_service import (
         obtener_preaprobacion, activar_suscripcion,
     )
@@ -6460,7 +6462,7 @@ def verificar_pago_pendiente(request):
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
 
     try:
-        suscripcion = Suscripcion.objects.select_related('tienda').get(tienda=tienda)
+        suscripcion = Suscripcion.objects.select_related('tienda', 'plan').get(tienda=tienda)
     except Suscripcion.DoesNotExist:
         return Response({'error': 'No se encontró suscripción para esta tienda.'}, status=404)
 
@@ -6468,16 +6470,78 @@ def verificar_pago_pendiente(request):
         return Response({'estado': suscripcion.estado, 'activa': True})
 
     preapproval_id = suscripcion.mp_preapproval_id
-    if not preapproval_id:
-        return Response({'estado': suscripcion.estado, 'activa': False,
-                         'mensaje': 'No hay ID de pago registrado. Completá el proceso en Mercado Pago.'})
 
-    try:
-        datos_mp = obtener_preaprobacion(preapproval_id)
-    except Exception as e:
-        logger.error("verificar_pago_pendiente: error consultando MP %s: %s", preapproval_id, e)
-        return Response({'estado': 'error_mp', 'activa': False,
-                         'mensaje': 'No pudimos consultar Mercado Pago. Intentá de nuevo en unos minutos.'})
+    # ── Si no tenemos preapproval_id, buscarlo en MP por email del usuario ──
+    if not preapproval_id:
+        token_mp = getattr(django_settings, 'MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
+        payer_email = request.user.email or ''
+        mp_plan_id  = suscripcion.plan.mp_plan_id if suscripcion.plan else ''
+
+        if not token_mp or not (payer_email or mp_plan_id):
+            return Response({'estado': suscripcion.estado, 'activa': False,
+                             'mensaje': 'No encontramos tu pago aún. Si ya pagaste, esperá unos minutos y reintentá.'})
+
+        headers = {'Authorization': f'Bearer {token_mp}', 'Content-Type': 'application/json'}
+        encontrado = None
+
+        # Buscar por plan_id si está disponible
+        if mp_plan_id:
+            try:
+                r = req_lib.get(
+                    'https://api.mercadopago.com/preapproval/search',
+                    params={'preapproval_plan_id': mp_plan_id, 'limit': 100},
+                    headers=headers, timeout=15,
+                )
+                r.raise_for_status()
+                for pa in r.json().get('results', []):
+                    pa_email = (
+                        pa.get('payer_email', '')
+                        or pa.get('payer', {}).get('email', '')
+                    )
+                    if pa_email.lower() == payer_email.lower() or pa.get('status') == 'authorized':
+                        # GET individual para datos completos
+                        det = req_lib.get(
+                            f"https://api.mercadopago.com/preapproval/{pa['id']}",
+                            headers=headers, timeout=15,
+                        )
+                        if det.ok:
+                            det_data = det.json()
+                            det_email = (
+                                det_data.get('payer_email', '')
+                                or det_data.get('payer', {}).get('email', '')
+                            )
+                            if det_email.lower() == payer_email.lower():
+                                encontrado = det_data
+                                break
+            except Exception as e:
+                logger.warning("verificar_pago_pendiente: búsqueda MP falló: %s", e)
+
+        if encontrado:
+            preapproval_id = str(encontrado.get('id', ''))
+            pa_email = (
+                encontrado.get('payer_email', '')
+                or encontrado.get('payer', {}).get('email', '')
+            )
+            fields = []
+            if preapproval_id and not suscripcion.mp_preapproval_id:
+                suscripcion.mp_preapproval_id = preapproval_id
+                fields.append('mp_preapproval_id')
+            if pa_email and not suscripcion.mp_payer_email:
+                suscripcion.mp_payer_email = pa_email
+                fields.append('mp_payer_email')
+            if fields:
+                suscripcion.save(update_fields=fields)
+            datos_mp = encontrado
+        else:
+            return Response({'estado': suscripcion.estado, 'activa': False,
+                             'mensaje': 'No encontramos tu pago en Mercado Pago. Si ya pagaste, esperá unos minutos y reintentá.'})
+    else:
+        try:
+            datos_mp = obtener_preaprobacion(preapproval_id)
+        except Exception as e:
+            logger.error("verificar_pago_pendiente: error consultando MP %s: %s", preapproval_id, e)
+            return Response({'estado': 'error_mp', 'activa': False,
+                             'mensaje': 'No pudimos consultar Mercado Pago. Intentá de nuevo en unos minutos.'})
 
     estado_mp = datos_mp.get('status', '')
 
@@ -6485,13 +6549,13 @@ def verificar_pago_pendiente(request):
         activar_suscripcion(suscripcion)
         suscripcion.refresh_from_db()
         return Response({'estado': suscripcion.estado, 'activa': True,
-                         'mensaje': '¡Suscripción activada! Recargá la página.'})
+                         'mensaje': '¡Suscripción activada! Ingresando al sistema...'})
 
     return Response({
         'estado': suscripcion.estado,
         'activa': False,
         'estado_mp': estado_mp,
-        'mensaje': 'El pago aún no fue confirmado por Mercado Pago. Puede demorar unos minutos.',
+        'mensaje': 'Tu pago aún está siendo procesado por Mercado Pago. Puede demorar unos minutos.',
     })
 
 
