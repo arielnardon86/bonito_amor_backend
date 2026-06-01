@@ -6875,87 +6875,141 @@ def password_reset_request(request):
             status=400,
         )
 
+    frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'https://www.totalstock.com.ar').rstrip('/')
+
+    # Construir lista de cuentas con su link individual
+    cuentas = []
     for user in usuarios:
         uid   = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
-        frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'https://www.totalstock.com.ar').rstrip('/')
-        # Usamos la raíz "/" igual que con suscripcion/resultado:
-        # Render no procesa _redirects para rutas profundas directas.
-        # El frontend detecta uid+token en "/" y navega client-side a /nueva-contrasena.
         reset_url = f"{frontend_url}/?uid={uid}&token={token}"
+        tienda_nombre = getattr(getattr(user, 'tienda', None), 'nombre', user.username)
+        cuentas.append({
+            'username':     user.username,
+            'tienda':       tienda_nombre,
+            'reset_url':    reset_url,
+        })
 
-        nombre = user.first_name or user.username
+    multi = len(cuentas) > 1
 
+    # ── Texto plano ──────────────────────────────────────────────────────────
+    if multi:
+        intro = (
+            f"Hola,\n\n"
+            f"Recibimos una solicitud de recupero de contraseña para el email {email}.\n"
+            f"Encontramos {len(cuentas)} cuentas asociadas. "
+            f"Hacé clic en el enlace correspondiente a cada tienda:\n\n"
+        )
+        cuerpo_cuentas = ''
+        for c in cuentas:
+            cuerpo_cuentas += f"  🏪 {c['tienda']}  (usuario: {c['username']})\n  {c['reset_url']}\n\n"
+        texto = intro + cuerpo_cuentas + (
+            "Cada enlace expira en 72 horas.\n\n"
+            "Si no solicitaste este cambio, ignorá este correo.\n\n"
+            "— El equipo de Total Stock\nwww.totalstock.com.ar"
+        )
+    else:
+        c = cuentas[0]
         texto = (
-            f"Hola {nombre},\n\n"
+            f"Hola,\n\n"
             f"Recibimos una solicitud para restablecer la contraseña de tu cuenta en Total Stock.\n\n"
             f"Hacé clic en el siguiente enlace para crear una nueva contraseña:\n"
-            f"{reset_url}\n\n"
+            f"{c['reset_url']}\n\n"
             f"Este enlace expira en 72 horas.\n\n"
             f"Si no solicitaste este cambio, podés ignorar este correo.\n\n"
-            f"— El equipo de Total Stock\n"
-            f"www.totalstock.com.ar"
+            f"— El equipo de Total Stock\nwww.totalstock.com.ar"
         )
 
-        html = f"""<!DOCTYPE html>
-<html lang="es">
+    # ── HTML ─────────────────────────────────────────────────────────────────
+    CSS = """
+  body{margin:0;padding:0;background:#f8fafc;font-family:'Helvetica Neue',Arial,sans-serif;}
+  .wrap{max-width:560px;margin:40px auto;background:#fff;border-radius:16px;
+        box-shadow:0 4px 24px rgba(0,0,0,.08);overflow:hidden;}
+  .header{background:linear-gradient(135deg,#5dc87a 0%,#38a080 100%);
+          padding:32px 40px;text-align:center;}
+  .header h1{margin:0;color:#fff;font-size:22px;font-weight:700;}
+  .header p{margin:6px 0 0;color:rgba(255,255,255,.85);font-size:14px;}
+  .body{padding:32px 40px;}
+  .body p{color:#334155;font-size:15px;line-height:1.7;margin:0 0 14px;}
+  .account{border:1.5px solid #e2e8f0;border-radius:12px;padding:18px 20px;
+           margin:16px 0;background:#f8fafc;}
+  .account-name{font-size:15px;font-weight:700;color:#1e3a8a;margin:0 0 4px;}
+  .account-user{font-size:12px;color:#94a3b8;margin:0 0 14px;}
+  .btn{display:inline-block;background:linear-gradient(135deg,#5dc87a,#38a080);
+       color:#fff!important;text-decoration:none;padding:11px 28px;
+       border-radius:9px;font-size:14px;font-weight:700;
+       box-shadow:0 4px 14px rgba(93,200,122,.35);}
+  .btn-solo{display:block;width:fit-content;margin:24px auto;padding:14px 36px;font-size:15px;}
+  .note{font-size:12px;color:#94a3b8;text-align:center;margin-top:20px;}
+  .footer{background:#f1f5f9;padding:18px 40px;text-align:center;
+          color:#94a3b8;font-size:12px;border-top:1px solid #e2e8f0;}
+  .footer a{color:#5dc87a;text-decoration:none;}
+"""
+
+    if multi:
+        bloques_html = ''
+        for c in cuentas:
+            bloques_html += f"""
+  <div class="account">
+    <p class="account-name">🏪 {c['tienda']}</p>
+    <p class="account-user">Usuario: <strong>{c['username']}</strong></p>
+    <a href="{c['reset_url']}" class="btn">Restablecer contraseña</a>
+  </div>"""
+
+        html = f"""<!DOCTYPE html><html lang="es">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body {{ margin:0; padding:0; background:#f8fafc; font-family:'Helvetica Neue',Arial,sans-serif; }}
-  .wrap {{ max-width:560px; margin:40px auto; background:#fff; border-radius:16px;
-           box-shadow:0 4px 24px rgba(0,0,0,.08); overflow:hidden; }}
-  .header {{ background:linear-gradient(135deg,#5dc87a 0%,#38a080 100%);
-             padding:32px 40px; text-align:center; }}
-  .header h1 {{ margin:0; color:#fff; font-size:22px; font-weight:700; letter-spacing:.5px; }}
-  .header p  {{ margin:6px 0 0; color:rgba(255,255,255,.85); font-size:14px; }}
-  .body  {{ padding:36px 40px; }}
-  .body p  {{ color:#334155; font-size:15px; line-height:1.7; margin:0 0 16px; }}
-  .btn   {{ display:block; width:fit-content; margin:28px auto;
-            background:linear-gradient(135deg,#5dc87a,#38a080);
-            color:#fff !important; text-decoration:none;
-            padding:14px 36px; border-radius:10px;
-            font-size:15px; font-weight:700;
-            box-shadow:0 4px 14px rgba(93,200,122,.40); }}
-  .note  {{ font-size:12px; color:#94a3b8; text-align:center; margin-top:24px; }}
-  .footer {{ background:#f1f5f9; padding:20px 40px; text-align:center;
-             color:#94a3b8; font-size:12px; border-top:1px solid #e2e8f0; }}
-  .footer a {{ color:#5dc87a; text-decoration:none; }}
-</style>
-</head>
-<body>
-<div class="wrap">
+<style>{CSS}</style></head>
+<body><div class="wrap">
+  <div class="header">
+    <h1>Total Stock</h1>
+    <p>Recupero de contraseña</p>
+  </div>
+  <div class="body">
+    <p>Encontramos <strong>{len(cuentas)} cuentas</strong> asociadas a este email.<br>
+    Seleccioná la tienda cuya contraseña querés restablecer:</p>
+    {bloques_html}
+    <p class="note">Cada enlace expira en <strong>72 horas</strong>.<br>
+    Si no solicitaste este cambio, ignorá este correo.</p>
+  </div>
+  <div class="footer">&copy; {__import__('datetime').date.today().year} Total Stock &nbsp;·&nbsp;
+    <a href="https://www.totalstock.com.ar">www.totalstock.com.ar</a></div>
+</div></body></html>"""
+        subject = f'[Total Stock] Recuperá tu contraseña — {len(cuentas)} cuentas encontradas'
+    else:
+        c = cuentas[0]
+        html = f"""<!DOCTYPE html><html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{CSS}</style></head>
+<body><div class="wrap">
   <div class="header">
     <h1>Total Stock</h1>
     <p>Gestión de inventario para tu negocio</p>
   </div>
   <div class="body">
-    <p>Hola <strong>{nombre}</strong>,</p>
     <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en Total Stock.</p>
     <p>Hacé clic en el botón para crear una nueva contraseña:</p>
-    <a href="{reset_url}" class="btn">Restablecer mi contraseña</a>
+    <a href="{c['reset_url']}" class="btn btn-solo">Restablecer mi contraseña</a>
     <p class="note">Este enlace expira en <strong>72 horas</strong>.<br>
     Si no solicitaste este cambio, podés ignorar este correo.</p>
   </div>
-  <div class="footer">
-    &copy; 2025 Total Stock &nbsp;·&nbsp;
-    <a href="https://www.totalstock.com.ar">www.totalstock.com.ar</a>
-  </div>
-</div>
-</body>
-</html>"""
+  <div class="footer">&copy; {__import__('datetime').date.today().year} Total Stock &nbsp;·&nbsp;
+    <a href="https://www.totalstock.com.ar">www.totalstock.com.ar</a></div>
+</div></body></html>"""
+        subject = '[Total Stock] Recuperá tu contraseña'
 
-        try:
-            msg = EmailMultiAlternatives(
-                subject='[Total Stock] Recuperá tu contraseña',
-                body=texto,
-                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
-                to=[email],
-            )
-            msg.attach_alternative(html, 'text/html')
-            msg.send(fail_silently=False)
-            logger.info("password_reset_request: email enviado a %s (user=%s)", email, user.username)
-        except Exception as e:
-            logger.error("password_reset_request: error enviando email a %s: %s", email, e)
+    try:
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=texto,
+            from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+            to=[email],
+        )
+        msg.attach_alternative(html, 'text/html')
+        msg.send(fail_silently=False)
+        usernames = ', '.join(c['username'] for c in cuentas)
+        logger.info("password_reset_request: email enviado a %s (users=%s)", email, usernames)
+    except Exception as e:
+        logger.error("password_reset_request: error enviando email a %s: %s", email, e)
 
     return Response({
         'ok': True,
