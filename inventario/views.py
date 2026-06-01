@@ -6823,7 +6823,7 @@ def cambiar_plan(request):
 def password_reset_request(request):
     """
     Recibe { email } y envía un link de recuperación si el email está registrado.
-    Siempre responde OK para no revelar si el email existe.
+    Devuelve error explícito si el email no corresponde a ningún usuario.
     """
     from django.contrib.auth import get_user_model
     from django.contrib.auth.tokens import default_token_generator
@@ -6837,7 +6837,13 @@ def password_reset_request(request):
         return Response({'error': 'Email requerido.'}, status=400)
 
     UserModel = get_user_model()
-    usuarios = UserModel.objects.filter(email__iexact=email, is_active=True)
+    usuarios = list(UserModel.objects.filter(email__iexact=email, is_active=True))
+
+    if not usuarios:
+        return Response(
+            {'error': 'No encontramos una cuenta registrada con ese email.'},
+            status=400,
+        )
 
     for user in usuarios:
         uid   = urlsafe_base64_encode(force_bytes(user.pk))
@@ -6918,10 +6924,9 @@ def password_reset_request(request):
         except Exception as e:
             logger.error("password_reset_request: error enviando email a %s: %s", email, e)
 
-    # Respuesta genérica — no revela si el email existe
     return Response({
         'ok': True,
-        'mensaje': 'Si el email está registrado, recibirás las instrucciones en tu casilla.',
+        'mensaje': 'Te enviamos las instrucciones a tu casilla de correo.',
     })
 
 
