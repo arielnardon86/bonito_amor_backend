@@ -6472,52 +6472,121 @@ def verificar_pago_pendiente(request):
     if suscripcion.esta_activa:
         return Response({'estado': suscripcion.estado, 'activa': True})
 
-    preapproval_id = suscripcion.mp_preapproval_id
+    # Aceptar preapproval_id directo desde el frontend (viene de la URL de MP)
+    preapproval_id_directo = (request.data.get('preapproval_id') or '').strip()
+    preapproval_id = suscripcion.mp_preapproval_id or preapproval_id_directo
 
-    # ── Si no tenemos preapproval_id, buscarlo en MP por email del usuario ──
+    logger.info(
+        "verificar_pago_pendiente: user=%s email=%s preapproval_db=%s preapproval_body=%s",
+        request.user.username, request.user.email,
+        suscripcion.mp_preapproval_id, preapproval_id_directo,
+    )
+
+    # ── Si tenemos preapproval_id directo, usarlo primero ────────────────────
+    if preapproval_id_directo and not suscripcion.mp_preapproval_id:
+        token_mp = getattr(django_settings, 'MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
+        if token_mp:
+            headers = {'Authorization': f'Bearer {token_mp}', 'Content-Type': 'application/json'}
+            try:
+                det = req_lib.get(
+                    f'https://api.mercadopago.com/preapproval/{preapproval_id_directo}',
+                    headers=headers, timeout=15,
+                )
+                det.raise_for_status()
+                datos_mp = det.json()
+                pa_email = (
+                    datos_mp.get('payer_email', '')
+                    or datos_mp.get('payer', {}).get('email', '')
+                )
+                logger.info(
+                    "verificar_pago_pendiente: preapproval directo %s status=%s payer=%s",
+                    preapproval_id_directo, datos_mp.get('status'), pa_email,
+                )
+                fields = ['mp_preapproval_id']
+                suscripcion.mp_preapproval_id = preapproval_id_directo
+                if pa_email and not suscripcion.mp_payer_email:
+                    suscripcion.mp_payer_email = pa_email
+                    fields.append('mp_payer_email')
+                suscripcion.save(update_fields=fields)
+
+                estado_mp = datos_mp.get('status', '')
+                if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia'):
+                    activar_suscripcion(suscripcion)
+                    suscripcion.refresh_from_db()
+                    return Response({'estado': suscripcion.estado, 'activa': True,
+                                     'mensaje': '¡Suscripción activada! Ingresando al sistema...'})
+                return Response({
+                    'estado': suscripcion.estado, 'activa': False, 'estado_mp': estado_mp,
+                    'mensaje': 'Tu pago aún está siendo procesado por Mercado Pago. Puede demorar unos minutos.',
+                })
+            except Exception as e:
+                logger.warning("verificar_pago_pendiente: error con preapproval directo %s: %s", preapproval_id_directo, e)
+
+    # ── Si no tenemos preapproval_id, buscarlo en MP por plan + email ────────
     if not preapproval_id:
         token_mp = getattr(django_settings, 'MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
         payer_email = request.user.email or ''
         mp_plan_id  = suscripcion.plan.mp_plan_id if suscripcion.plan else ''
 
-        if not token_mp or not (payer_email or mp_plan_id):
+        logger.info(
+            "verificar_pago_pendiente: buscando en MP plan=%s email=%s",
+            mp_plan_id, payer_email,
+        )
+
+        if not token_mp or not mp_plan_id:
             return Response({'estado': suscripcion.estado, 'activa': False,
                              'mensaje': 'No encontramos tu pago aún. Si ya pagaste, esperá unos minutos y reintentá.'})
 
         headers = {'Authorization': f'Bearer {token_mp}', 'Content-Type': 'application/json'}
         encontrado = None
+        candidatos_authorized = []
 
-        # Buscar por plan_id si está disponible
-        if mp_plan_id:
-            try:
-                r = req_lib.get(
-                    'https://api.mercadopago.com/preapproval/search',
-                    params={'preapproval_plan_id': mp_plan_id, 'limit': 100},
-                    headers=headers, timeout=15,
-                )
-                r.raise_for_status()
-                for pa in r.json().get('results', []):
-                    pa_email = (
-                        pa.get('payer_email', '')
-                        or pa.get('payer', {}).get('email', '')
+        try:
+            r = req_lib.get(
+                'https://api.mercadopago.com/preapproval/search',
+                params={'preapproval_plan_id': mp_plan_id, 'limit': 100},
+                headers=headers, timeout=15,
+            )
+            r.raise_for_status()
+            resultados = r.json().get('results', [])
+            logger.info("verificar_pago_pendiente: MP devolvió %d preapprovals", len(resultados))
+
+            for pa in resultados:
+                if pa.get('status') != 'authorized':
+                    continue
+                # GET individual para obtener payer_email completo
+                try:
+                    det = req_lib.get(
+                        f"https://api.mercadopago.com/preapproval/{pa['id']}",
+                        headers=headers, timeout=15,
                     )
-                    if pa_email.lower() == payer_email.lower() or pa.get('status') == 'authorized':
-                        # GET individual para datos completos
-                        det = req_lib.get(
-                            f"https://api.mercadopago.com/preapproval/{pa['id']}",
-                            headers=headers, timeout=15,
-                        )
-                        if det.ok:
-                            det_data = det.json()
-                            det_email = (
-                                det_data.get('payer_email', '')
-                                or det_data.get('payer', {}).get('email', '')
-                            )
-                            if det_email.lower() == payer_email.lower():
-                                encontrado = det_data
-                                break
-            except Exception as e:
-                logger.warning("verificar_pago_pendiente: búsqueda MP falló: %s", e)
+                    if not det.ok:
+                        continue
+                    det_data = det.json()
+                    det_email = (
+                        det_data.get('payer_email', '')
+                        or det_data.get('payer', {}).get('email', '')
+                    )
+                    logger.info(
+                        "verificar_pago_pendiente: candidato %s payer=%s",
+                        pa['id'], det_email,
+                    )
+                    candidatos_authorized.append(det_data)
+                    if payer_email and det_email.lower() == payer_email.lower():
+                        encontrado = det_data
+                        break
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("verificar_pago_pendiente: búsqueda MP falló: %s", e)
+
+        # Fallback: si hay solo un preapproval authorized y no matcheó email, usarlo igual
+        if not encontrado and len(candidatos_authorized) == 1:
+            encontrado = candidatos_authorized[0]
+            logger.info(
+                "verificar_pago_pendiente: usando único candidato authorized %s (email no matcheó)",
+                encontrado.get('id'),
+            )
 
         if encontrado:
             preapproval_id = str(encontrado.get('id', ''))
