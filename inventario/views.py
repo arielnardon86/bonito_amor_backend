@@ -6879,7 +6879,10 @@ def password_reset_request(request):
         uid   = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
         frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'https://www.totalstock.com.ar').rstrip('/')
-        reset_url = f"{frontend_url}/nueva-contrasena?uid={uid}&token={token}"
+        # Usamos la raíz "/" igual que con suscripcion/resultado:
+        # Render no procesa _redirects para rutas profundas directas.
+        # El frontend detecta uid+token en "/" y navega client-side a /nueva-contrasena.
+        reset_url = f"{frontend_url}/?uid={uid}&token={token}"
 
         nombre = user.first_name or user.username
 
