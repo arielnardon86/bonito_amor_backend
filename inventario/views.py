@@ -6454,6 +6454,7 @@ def verificar_pago_pendiente(request):
     busca el preapproval en MP usando el email del usuario.
     """
     import requests as req_lib
+    from django.conf import settings as django_settings
     from .models import Suscripcion, Plan
     from .services.suscripcion_service import (
         obtener_preaprobacion, activar_suscripcion,
