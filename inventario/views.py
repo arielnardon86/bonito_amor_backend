@@ -6148,7 +6148,9 @@ def registro_publico(request):
     # Construir checkout URL del plan en MP
     # MP creará el preapproval individual y nos notificará vía webhook
     frontend_url = getattr(django_settings, 'FRONTEND_URL', 'http://localhost:3000')
-    back_url     = f"{frontend_url}/suscripcion/resultado"
+    # Usamos la raíz "/" como back_url: MP agrega ?preapproval_id=XXX y el frontend
+    # lo detecta en la raíz (que siempre carga) y redirige al componente de resultado.
+    back_url = f"{frontend_url}/"
     init_point   = None
 
     if plan.mp_plan_id:
