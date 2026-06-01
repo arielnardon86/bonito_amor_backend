@@ -6289,19 +6289,19 @@ def mp_webhook_suscripcion(request):
             )
             return Response(status=200)
 
-        # Vincular preapproval_id si es la primera vez
-        if not suscripcion.mp_preapproval_id:
+        # Vincular/actualizar preapproval_id (también para re-suscripción tras cancelación)
+        if suscripcion.mp_preapproval_id != resource_id:
             suscripcion.mp_preapproval_id = resource_id
             suscripcion.mp_payer_email = payer_email or suscripcion.mp_payer_email
             suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
-            logger.info("Preapproval %s vinculado a tienda %s", resource_id, suscripcion.tienda_id)
+            logger.info("Preapproval %s vinculado/actualizado a tienda %s", resource_id, suscripcion.tienda_id)
 
         # Aplicar cambio de estado según MP
         if estado_mp == 'authorized':
-            if suscripcion.estado == 'pending':
-                # Primera autorización: iniciar trial
+            if suscripcion.estado in ('pending', 'cancelada'):
+                # Primera suscripción o re-suscripción tras cancelación: iniciar trial
                 activar_suscripcion(suscripcion)
-            elif suscripcion.estado in ('trial', 'gracia', 'pausada'):
+            elif suscripcion.estado in ('trial', 'activa', 'gracia', 'pausada'):
                 # MP confirmó renovación o reactivación → activa
                 renovar_suscripcion(suscripcion)
         elif estado_mp == 'paused':
@@ -6418,15 +6418,15 @@ def verificar_suscripcion_mp(request):
     if suscripcion is None:
         return Response({'estado': 'no_encontrada', 'activa': False})
 
-    # Vincular preapproval_id si es la primera vez
-    if not suscripcion.mp_preapproval_id:
+    # Vincular/actualizar preapproval_id (también para re-suscripción tras cancelación)
+    if suscripcion.mp_preapproval_id != preapproval_id:
         suscripcion.mp_preapproval_id = preapproval_id
         if payer_email:
             suscripcion.mp_payer_email = payer_email
         suscripcion.save(update_fields=['mp_preapproval_id', 'mp_payer_email'])
 
     # Activar si MP dice autorizado
-    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada'):
+    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'cancelada'):
         activar_suscripcion(suscripcion)
         suscripcion.refresh_from_db()
 
@@ -6510,7 +6510,7 @@ def verificar_pago_pendiente(request):
                 suscripcion.save(update_fields=fields)
 
                 estado_mp = datos_mp.get('status', '')
-                if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia'):
+                if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia', 'cancelada'):
                     activar_suscripcion(suscripcion)
                     suscripcion.refresh_from_db()
                     return Response({'estado': suscripcion.estado, 'activa': True,
@@ -6595,7 +6595,7 @@ def verificar_pago_pendiente(request):
                 or encontrado.get('payer', {}).get('email', '')
             )
             fields = []
-            if preapproval_id and not suscripcion.mp_preapproval_id:
+            if preapproval_id and suscripcion.mp_preapproval_id != preapproval_id:
                 suscripcion.mp_preapproval_id = preapproval_id
                 fields.append('mp_preapproval_id')
             if pa_email and not suscripcion.mp_payer_email:
@@ -6617,7 +6617,7 @@ def verificar_pago_pendiente(request):
 
     estado_mp = datos_mp.get('status', '')
 
-    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia'):
+    if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia', 'cancelada'):
         activar_suscripcion(suscripcion)
         suscripcion.refresh_from_db()
         return Response({'estado': suscripcion.estado, 'activa': True,

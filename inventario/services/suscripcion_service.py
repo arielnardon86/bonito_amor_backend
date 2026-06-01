@@ -195,7 +195,9 @@ def cancelar_suscripcion(suscripcion):
     """
     suscripcion.estado = "cancelada"
     suscripcion.fecha_cancelacion = tz.now()
-    suscripcion.save(update_fields=["estado", "fecha_cancelacion"])
+    suscripcion.mp_preapproval_id = None   # permite vincular nuevo preapproval en re-suscripción
+    suscripcion.fecha_fin_trial = None     # permite nuevo trial si se re-suscribe
+    suscripcion.save(update_fields=["estado", "fecha_cancelacion", "mp_preapproval_id", "fecha_fin_trial"])
     logger.info("Suscripción cancelada: %s", suscripcion.id)
 
 
