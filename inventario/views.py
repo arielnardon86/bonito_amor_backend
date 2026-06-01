@@ -6766,7 +6766,8 @@ def cambiar_plan(request):
     except Plan.DoesNotExist:
         return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
 
-    if plan_nuevo == suscripcion.plan:
+    # Para re-suscripción desde estado cancelada se permite el mismo plan
+    if plan_nuevo == suscripcion.plan and suscripcion.estado != 'cancelada':
         return Response({'error': 'Ya estás en ese plan.'}, status=400)
 
     # Cancelar preapproval anterior en MP para evitar cobro doble
