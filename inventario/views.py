@@ -6739,7 +6739,7 @@ def cambiar_plan(request):
         backend_url  = getattr(dj_settings, 'BACKEND_URL', '').rstrip('/')
         params = {
             'preapproval_plan_id': plan_nuevo.mp_plan_id,
-            'back_url':            f"{frontend_url}/suscripcion/resultado",
+            'back_url':            f"{frontend_url}/",
             'external_reference':  str(tienda.id),
         }
         if backend_url:
