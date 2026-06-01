@@ -6818,6 +6818,36 @@ def cambiar_plan(request):
 
 # ── Recupero de contraseña ────────────────────────────────────────────────────
 
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_email(request):
+    """
+    Guarda o actualiza el email del usuario autenticado.
+    Sólo relevante para administradores de tienda (is_superuser).
+    Body: { email }
+    """
+    import re as _re
+    email = (request.data.get('email') or '').strip().lower()
+
+    if not email:
+        return Response({'error': 'Email requerido.'}, status=400)
+
+    if not _re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        return Response({'error': 'Formato de email inválido.'}, status=400)
+
+    from django.contrib.auth import get_user_model
+    UserModel = get_user_model()
+
+    if UserModel.objects.filter(email__iexact=email).exclude(pk=request.user.pk).exists():
+        return Response({'error': 'Ese email ya está registrado en otra cuenta.'}, status=400)
+
+    request.user.email = email
+    request.user.save(update_fields=['email'])
+    logger.info("update_email: usuario %s actualizó su email a %s", request.user.username, email)
+
+    return Response({'ok': True, 'email': email})
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def password_reset_request(request):

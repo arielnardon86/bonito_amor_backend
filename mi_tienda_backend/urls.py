@@ -35,7 +35,7 @@ from inventario.views import (
     planes_publicos, registro_publico, mp_webhook_suscripcion, cambiar_plan,
     mi_suscripcion, verificar_suscripcion_mp, cancelar_suscripcion_view,
     verificar_pago_pendiente,
-    password_reset_request, password_reset_confirm,
+    password_reset_request, password_reset_confirm, update_email,
 )
 # Importación condicional de CambioDevolucionViewSet
 try:
@@ -114,4 +114,5 @@ urlpatterns += [
     # Recupero de contraseña
     path('api/auth/password-reset/', password_reset_request, name='password-reset-request'),
     path('api/auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),
+    path('api/auth/update-email/', update_email, name='update-email'),
 ]
