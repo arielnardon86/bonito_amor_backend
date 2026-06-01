@@ -6814,3 +6814,150 @@ def cambiar_plan(request):
         'plan':         plan_nuevo.nombre,
         'checkout_url': checkout_url,
     })
+
+
+# ── Recupero de contraseña ────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def password_reset_request(request):
+    """
+    Recibe { email } y envía un link de recuperación si el email está registrado.
+    Siempre responde OK para no revelar si el email existe.
+    """
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.encoding import force_bytes
+    from django.utils.http import urlsafe_base64_encode
+    from django.core.mail import EmailMultiAlternatives
+    from django.conf import settings as dj_settings
+
+    email = (request.data.get('email') or '').strip().lower()
+    if not email:
+        return Response({'error': 'Email requerido.'}, status=400)
+
+    UserModel = get_user_model()
+    usuarios = UserModel.objects.filter(email__iexact=email, is_active=True)
+
+    for user in usuarios:
+        uid   = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'https://www.totalstock.com.ar').rstrip('/')
+        reset_url = f"{frontend_url}/nueva-contrasena?uid={uid}&token={token}"
+
+        nombre = user.first_name or user.username
+
+        texto = (
+            f"Hola {nombre},\n\n"
+            f"Recibimos una solicitud para restablecer la contraseña de tu cuenta en Total Stock.\n\n"
+            f"Hacé clic en el siguiente enlace para crear una nueva contraseña:\n"
+            f"{reset_url}\n\n"
+            f"Este enlace expira en 72 horas.\n\n"
+            f"Si no solicitaste este cambio, podés ignorar este correo.\n\n"
+            f"— El equipo de Total Stock\n"
+            f"www.totalstock.com.ar"
+        )
+
+        html = f"""<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body {{ margin:0; padding:0; background:#f8fafc; font-family:'Helvetica Neue',Arial,sans-serif; }}
+  .wrap {{ max-width:560px; margin:40px auto; background:#fff; border-radius:16px;
+           box-shadow:0 4px 24px rgba(0,0,0,.08); overflow:hidden; }}
+  .header {{ background:linear-gradient(135deg,#5dc87a 0%,#38a080 100%);
+             padding:32px 40px; text-align:center; }}
+  .header h1 {{ margin:0; color:#fff; font-size:22px; font-weight:700; letter-spacing:.5px; }}
+  .header p  {{ margin:6px 0 0; color:rgba(255,255,255,.85); font-size:14px; }}
+  .body  {{ padding:36px 40px; }}
+  .body p  {{ color:#334155; font-size:15px; line-height:1.7; margin:0 0 16px; }}
+  .btn   {{ display:block; width:fit-content; margin:28px auto;
+            background:linear-gradient(135deg,#5dc87a,#38a080);
+            color:#fff !important; text-decoration:none;
+            padding:14px 36px; border-radius:10px;
+            font-size:15px; font-weight:700;
+            box-shadow:0 4px 14px rgba(93,200,122,.40); }}
+  .note  {{ font-size:12px; color:#94a3b8; text-align:center; margin-top:24px; }}
+  .footer {{ background:#f1f5f9; padding:20px 40px; text-align:center;
+             color:#94a3b8; font-size:12px; border-top:1px solid #e2e8f0; }}
+  .footer a {{ color:#5dc87a; text-decoration:none; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>Total Stock</h1>
+    <p>Gestión de inventario para tu negocio</p>
+  </div>
+  <div class="body">
+    <p>Hola <strong>{nombre}</strong>,</p>
+    <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en Total Stock.</p>
+    <p>Hacé clic en el botón para crear una nueva contraseña:</p>
+    <a href="{reset_url}" class="btn">Restablecer mi contraseña</a>
+    <p class="note">Este enlace expira en <strong>72 horas</strong>.<br>
+    Si no solicitaste este cambio, podés ignorar este correo.</p>
+  </div>
+  <div class="footer">
+    &copy; 2025 Total Stock &nbsp;·&nbsp;
+    <a href="https://www.totalstock.com.ar">www.totalstock.com.ar</a>
+  </div>
+</div>
+</body>
+</html>"""
+
+        try:
+            msg = EmailMultiAlternatives(
+                subject='[Total Stock] Recuperá tu contraseña',
+                body=texto,
+                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+                to=[email],
+            )
+            msg.attach_alternative(html, 'text/html')
+            msg.send(fail_silently=False)
+            logger.info("password_reset_request: email enviado a %s (user=%s)", email, user.username)
+        except Exception as e:
+            logger.error("password_reset_request: error enviando email a %s: %s", email, e)
+
+    # Respuesta genérica — no revela si el email existe
+    return Response({
+        'ok': True,
+        'mensaje': 'Si el email está registrado, recibirás las instrucciones en tu casilla.',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def password_reset_confirm(request):
+    """
+    Recibe { uid, token, new_password } y actualiza la contraseña.
+    """
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.encoding import force_str
+    from django.utils.http import urlsafe_base64_decode
+
+    uid          = (request.data.get('uid') or '').strip()
+    token        = (request.data.get('token') or '').strip()
+    new_password = (request.data.get('new_password') or '').strip()
+
+    if not uid or not token or not new_password:
+        return Response({'error': 'Datos incompletos.'}, status=400)
+
+    if len(new_password) < 8:
+        return Response({'error': 'La contraseña debe tener al menos 8 caracteres.'}, status=400)
+
+    UserModel = get_user_model()
+    try:
+        pk   = force_str(urlsafe_base64_decode(uid))
+        user = UserModel.objects.get(pk=pk)
+    except Exception:
+        return Response({'error': 'El enlace es inválido o ya expiró.'}, status=400)
+
+    if not default_token_generator.check_token(user, token):
+        return Response({'error': 'El enlace es inválido o ya expiró.'}, status=400)
+
+    user.set_password(new_password)
+    user.save()
+    logger.info("password_reset_confirm: contraseña actualizada para user=%s", user.username)
+
+    return Response({'ok': True, 'mensaje': 'Contraseña actualizada. Ya podés iniciar sesión.'})
