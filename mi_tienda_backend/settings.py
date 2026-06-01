@@ -326,3 +326,17 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 BACKEND_URL = os.environ.get('BACKEND_URL', '')
 # Clave secreta para validar firma de webhooks de MP (Configurar notificaciones → clave secreta)
 MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
+
+# ── Email — Zoho Mail (info@totalstock.com.ar) ───────────────────────────────
+# En Render configurar:
+#   EMAIL_HOST_PASSWORD  → contraseña de aplicación de Zoho
+#   EMAIL_HOST_USER      → info@totalstock.com.ar  (ya tiene default)
+EMAIL_BACKEND     = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST        = 'smtp.zoho.com'
+EMAIL_PORT        = 587
+EMAIL_USE_TLS     = True
+EMAIL_USE_SSL     = False
+EMAIL_HOST_USER   = os.environ.get('EMAIL_HOST_USER', 'info@totalstock.com.ar')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL  = f'Total Stock <{EMAIL_HOST_USER}>'
+SERVER_EMAIL        = EMAIL_HOST_USER
