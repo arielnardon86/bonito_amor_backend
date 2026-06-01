@@ -1022,13 +1022,13 @@ class FacturacionService:
         """
         Determina el tipo de comprobante según la condición IVA del cliente y del emisor.
         AFIP: 1=Factura A, 6=Factura B, 11=Factura C
-        
+
         Reglas:
-        - Si el EMISOR es Monotributista: SOLO puede emitir Factura C (sin excepciones)
+        - Si el EMISOR es Monotributista o Exento: SOLO puede emitir Factura C
         - Si el EMISOR es Responsable Inscripto:
-          - Factura A: Cliente Responsable Inscripto (RI)
-          - Factura B: Cliente Consumidor Final, Monotributista, No Responsable (CF, MT, NR)
-          - Factura C: Cliente Exento (EX)
+          - Factura A: Cliente RI
+          - Factura B: Cualquier otro cliente (CF, MT, NR, EX)
+          Nota: RI NUNCA emite Factura C; EX receptor → Factura B.
         """
         condicion_iva_cliente = cliente_data.get('cliente_condicion_iva', 'CF')
         
@@ -1043,20 +1043,16 @@ class FacturacionService:
             logger.info("Determinado: Factura C (Emisor es Monotributista - solo puede emitir Factura C)")
             return 11  # Factura C
         
-        # Si el emisor es Responsable Inscripto, puede emitir A, B o C según el cliente
+        # Si el emisor es Responsable Inscripto, puede emitir A o B según el cliente
+        # Factura C (tipo 11) es SOLO para emisores Monotributistas o Exentos, nunca para RI.
         if condicion_iva_emisor == 'RI':
-            # Factura C: Cliente Exento
-            if condicion_iva_cliente == 'EX':
-                logger.info("Determinado: Factura C (Cliente Exento)")
-                return 11  # Factura C
-            
             # Factura A: Cliente Responsable Inscripto
             if condicion_iva_cliente == 'RI':
                 logger.info("Determinado: Factura A (Emisor RI y Cliente RI)")
                 return 1  # Factura A
-            
-            # Factura B: Todos los demás casos (CF, MT, NR)
-            logger.info("Determinado: Factura B (Cliente CF/MT/NR)")
+
+            # Factura B: Todos los demás casos (CF, MT, NR, EX)
+            logger.info(f"Determinado: Factura B (Emisor RI - Cliente {condicion_iva_cliente})")
             return 6  # Factura B
         
         # Para otras condiciones del emisor (CF, EX, NR), usar Factura B por defecto
