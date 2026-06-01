@@ -720,9 +720,12 @@ class FacturacionService:
                     doc_tipo = 80
                     doc_nro = cuit_cliente or '0'
                 else:
-                    doc_tipo = int(cliente_data.get('tipo_documento', 99))
-                    doc_nro = cuit_cliente or '0'
-                    if not cuit_cliente:
+                    if cuit_cliente:
+                        # Cliente identificado con CUIT → DocTipo=80 (AFIP: CUIT)
+                        doc_tipo = 80
+                        doc_nro = cuit_cliente
+                    else:
+                        # Sin identificación → DocTipo=99, DocNro=0 (regla AFIP 10015)
                         doc_tipo = 99
                         doc_nro = '0'
 
