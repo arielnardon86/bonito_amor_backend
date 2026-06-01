@@ -6615,9 +6615,71 @@ def verificar_pago_pendiente(request):
             return Response({'estado': 'error_mp', 'activa': False,
                              'mensaje': 'No pudimos consultar Mercado Pago. Intentá de nuevo en unos minutos.'})
 
+        # Si el preapproval almacenado está cancelado en MP y la suscripción
+        # también está cancelada, puede haber una re-suscripción nueva. Limpiamos
+        # el ID viejo y caemos al bloque de búsqueda por plan_id.
+        if datos_mp.get('status') == 'cancelled' and suscripcion.estado == 'cancelada':
+            logger.info(
+                "verificar_pago_pendiente: preapproval_db %s está cancelled en MP — "
+                "limpiando y buscando re-suscripción por plan",
+                preapproval_id,
+            )
+            suscripcion.mp_preapproval_id = None
+            suscripcion.save(update_fields=['mp_preapproval_id'])
+            datos_mp = None   # forzar búsqueda abajo
+
+    # Búsqueda de re-suscripción cuando el preapproval_db estaba cancelado
+    if datos_mp is None:
+        token_mp = getattr(django_settings, 'MP_ACCESS_TOKEN_SUSCRIPCIONES', '')
+        mp_plan_id = suscripcion.plan.mp_plan_id if suscripcion.plan else ''
+        payer_email = request.user.email or ''
+        if not token_mp or not mp_plan_id:
+            return Response({'estado': suscripcion.estado, 'activa': False,
+                             'mensaje': 'No encontramos tu pago aún. Si ya pagaste, esperá unos minutos y reintentá.'})
+        headers_mp = {'Authorization': f'Bearer {token_mp}', 'Content-Type': 'application/json'}
+        candidatos = []
+        try:
+            r2 = req_lib.get(
+                'https://api.mercadopago.com/preapproval/search',
+                params={'preapproval_plan_id': mp_plan_id, 'limit': 100},
+                headers=headers_mp, timeout=15,
+            )
+            r2.raise_for_status()
+            for pa in r2.json().get('results', []):
+                if pa.get('status') != 'authorized':
+                    continue
+                try:
+                    det = req_lib.get(f"https://api.mercadopago.com/preapproval/{pa['id']}",
+                                      headers=headers_mp, timeout=15)
+                    if det.ok:
+                        det_data = det.json()
+                        det_email = det_data.get('payer_email', '') or det_data.get('payer', {}).get('email', '')
+                        logger.info("verificar_pago_pendiente: candidato re-sub %s payer=%s", pa['id'], det_email)
+                        candidatos.append(det_data)
+                        if payer_email and det_email.lower() == payer_email.lower():
+                            datos_mp = det_data
+                            break
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("verificar_pago_pendiente: búsqueda re-sub falló: %s", e)
+
+        if datos_mp is None and len(candidatos) == 1:
+            datos_mp = candidatos[0]
+            logger.info("verificar_pago_pendiente: usando único candidato re-sub %s", datos_mp.get('id'))
+
+        if datos_mp is None:
+            return Response({'estado': suscripcion.estado, 'activa': False,
+                             'mensaje': 'No encontramos una nueva suscripción activa en Mercado Pago. '
+                                        'Si ya te re-suscribiste, esperá unos minutos y reintentá.'})
+
     estado_mp = datos_mp.get('status', '')
 
     if estado_mp == 'authorized' and suscripcion.estado in ('pending', 'trial', 'pausada', 'gracia', 'cancelada'):
+        new_preapproval_id = str(datos_mp.get('id', ''))
+        if new_preapproval_id and suscripcion.mp_preapproval_id != new_preapproval_id:
+            suscripcion.mp_preapproval_id = new_preapproval_id
+            suscripcion.save(update_fields=['mp_preapproval_id'])
         activar_suscripcion(suscripcion)
         suscripcion.refresh_from_db()
         return Response({'estado': suscripcion.estado, 'activa': True,
