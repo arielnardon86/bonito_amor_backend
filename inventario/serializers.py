@@ -68,6 +68,13 @@ class ProductoSerializer(serializers.ModelSerializer):
         model = Producto
         fields = '__all__'
 
+    def validate(self, attrs):
+        if attrs.get('producto_padre') and not attrs.get('talle'):
+            raise serializers.ValidationError(
+                {'talle': 'Las variantes deben tener un valor de talle/color/variante.'}
+            )
+        return attrs
+
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
