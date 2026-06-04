@@ -223,6 +223,16 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return tiendas_ok.filter(nombre=tienda_slug).first()
         return user.tienda
 
+    def get_object(self):
+        """Permite retrieve/update/delete sobre variantes (tienen producto_padre),
+        que están excluidas del queryset de lista para no ocupar slots de paginación."""
+        pk = self.kwargs.get('pk')
+        if pk:
+            obj = get_object_or_404(Producto, pk=pk)
+            self.check_object_permissions(self.request, obj)
+            return obj
+        return super().get_object()
+
     def get_queryset(self):
         user = self.request.user
         # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
