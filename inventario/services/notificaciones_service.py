@@ -184,8 +184,15 @@ class NotificacionesService:
             .select_related('user')
             .order_by('user_id', '-fecha_actualizacion')
         )
-        # Enviar a todos los tokens activos de los usuarios de la tienda
-        tokens = list(tokens_qs)
+        # Deduplicar: un token por usuario por categoría de dispositivo.
+        # Esto evita notificaciones dobles cuando el usuario acumuló tokens
+        # de sesiones anteriores que no se limpiaron correctamente.
+        seen = {}
+        for t in tokens_qs:
+            key = (t.user_id, t.device_info.split()[0] if t.device_info else None)
+            if key not in seen:
+                seen[key] = t
+        tokens = list(seen.values())
         logger.info("Enviando notificación de venta a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
 
         if not tokens:
@@ -241,12 +248,20 @@ class NotificacionesService:
             elif device_info.startswith('Desktop'):
                 categoria = 'Desktop'
 
-        # Desactivar tokens anteriores del mismo usuario+categoría que ya no corresponden
+        # Desactivar tokens anteriores del mismo usuario para evitar duplicados.
+        # Si se detectó categoría (Móvil/Desktop): solo desactiva la misma categoría
+        # (permite tener un token móvil + uno desktop simultáneamente).
+        # Si no hay categoría detectada: desactiva todos los anteriores del usuario.
         if categoria:
             FCMToken.objects.filter(
                 user=user,
                 activo=True,
                 device_info__startswith=categoria,
+            ).exclude(token=token).update(activo=False)
+        else:
+            FCMToken.objects.filter(
+                user=user,
+                activo=True,
             ).exclude(token=token).update(activo=False)
 
         fcm_token, created = FCMToken.objects.update_or_create(
