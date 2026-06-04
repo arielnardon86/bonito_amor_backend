@@ -203,7 +203,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    search_fields = ['nombre', 'talle', 'codigo_barras']
+    search_fields = ['nombre', 'talle', 'codigo_barras', 'variantes__codigo_barras']
 
     def _resolver_tienda(self, tienda_slug=None):
         """Devuelve el objeto Tienda autorizado para el usuario actual.
@@ -227,7 +227,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
         # Esto evita que variantes ocupen slots de paginación y desplacen el padre a la pág 2.
-        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True)
+        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True).distinct()
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         if user.is_superuser:
