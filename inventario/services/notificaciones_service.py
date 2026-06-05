@@ -76,20 +76,20 @@ def _enviar_v1(venta, tokens, titulo, mensaje, data):
 
     for token_obj in tokens:
         try:
-            # Usamos WebpushConfig.notification para que FCM incluya título y cuerpo
-            # correctamente en el payload web push. Así funciona tanto en background
-            # (FCM lo muestra automáticamente) como en foreground (onMessage lo recibe
-            # en payload.notification). Los datos extra van en WebpushConfig.data.
+            # Mensaje data-only (sin WebpushNotification): el service worker es el
+            # único responsable de mostrar la notificación vía showNotification().
+            # Con WebpushNotification, la compat API de Firebase (v10) la muestra
+            # automáticamente Y además llama a onBackgroundMessage → doble notificación.
+            data_con_titulo = {
+                **data_str,
+                'notif_title': titulo,
+                'notif_body': mensaje,
+            }
             message = messaging.Message(
                 token=token_obj.token,
                 webpush=messaging.WebpushConfig(
                     headers={'Urgency': 'high'},
-                    notification=messaging.WebpushNotification(
-                        title=titulo,
-                        body=mensaje,
-                        icon='/logo192.png',
-                    ),
-                    data=data_str,
+                    data=data_con_titulo,
                 ),
             )
             msg_id = messaging.send(message)
