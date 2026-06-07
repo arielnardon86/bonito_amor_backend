@@ -5382,8 +5382,11 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             tienda_slug = self.request.query_params.get('tienda_slug', None)
             
             if not user.is_superuser:
+                tiendas_ids = list(user.tiendas_autorizadas.values_list('pk', flat=True))
                 if user.tienda:
-                    queryset = queryset.filter(tienda=user.tienda)
+                    tiendas_ids.append(user.tienda.pk)
+                if tiendas_ids:
+                    queryset = queryset.filter(tienda__pk__in=tiendas_ids)
                 else:
                     return CambioDevolucion.objects.none()
             elif tienda_slug:
@@ -5440,8 +5443,12 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
 
             # Verificar permisos
             user = self.request.user
-            if not user.is_superuser and user.tienda != venta_original.tienda:
-                raise drf_serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
+            if not user.is_superuser:
+                tiendas_ids = set(user.tiendas_autorizadas.values_list('pk', flat=True))
+                if user.tienda:
+                    tiendas_ids.add(user.tienda.pk)
+                if venta_original.tienda.pk not in tiendas_ids:
+                    raise drf_serializers.ValidationError({"error": "No tienes permiso para procesar cambios/devoluciones de esta tienda."})
             
             # Calcular montos
             monto_devolucion = Decimal('0.00')
