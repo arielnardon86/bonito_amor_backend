@@ -5634,34 +5634,13 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                         "error": f"No se pudo generar la nota de crédito: {str(e)}. Detalles: {repr(e)}"
                     })
             
-            # Si hay diferencia a pagar, crear venta pendiente para completar desde el flujo normal (una sola vez)
+            # Si hay diferencia a pagar, marcar el cambio/devolución como pendiente.
+            # La venta se crea desde el frontend con el método de pago real y cambio_devolucion_id,
+            # y el serializer de Venta la vincula automáticamente al asignar venta_diferencia_pendiente.
             if monto_diferencia > 0:
-                try:
-                    venta_diferencia = Venta.objects.create(
-                        total=monto_diferencia,
-                        tienda=venta_original.tienda,
-                        usuario=user,
-                        metodo_pago='Pendiente',
-                        fecha_venta=timezone.now(),
-                        facturada=False,
-                    )
-                    DetalleVenta.objects.create(
-                        venta=venta_diferencia,
-                        producto=None,
-                        cantidad=1,
-                        precio_unitario=monto_diferencia,
-                        subtotal=monto_diferencia,
-                        costo_unitario=Decimal('0.00'),
-                    )
-                    cambio_devolucion.diferencia_pendiente = True
-                    cambio_devolucion.venta_diferencia_pendiente = venta_diferencia
-                    cambio_devolucion.save()
-                    logger.info(f"✅ Venta pendiente creada para diferencia: {venta_diferencia.id} por ${monto_diferencia}")
-                except Exception as e:
-                    logger.error(f"Error al crear venta pendiente para diferencia: {str(e)}", exc_info=True)
-                    raise drf_serializers.ValidationError({
-                        "error": f"No se pudo crear la venta pendiente para la diferencia: {str(e)}. Detalles: {repr(e)}"
-                    })
+                cambio_devolucion.diferencia_pendiente = True
+                cambio_devolucion.save()
+                logger.info(f"✅ Diferencia pendiente marcada: ${monto_diferencia} para cambio/devolución {cambio_devolucion.id}")
             
             tipo_label = 'Cambio' if tipo == 'CAMBIO' else 'Devolución'
             try:
