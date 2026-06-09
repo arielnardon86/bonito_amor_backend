@@ -5828,7 +5828,7 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
-        )
+        ).exclude(metodo_pago__in=['Nota de Crédito', 'Pendiente'])
         if CambioDevolucion_cls is not None:
             sq_monto_dif = CambioDevolucion_cls.objects.filter(
                 venta_diferencia_pendiente=OuterRef('pk')
@@ -5927,6 +5927,10 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             usuario=cierre.usuario,
             fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
+        ).exclude(
+            # Las notas de crédito son saldo a favor del cliente (no ingreso real)
+            # y las Pendientes son placeholders sin cobro efectivo.
+            metodo_pago__in=['Nota de Crédito', 'Pendiente']
         )
         if cierre.fecha_cierre:
             qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
