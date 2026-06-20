@@ -708,14 +708,30 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         # Para ventas de cambio/devolución, el total y el efectivo recibido deben ser
         # solo la diferencia a pagar, no el precio completo del producto nuevo.
         # El frontend envía los items del carrito a precio completo, pero lo que se cobra
-        # es únicamente la diferencia (precio_nuevo - crédito_por_devuelto).
+        # es únicamente la diferencia (precio_nuevo - crédito_por_devuelto), con los
+        # descuentos/recargos aplicados sobre esa diferencia (no sobre el precio del producto).
         if cambio_devolucion_id:
             try:
                 from .models import CambioDevolucion as _CD
                 cd = _CD.objects.get(id=cambio_devolucion_id)
-                validated_data['total'] = cd.monto_diferencia
+                monto_base = cd.monto_diferencia
+                desc_monto = validated_data.get('descuento_monto') or Decimal('0.00')
+                desc_pct   = validated_data.get('descuento_porcentaje') or Decimal('0.00')
+                rec_monto  = validated_data.get('recargo_monto') or Decimal('0.00')
+                rec_pct    = validated_data.get('recargo_porcentaje') or Decimal('0.00')
+                if desc_monto > 0:
+                    total_final = max(Decimal('0.00'), monto_base - desc_monto)
+                elif desc_pct > 0:
+                    total_final = monto_base * (Decimal('1') - desc_pct / Decimal('100'))
+                elif rec_monto > 0:
+                    total_final = monto_base + rec_monto
+                elif rec_pct > 0:
+                    total_final = monto_base * (Decimal('1') + rec_pct / Decimal('100'))
+                else:
+                    total_final = monto_base
+                validated_data['total'] = total_final
                 if 'efectivo' in metodo.lower() and '+' not in metodo:
-                    monto_efectivo = cd.monto_diferencia
+                    monto_efectivo = total_final
             except Exception:
                 pass
 
@@ -745,6 +761,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 # Reemplazar la venta Pendiente placeholder por la venta real
                 old_pendiente = cambio_devolucion.venta_diferencia_pendiente
                 cambio_devolucion.venta_diferencia_pendiente = venta
+                cambio_devolucion.diferencia_pendiente = False
                 cambio_devolucion.save()
                 if old_pendiente and old_pendiente.id != venta.id and old_pendiente.metodo_pago == 'Pendiente':
                     try:
