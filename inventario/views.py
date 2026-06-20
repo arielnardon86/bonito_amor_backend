@@ -3572,16 +3572,15 @@ class VentaViewSet(viewsets.ModelViewSet):
                                 producto.stock += detalle_cambio.cantidad
                                 producto.save()
                                 logger.info(f"✅ Stock restaurado para producto devuelto: {producto.nombre} (+{detalle_cambio.cantidad})")
-                            
-                            # Restaurar el detalle de venta original
+
+                            # Restaurar el detalle de venta original.
+                            # _perform_create_inner solo setea anulado_individualmente=True sin
+                            # modificar cantidad/subtotal, así que aquí solo revertimos ese flag.
                             if detalle_venta.anulado_individualmente:
                                 detalle_venta.anulado_individualmente = False
-                                # Restaurar la cantidad original si se había reducido
-                                detalle_venta.cantidad += detalle_cambio.cantidad
-                                detalle_venta.subtotal = detalle_venta.precio_unitario * detalle_venta.cantidad
-                                detalle_venta.save()
+                                detalle_venta.save(update_fields=['anulado_individualmente'])
                                 logger.info(f"✅ Detalle de venta original restaurado: {detalle_venta.id}")
-                    
+
                     elif detalle_cambio.accion == 'CAMBIAR':
                         # Cuando se cambió un producto:
                         # - El producto devuelto se había restado del stock (restaurar)
@@ -3594,13 +3593,13 @@ class VentaViewSet(viewsets.ModelViewSet):
                                 producto_devuelto.stock += detalle_cambio.cantidad
                                 producto_devuelto.save()
                                 logger.info(f"✅ Stock restaurado para producto devuelto en cambio: {producto_devuelto.nombre} (+{detalle_cambio.cantidad})")
-                            
-                            # Restaurar el detalle de venta original
+
+                            # Restaurar el detalle de venta original.
+                            # _perform_create_inner solo setea anulado_individualmente=True sin
+                            # modificar cantidad/subtotal, así que aquí solo revertimos ese flag.
                             if detalle_venta.anulado_individualmente:
                                 detalle_venta.anulado_individualmente = False
-                                detalle_venta.cantidad += detalle_cambio.cantidad
-                                detalle_venta.subtotal = detalle_venta.precio_unitario * detalle_venta.cantidad
-                                detalle_venta.save()
+                                detalle_venta.save(update_fields=['anulado_individualmente'])
                                 logger.info(f"✅ Detalle de venta original restaurado en cambio: {detalle_venta.id}")
                         
                         if detalle_cambio.producto_nuevo:
@@ -3620,12 +3619,26 @@ class VentaViewSet(viewsets.ModelViewSet):
                             producto.save()
                             logger.info(f"✅ Stock restaurado para producto agregado: {producto.nombre} (+{detalle_cambio.cantidad})")
                 
-                # Recalcular el total de la venta original
+                # Recalcular el total de la venta original respetando descuentos/recargos originales
                 venta_original = cambio_devolucion_afectado.venta_original
-                total_recalculado = sum(
-                    d.subtotal for d in venta_original.detalles.all() 
+                subtotal_activos = sum(
+                    d.subtotal for d in venta_original.detalles.all()
                     if not d.anulado_individualmente
                 )
+                desc_monto = venta_original.descuento_monto or Decimal('0.00')
+                desc_pct   = venta_original.descuento_porcentaje or Decimal('0.00')
+                rec_monto  = venta_original.recargo_monto or Decimal('0.00')
+                rec_pct    = venta_original.recargo_porcentaje or Decimal('0.00')
+                if desc_monto > 0:
+                    total_recalculado = max(Decimal('0.00'), subtotal_activos - desc_monto)
+                elif desc_pct > 0:
+                    total_recalculado = subtotal_activos * (Decimal('1') - desc_pct / Decimal('100'))
+                elif rec_monto > 0:
+                    total_recalculado = subtotal_activos + rec_monto
+                elif rec_pct > 0:
+                    total_recalculado = subtotal_activos * (Decimal('1') + rec_pct / Decimal('100'))
+                else:
+                    total_recalculado = subtotal_activos
                 venta_original.total = total_recalculado
                 venta_original.save()
                 logger.info(f"✅ Total de venta original recalculado: ${total_recalculado}")
