@@ -4626,16 +4626,8 @@ class MetricasAPIView(APIView):
             if venta.id in nota_credito_map:
                 continue
             
-            # Si la venta viene de un cambio/devolución (tiene diferencia pendiente),
-            # usar el monto_diferencia del cambio/devolución en lugar del total de la venta
-            if venta.id in cambio_diferencia_map:
-                cambio_diferencia = cambio_diferencia_map[venta.id]
-                if cambio_diferencia.monto_diferencia > 0:
-                    # Solo contar la diferencia pagada, no el total completo de la venta
-                    total_ventas_periodo += cambio_diferencia.monto_diferencia
-                    continue
-            
-            # Para ventas normales (no de diferencia ni notas de crédito), usar el total
+            # Para todas las ventas (incluyendo diferencias de cambio/devolución),
+            # usar venta.total que el serializer ya calcula aplicando descuentos/recargos.
             total_ventas_periodo += venta.total
         
         # Filtramos los detalles de venta para excluir los anulados individualmente
@@ -4749,13 +4741,8 @@ class MetricasAPIView(APIView):
                 
             username = venta.usuario.username if venta.usuario else 'Sin usuario'
             
-            # Usar el mapa ya creado para acceso rápido
-            if venta.id in cambio_diferencia_map:
-                cambio_diferencia = cambio_diferencia_map[venta.id]
-                monto_venta = cambio_diferencia.monto_diferencia if cambio_diferencia.monto_diferencia > 0 else venta.total
-            else:
-                monto_venta = venta.total
-            
+            monto_venta = venta.total
+
             if username not in ventas_por_usuario_dict:
                 ventas_por_usuario_dict[username] = {'total_vendido': Decimal('0.00'), 'cantidad_ventas': 0}
             ventas_por_usuario_dict[username]['total_vendido'] += monto_venta
@@ -4777,13 +4764,8 @@ class MetricasAPIView(APIView):
                 
             metodo_pago = venta.metodo_pago or 'Sin método'
             
-            # Usar el mapa ya creado para acceso rápido
-            if venta.id in cambio_diferencia_map:
-                cambio_diferencia = cambio_diferencia_map[venta.id]
-                monto_venta = cambio_diferencia.monto_diferencia if cambio_diferencia.monto_diferencia > 0 else venta.total
-            else:
-                monto_venta = venta.total
-            
+            monto_venta = venta.total
+
             if metodo_pago not in ventas_por_metodo_pago_dict:
                 ventas_por_metodo_pago_dict[metodo_pago] = Decimal('0.00')
             ventas_por_metodo_pago_dict[metodo_pago] += monto_venta
