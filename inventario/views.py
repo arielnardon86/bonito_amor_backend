@@ -5474,6 +5474,11 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                 # Obtener detalle de venta original si aplica
                 if detalle_venta_original_id:
                     detalle_venta_original = DetalleVenta.objects.get(id=detalle_venta_original_id)
+                    if accion in ('DEVOLVER', 'CAMBIAR') and detalle_venta_original.anulado_individualmente:
+                        nombre = detalle_venta_original.producto.nombre if detalle_venta_original.producto else 'producto'
+                        raise drf_serializers.ValidationError({
+                            "error": f"El producto '{nombre}' ya fue devuelto en un cambio/devolución anterior. Anulá ese cambio antes de intentar otra devolución."
+                        })
                 
                 # Obtener producto nuevo si aplica
                 if producto_nuevo_id:
