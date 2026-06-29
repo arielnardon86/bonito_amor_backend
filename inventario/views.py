@@ -3350,30 +3350,17 @@ class VentaViewSet(viewsets.ModelViewSet):
         ).order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
-        # Para supervisores: ven ventas de su tienda principal + tiendas autorizadas
-        if user.is_supervisor and not user.is_superuser:
+        # Para usuarios no-superuser: ven ventas de su tienda principal + todas las tiendas autorizadas
+        if not user.is_superuser:
             tiendas_ids = _get_tiendas_ids_usuario(user)
-            if tiendas_ids:
-                queryset = queryset.filter(tienda__pk__in=tiendas_ids)
-            else:
+            if not tiendas_ids:
                 return Venta.objects.none()
-        # Para usuarios staff (no superuser ni supervisor), solo permitir ver ventas buscadas por ID
-        elif user.is_staff and not user.is_superuser:
-            # Solo permitir ver ventas si se busca por ID o código de barras
-            venta_id = self.request.query_params.get('id', None)
-            if not venta_id:
-                # Si no hay ID, retornar queryset vacío (no pueden ver todas las ventas)
-                return Venta.objects.none()
-            # Si hay ID, continuar con el filtro normal (se aplicará más abajo)
-            if user.tienda:
-                queryset = queryset.filter(tienda=user.tienda)
-            else:
-                return Venta.objects.none()
-        elif not user.is_superuser:
-            if user.tienda:
-                queryset = queryset.filter(tienda=user.tienda)
-            else:
-                return Venta.objects.none()
+            # Usuarios staff (no supervisor): solo pueden buscar por ID, no listar todas las ventas
+            if user.is_staff and not user.is_supervisor:
+                venta_id = self.request.query_params.get('id', None)
+                if not venta_id:
+                    return Venta.objects.none()
+            queryset = queryset.filter(tienda__pk__in=tiendas_ids)
         elif tienda_slug:
             queryset = queryset.filter(tienda__nombre=tienda_slug)
 
