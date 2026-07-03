@@ -3280,36 +3280,17 @@ class VentaViewSet(viewsets.ModelViewSet):
         close_old_connections()
         queryset = self.filter_queryset(self.get_queryset())
 
-        # Una sola query de agregación: conteos + montos ajustados para cambios/devoluciones
-        # - Notas de crédito → monto 0 (no son ingreso)
-        # - Ventas de diferencia de cambio → usar monto_diferencia del cambio
-        # - Ventas Pendiente sin relación a cambio → monto 0 (no cobradas)
-        # - Ventas normales → total
-        CambioDevolucion, _ = _get_cambio_devolucion_models()
-        if CambioDevolucion is not None:
-            sq_monto_dif = CambioDevolucion.objects.filter(
-                venta_diferencia_pendiente=OuterRef('pk')
-            ).values('monto_diferencia')[:1]
-
-            queryset_agg = queryset.annotate(
-                _monto_dif=Subquery(sq_monto_dif, output_field=DecimalField(max_digits=10, decimal_places=2))
-            ).annotate(
-                total_efectivo=Case(
-                    When(metodo_pago='Nota de Crédito', then=Value(Decimal('0'))),
-                    When(_monto_dif__isnull=False, then=F('_monto_dif')),
-                    When(metodo_pago='Pendiente', then=Value(Decimal('0'))),
-                    default=F('total'),
-                    output_field=DecimalField(max_digits=10, decimal_places=2)
-                )
+        # Una sola query de agregación: conteos + montos ajustados
+        # - Notas de crédito → monto 0 (no son ingreso directo)
+        # - Ventas Pendiente → monto 0 (aún no cobradas)
+        # - Todo lo demás (incluye ventas de diferencia de cambio ya pagadas) → venta.total
+        queryset_agg = queryset.annotate(
+            total_efectivo=Case(
+                When(metodo_pago__in=['Nota de Crédito', 'Pendiente'], then=Value(Decimal('0'))),
+                default=F('total'),
+                output_field=DecimalField(max_digits=10, decimal_places=2)
             )
-        else:
-            queryset_agg = queryset.annotate(
-                total_efectivo=Case(
-                    When(metodo_pago__in=['Nota de Crédito', 'Pendiente'], then=Value(Decimal('0'))),
-                    default=F('total'),
-                    output_field=DecimalField(max_digits=10, decimal_places=2)
-                )
-            )
+        )
 
         agg = queryset_agg.aggregate(
             total_ventas=Count('id'),
