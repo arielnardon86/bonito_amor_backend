@@ -714,24 +714,45 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             try:
                 from .models import CambioDevolucion as _CD
                 cd = _CD.objects.get(id=cambio_devolucion_id)
-                monto_base = cd.monto_diferencia
+                monto_base = cd.monto_diferencia  # raw difference: monto_nuevo - monto_devolucion
+
+                # Reconstruct new-items subtotal and devolution credit from cart detalles
+                monto_nuevo_full = sum(
+                    Decimal(str(d.get('precio_unitario', 0))) * Decimal(str(d.get('cantidad', 0)))
+                    for d in detalles_data
+                )
+                monto_devolucion_credito = monto_nuevo_full - monto_base
+
                 desc_monto = validated_data.get('descuento_monto') or Decimal('0.00')
                 desc_pct   = validated_data.get('descuento_porcentaje') or Decimal('0.00')
                 rec_monto  = validated_data.get('recargo_monto') or Decimal('0.00')
                 rec_pct    = validated_data.get('recargo_porcentaje') or Decimal('0.00')
-                if desc_monto > 0:
-                    total_final = max(Decimal('0.00'), monto_base - desc_monto)
-                elif desc_pct > 0:
-                    total_final = monto_base * (Decimal('1') - desc_pct / Decimal('100'))
+
+                if desc_pct > 0:
+                    # Discount applies to new items total, then devolution credit is subtracted.
+                    # This matches the intent: "X% off what the customer is taking new".
+                    total_final = max(Decimal('0.00'),
+                        monto_nuevo_full * (Decimal('1') - desc_pct / Decimal('100')) - monto_devolucion_credito
+                    )
+                elif desc_monto > 0:
+                    if desc_monto <= monto_base:
+                        # Discount directly on the remaining difference
+                        total_final = max(Decimal('0.00'), monto_base - desc_monto)
+                    else:
+                        # desc_monto was computed in the frontend to include the devolution credit
+                        # (redondearMonto path). validate() already produced the correct total:
+                        # total = monto_nuevo_full - desc_monto (already ≈ customer's net payment).
+                        total_final = validated_data['total']
                 elif rec_monto > 0:
                     total_final = monto_base + rec_monto
                 elif rec_pct > 0:
                     total_final = monto_base * (Decimal('1') + rec_pct / Decimal('100'))
                 else:
                     total_final = monto_base
-                validated_data['total'] = total_final
+
+                validated_data['total'] = max(Decimal('0.00'), total_final)
                 if 'efectivo' in metodo.lower() and '+' not in metodo:
-                    monto_efectivo = total_final
+                    monto_efectivo = validated_data['total']
             except Exception:
                 pass
 

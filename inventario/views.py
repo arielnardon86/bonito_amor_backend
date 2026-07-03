@@ -3530,53 +3530,46 @@ class VentaViewSet(viewsets.ModelViewSet):
                 
                 for detalle_cambio in cambio_devolucion_afectado.detalles.all():
                     if detalle_cambio.accion == 'DEVOLVER':
-                        # Cuando se devolvió un producto:
-                        # - Se había restado del stock (restaurar)
-                        # - El detalle de venta original fue marcado como anulado (restaurar)
+                        # _perform_create_inner sumó stock al devolver (+cantidad).
+                        # Para revertir, restamos ese stock nuevamente.
                         if detalle_cambio.detalle_venta_original:
                             detalle_venta = detalle_cambio.detalle_venta_original
                             if detalle_venta.producto:
                                 producto = detalle_venta.producto
-                                producto.stock += detalle_cambio.cantidad
+                                producto.stock -= detalle_cambio.cantidad
+                                if producto.stock < 0:
+                                    producto.stock = 0
                                 producto.save()
-                                logger.info(f"✅ Stock restaurado para producto devuelto: {producto.nombre} (+{detalle_cambio.cantidad})")
+                                logger.info(f"✅ Stock revertido para producto devuelto: {producto.nombre} (-{detalle_cambio.cantidad})")
 
-                            # Restaurar el detalle de venta original.
-                            # _perform_create_inner solo setea anulado_individualmente=True sin
-                            # modificar cantidad/subtotal, así que aquí solo revertimos ese flag.
                             if detalle_venta.anulado_individualmente:
                                 detalle_venta.anulado_individualmente = False
                                 detalle_venta.save(update_fields=['anulado_individualmente'])
                                 logger.info(f"✅ Detalle de venta original restaurado: {detalle_venta.id}")
 
                     elif detalle_cambio.accion == 'CAMBIAR':
-                        # Cuando se cambió un producto:
-                        # - El producto devuelto se había restado del stock (restaurar)
-                        # - El producto nuevo se había agregado al stock (restar)
-                        # - El detalle de venta original fue marcado como anulado (restaurar)
+                        # _perform_create_inner: sumó stock al producto devuelto (+) y restó al nuevo (-).
+                        # Para revertir: restamos del devuelto y sumamos al nuevo.
                         if detalle_cambio.detalle_venta_original:
                             detalle_venta = detalle_cambio.detalle_venta_original
                             if detalle_venta.producto:
                                 producto_devuelto = detalle_venta.producto
-                                producto_devuelto.stock += detalle_cambio.cantidad
+                                producto_devuelto.stock -= detalle_cambio.cantidad
+                                if producto_devuelto.stock < 0:
+                                    producto_devuelto.stock = 0
                                 producto_devuelto.save()
-                                logger.info(f"✅ Stock restaurado para producto devuelto en cambio: {producto_devuelto.nombre} (+{detalle_cambio.cantidad})")
+                                logger.info(f"✅ Stock revertido para producto devuelto en cambio: {producto_devuelto.nombre} (-{detalle_cambio.cantidad})")
 
-                            # Restaurar el detalle de venta original.
-                            # _perform_create_inner solo setea anulado_individualmente=True sin
-                            # modificar cantidad/subtotal, así que aquí solo revertimos ese flag.
                             if detalle_venta.anulado_individualmente:
                                 detalle_venta.anulado_individualmente = False
                                 detalle_venta.save(update_fields=['anulado_individualmente'])
                                 logger.info(f"✅ Detalle de venta original restaurado en cambio: {detalle_venta.id}")
-                        
+
                         if detalle_cambio.producto_nuevo:
                             producto_nuevo = detalle_cambio.producto_nuevo
-                            producto_nuevo.stock -= detalle_cambio.cantidad
-                            if producto_nuevo.stock < 0:
-                                producto_nuevo.stock = 0
+                            producto_nuevo.stock += detalle_cambio.cantidad
                             producto_nuevo.save()
-                            logger.info(f"✅ Stock revertido para producto nuevo en cambio: {producto_nuevo.nombre} (-{detalle_cambio.cantidad})")
+                            logger.info(f"✅ Stock revertido para producto nuevo en cambio: {producto_nuevo.nombre} (+{detalle_cambio.cantidad})")
                     
                     elif detalle_cambio.accion == 'AGREGAR':
                         # Cuando se agregó un producto nuevo, se había restado del stock
@@ -3628,13 +3621,25 @@ class VentaViewSet(viewsets.ModelViewSet):
                     producto.save()
                     logger.info(f"✅ Stock restaurado para venta normal: {producto.nombre} (+{detalle.cantidad})")
         
-        _registrar_accion(
-            tienda=venta.tienda,
-            usuario=request.user,
-            accion='anulacion_venta',
-            detalle=f'Anulación venta #{str(venta.id)[:8]} · ${venta.total} · {venta.metodo_pago or ""}',
-            objeto_id=venta.id,
-        )
+        if cambio_devolucion_afectado:
+            _registrar_accion(
+                tienda=venta.tienda,
+                usuario=request.user,
+                accion='anulacion_cambio_devolucion',
+                detalle=(
+                    f'Anulación cambio/devolución #{str(cambio_devolucion_afectado.id)[:8]} '
+                    f'· venta original #{str(cambio_devolucion_afectado.venta_original_id)[:8]}'
+                ),
+                objeto_id=cambio_devolucion_afectado.id,
+            )
+        else:
+            _registrar_accion(
+                tienda=venta.tienda,
+                usuario=request.user,
+                accion='anulacion_venta',
+                detalle=f'Anulación venta #{str(venta.id)[:8]} · ${venta.total} · {venta.metodo_pago or ""}',
+                objeto_id=venta.id,
+            )
         return Response({"status": "Venta anulada con éxito"}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['patch'])
