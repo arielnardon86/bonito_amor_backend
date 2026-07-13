@@ -835,12 +835,15 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 class FacturaSerializer(serializers.ModelSerializer):
     venta_id = serializers.UUIDField(source='venta.id', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    tienda_cuit = serializers.CharField(source='tienda.cuit', read_only=True)
+    tienda_direccion = serializers.CharField(source='tienda.direccion', read_only=True)
     numero_factura_completo = serializers.CharField(read_only=True)
-    
+
     class Meta:
         model = Factura
         fields = [
             'id', 'venta', 'venta_id', 'tienda', 'tienda_nombre',
+            'tienda_cuit', 'tienda_direccion',
             'numero_comprobante', 'punto_venta', 'tipo_comprobante',
             'numero_factura_completo',
             'cliente_nombre', 'cliente_cuit', 'cliente_domicilio',
