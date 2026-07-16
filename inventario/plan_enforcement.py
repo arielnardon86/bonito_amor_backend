@@ -27,6 +27,17 @@ def _get_suscripcion(tienda):
         return None
 
 
+def _es_legacy(sus) -> bool:
+    """
+    True si la tienda debe tratarse como legacy (sin límites ni restricciones):
+    - No tiene fila de Suscripcion, o
+    - Tiene Suscripcion pero con el plan especial 'legacy' (asignado a mano desde
+      Django Admin para eximir a una tienda de límites sin perder el registro de
+      Suscripcion, p.ej. para poder dejarla en estado 'activa' o 'pausada').
+    """
+    return sus is None or sus.plan.nombre == 'legacy'
+
+
 # ── Límites cuantitativos ─────────────────────────────────────────────────────
 
 def verificar_limite_productos(tienda) -> tuple[bool, dict]:
@@ -35,7 +46,7 @@ def verificar_limite_productos(tienda) -> tuple[bool, dict]:
     Devuelve (True, {}) si puede, o (False, payload_para_frontend) si no.
     """
     sus = _get_suscripcion(tienda)
-    if sus is None:
+    if _es_legacy(sus):
         return True, {}  # legacy: sin límite
 
     if sus.plan.max_productos is None:
@@ -69,7 +80,7 @@ def verificar_limite_usuarios(tienda) -> tuple[bool, dict]:
     Verifica si la tienda puede agregar un usuario más.
     """
     sus = _get_suscripcion(tienda)
-    if sus is None:
+    if _es_legacy(sus):
         return True, {}
 
     if sus.plan.max_usuarios is None:
@@ -114,7 +125,7 @@ def verificar_feature(tienda, feature: str) -> tuple[bool, dict]:
     feature: 'factura_electronica' | 'ecommerce'
     """
     sus = _get_suscripcion(tienda)
-    if sus is None:
+    if _es_legacy(sus):
         return True, {}  # legacy: sin restricciones
 
     if sus.permite_feature(feature):
@@ -154,7 +165,7 @@ def info_suscripcion(tienda) -> dict:
     cantidad_usuarios = User.objects.filter(tienda=tienda).count()
 
     return {
-        'legacy': False,
+        'legacy': _es_legacy(sus),
         'plan': sus.plan.nombre,
         'plan_display': sus.plan.get_nombre_display(),
         'estado': sus.estado,

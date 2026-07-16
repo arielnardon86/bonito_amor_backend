@@ -1008,6 +1008,9 @@ class Plan(models.Model):
         ('starter',  'Starter'),
         ('pro',      'Pro'),
         ('advanced', 'Advanced'),
+        # Plan interno para tiendas exceptuadas de límites/cobro (ver plan_enforcement._es_legacy).
+        # No se ofrece en alta pública ni en cambio de plan self-service; solo asignable desde Django Admin.
+        ('legacy',   'Legacy (sin restricciones)'),
     ]
 
     nombre           = models.CharField(max_length=20, choices=TIER_CHOICES, unique=True)

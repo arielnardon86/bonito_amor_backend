@@ -6029,7 +6029,9 @@ class EgresoCajaViewSet(viewsets.ModelViewSet):
 def planes_publicos(request):
     """Devuelve los 3 planes con sus límites y features (endpoint público)."""
     from .models import Plan
-    planes = Plan.objects.all().order_by('precio_mensual')
+    # 'legacy' es un plan interno (asignado a mano desde Django Admin para eximir
+    # a una tienda de límites), nunca se ofrece en el alta pública ni en upgrades.
+    planes = Plan.objects.exclude(nombre='legacy').order_by('precio_mensual')
     data = [
         {
             'id': p.id,
@@ -6083,6 +6085,9 @@ def registro_publico(request):
 
     if User.objects.filter(email__iexact=email).exists():
         return Response({'error': 'Ya existe una cuenta con ese email.'}, status=400)
+
+    if plan_nombre == 'legacy':
+        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
 
     try:
         plan = Plan.objects.get(nombre=plan_nombre)
@@ -6734,6 +6739,8 @@ def cambiar_plan(request):
         return Response({'error': 'La tienda no tiene suscripción activa.'}, status=400)
 
     plan_nombre = request.data.get('plan', '').lower()
+    if plan_nombre == 'legacy':
+        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
     try:
         plan_nuevo = Plan.objects.get(nombre=plan_nombre)
     except Plan.DoesNotExist:
