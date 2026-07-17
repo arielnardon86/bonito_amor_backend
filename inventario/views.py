@@ -59,7 +59,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -134,6 +134,8 @@ from .serializers import (
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer,
     CierreCajaSerializer, EgresoCajaSerializer,
+    ClienteSerializer, MovimientoCuentaCorrienteSerializer,
+    calcular_saldo_pendiente,
 )
 # Importación condicional de serializers de ArancelMercadoLibre
 try:
@@ -3620,7 +3622,21 @@ class VentaViewSet(viewsets.ModelViewSet):
                     producto.stock += detalle.cantidad
                     producto.save()
                     logger.info(f"✅ Stock restaurado para venta normal: {producto.nombre} (+{detalle.cantidad})")
-        
+
+            # Cuenta Corriente: revertir la deuda pendiente de esta venta. venta.total ya
+            # refleja lo que quedó tras eventuales anulaciones parciales previas (anular_detalle),
+            # así que este crédito siempre cancela exactamente el saldo restante.
+            if venta.metodo_pago == 'Cuenta Corriente' and venta.cliente_id and venta.total > 0:
+                MovimientoCuentaCorriente.objects.create(
+                    cliente=venta.cliente,
+                    tienda=venta.tienda,
+                    venta=venta,
+                    usuario=request.user,
+                    tipo='CREDITO',
+                    monto=venta.total,
+                    concepto=f'Anulación venta {venta.id}',
+                )
+
         if cambio_devolucion_afectado:
             _registrar_accion(
                 tienda=venta.tienda,
@@ -3676,6 +3692,7 @@ class VentaViewSet(viewsets.ModelViewSet):
             detalle.save()
             
             venta = detalle.venta
+            total_antes_anulacion = venta.total
             total_subtotal = sum(d.subtotal for d in venta.detalles.all() if not d.anulado_individualmente)
             
             # --- LÓGICA DE RECALCULO DE TOTAL CON DESCUENTO/RECARGO ---
@@ -3702,6 +3719,22 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.anulada = True
 
             venta.save()
+
+            # Cuenta Corriente: revertir en el libro solo la parte del ítem anulado (la
+            # diferencia entre el total anterior y el recalculado), sin tocar el resto de la deuda.
+            if venta.metodo_pago == 'Cuenta Corriente' and venta.cliente_id:
+                delta = total_antes_anulacion - venta.total
+                if delta > 0:
+                    MovimientoCuentaCorriente.objects.create(
+                        cliente=venta.cliente,
+                        tienda=venta.tienda,
+                        venta=venta,
+                        usuario=request.user,
+                        tipo='CREDITO',
+                        monto=delta,
+                        concepto=f'Anulación ítem venta {venta.id}',
+                    )
+
             nombre_prod = detalle.producto.nombre if detalle.producto else 'producto eliminado'
             talle_str = f' T:{detalle.producto.talle}' if detalle.producto and detalle.producto.talle else ''
             _registrar_accion(
@@ -6020,6 +6053,138 @@ class EgresoCajaViewSet(viewsets.ModelViewSet):
             if compra:
                 compra.delete()
         instance.delete()
+
+
+# ── Clientes y Cuenta Corriente ────────────────────────────────────────────────
+
+class ClienteViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ClienteSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Cliente.objects.select_related('tienda')
+        tienda_slug = self.request.query_params.get('tienda_slug')
+
+        if user.is_superuser:
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+        else:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return Cliente.objects.none()
+            qs = qs.filter(tienda__pk__in=tiendas_ids)
+            if tienda_slug:
+                # Búsqueda desde Punto de Venta: acotada a la tienda puntual de la venta en curso,
+                # no al conjunto ampliado de tiendas autorizadas (mismo criterio que evitó el bug
+                # de scoping multi-tienda en Cambio/Devolución).
+                qs = qs.filter(tienda__nombre=tienda_slug)
+
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                models.Q(cuit_cuil__icontains=search) | models.Q(nombre_razon_social__icontains=search)
+            )
+
+        if self.request.query_params.get('incluir_inactivos') != 'true':
+            qs = qs.filter(activo=True)
+
+        return qs
+
+    def perform_destroy(self, instance):
+        # Soft delete: un cliente con historial de compras o cuenta corriente no se borra en duro.
+        instance.activo = False
+        instance.save(update_fields=['activo'])
+
+    @action(detail=True, methods=['get'])
+    def historial(self, request, pk=None):
+        cliente = self.get_object()
+        ventas = Venta.objects.filter(cliente=cliente, anulada=False).select_related(
+            'tienda', 'usuario', 'arancel_aplicado', 'factura'
+        ).prefetch_related('detalles__producto').order_by('-fecha_venta')
+        movimientos = cliente.movimientos_cuenta_corriente.all().order_by('-fecha')
+        return Response({
+            'saldo_pendiente': str(calcular_saldo_pendiente(cliente)),
+            # Serializer completo: permite reimprimir el recibo de cada consumo igual que en Listado de Ventas.
+            'ventas': VentaSerializer(ventas, many=True, context={'request': request}).data,
+            'movimientos': MovimientoCuentaCorrienteSerializer(movimientos, many=True).data,
+        })
+
+    @action(detail=True, methods=['post'])
+    def cobrar_deuda(self, request, pk=None):
+        from decimal import InvalidOperation
+
+        metodo_pago = (request.data.get('metodo_pago') or '').strip()
+        tienda_slug = request.data.get('tienda_slug')
+        if not metodo_pago:
+            return Response({'error': 'Se requiere un método de pago.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            monto = Decimal(str(request.data.get('monto')))
+        except (InvalidOperation, TypeError):
+            return Response({'error': 'Monto inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        if monto <= 0:
+            return Response({'error': 'El monto debe ser mayor a 0.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            cliente = Cliente.objects.select_for_update().get(pk=pk)
+
+            if not request.user.is_superuser and cliente.tienda_id not in _get_tiendas_ids_usuario(request.user):
+                return Response(
+                    {'error': 'No tenés permiso para operar sobre este cliente.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            saldo_actual = calcular_saldo_pendiente(cliente)
+            if monto > saldo_actual:
+                return Response(
+                    {'error': f'El monto (${monto}) supera el saldo pendiente (${saldo_actual}).'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Si es efectivo y hay una caja abierta, el ingreso se suma a esa caja para la
+            # reconciliación del turno. Si no hay caja abierta, el cobro se registra igual
+            # en la cuenta corriente; simplemente no queda un ingreso de caja asociado.
+            cierre_abierto = None
+            if 'efectivo' in metodo_pago.lower():
+                tienda_para_caja = cliente.tienda
+                if tienda_slug:
+                    tienda_resuelta = Tienda.objects.filter(nombre=tienda_slug).first()
+                    if tienda_resuelta:
+                        tienda_para_caja = tienda_resuelta
+                cierre_abierto = CierreCaja.objects.filter(
+                    usuario=request.user, tienda=tienda_para_caja, estado='ABIERTO'
+                ).first()
+
+            movimiento = MovimientoCuentaCorriente.objects.create(
+                cliente=cliente,
+                tienda=cliente.tienda,
+                tipo='CREDITO',
+                monto=monto,
+                concepto=f'Cobro cuenta corriente - {metodo_pago}',
+                usuario=request.user,
+            )
+
+            # Reutiliza EgresoCaja(tipo='INGRESO'): ya confirmado que solo impacta la
+            # reconciliación de caja (total_ingresos_extra) y no las métricas de venta,
+            # ya que solo tipo='EGRESO' genera una Compra sombra (perform_create más abajo).
+            if cierre_abierto:
+                EgresoCaja.objects.create(
+                    cierre_caja=cierre_abierto,
+                    tienda=cierre_abierto.tienda,
+                    usuario=request.user,
+                    tipo='INGRESO',
+                    concepto=f'Cobro cuenta corriente - {cliente.nombre_razon_social}',
+                    importe=monto,
+                )
+
+            saldo_final = calcular_saldo_pendiente(cliente)
+
+        return Response({
+            'ok': True,
+            'movimiento': MovimientoCuentaCorrienteSerializer(movimiento).data,
+            'saldo_pendiente': str(saldo_final),
+            'egreso_caja_creado': cierre_abierto is not None,
+        })
 
 
 # ── Registro público + Suscripciones ─────────────────────────────────────────

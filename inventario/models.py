@@ -440,6 +440,64 @@ class ArancelMercadoLibreProducto(models.Model):
         return f"{self.tienda.nombre} - {self.producto.nombre} - Arancel {self.arancel_porcentaje}% + Envío ${self.costo_envio}"
 # ------------------------------------------------
 
+# ── Clientes y Cuenta Corriente ────────────────────────────────────────────────
+
+class Cliente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='clientes')
+    nombre_razon_social = models.CharField(max_length=255)
+    cuit_cuil = models.CharField(max_length=13)
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    telefono = models.CharField(max_length=50, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    # Soft delete: un cliente con historial de compras o cuenta corriente no se borra nunca en duro.
+    activo = models.BooleanField(default=True)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cliente"
+        verbose_name_plural = "Clientes"
+        unique_together = ('tienda', 'cuit_cuil')
+        ordering = ['nombre_razon_social']
+        indexes = [
+            models.Index(fields=['tienda', 'cuit_cuil']),
+        ]
+
+    def __str__(self):
+        return f"{self.nombre_razon_social} ({self.cuit_cuil}) - {self.tienda.nombre}"
+
+
+class MovimientoCuentaCorriente(models.Model):
+    TIPO_CHOICES = [
+        ('DEBITO', 'Débito (venta a cuenta)'),
+        ('CREDITO', 'Crédito (pago / anulación)'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name='movimientos_cuenta_corriente')
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='movimientos_cuenta_corriente')
+    venta = models.ForeignKey('Venta', on_delete=models.SET_NULL, null=True, blank=True, related_name='movimientos_cuenta_corriente')
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='movimientos_cuenta_corriente')
+
+    tipo = models.CharField(max_length=10, choices=TIPO_CHOICES)
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    concepto = models.CharField(max_length=255, blank=True, default='')
+    fecha = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name = "Movimiento de Cuenta Corriente"
+        verbose_name_plural = "Movimientos de Cuenta Corriente"
+        ordering = ['-fecha']
+        indexes = [
+            models.Index(fields=['cliente', 'fecha']),
+        ]
+
+    def __str__(self):
+        return f"{self.cliente.nombre_razon_social} - {self.get_tipo_display()} - ${self.monto}"
+# ------------------------------------------------
+
 # Modelo de Venta
 class Venta(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -490,7 +548,10 @@ class Venta(models.Model):
     cliente_cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT del cliente")
     cliente_domicilio = models.CharField(max_length=255, blank=True, null=True, help_text="Domicilio del cliente")
     cliente_tipo_documento = models.CharField(max_length=20, blank=True, null=True, help_text="Tipo de documento (DNI, CUIT, etc.)")
-    
+
+    # Cliente de la base de Clientes (opcional en cualquier venta; obligatorio si metodo_pago='Cuenta Corriente')
+    cliente = models.ForeignKey('Cliente', on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas')
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -1114,4 +1175,5 @@ __all__ = [
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
     'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',
+    'Cliente', 'MovimientoCuentaCorriente',
 ]

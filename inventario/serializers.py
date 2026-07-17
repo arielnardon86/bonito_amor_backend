@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -539,12 +539,18 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     arancel_combinado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
         help_text="Suma de aranceles de todos los métodos en un pago combinado")
     cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
-    
+    cliente_id = serializers.PrimaryKeyRelatedField(
+        source='cliente', queryset=Cliente.objects.all(), required=False, allow_null=True, write_only=True,
+        help_text="Cliente asociado a la venta. Obligatorio si metodo_pago='Cuenta Corriente'."
+    )
+
     def to_internal_value(self, data):
-        """Normalizar arancel_aplicado_id antes de la validación: convertir cadena vacía a None"""
-        if isinstance(data, dict) and 'arancel_aplicado_id' in data:
-            if data['arancel_aplicado_id'] == '':
+        """Normalizar arancel_aplicado_id/cliente_id antes de la validación: convertir cadena vacía a None"""
+        if isinstance(data, dict):
+            if data.get('arancel_aplicado_id') == '':
                 data['arancel_aplicado_id'] = None
+            if data.get('cliente_id') == '':
+                data['cliente_id'] = None
         return super().to_internal_value(data)
     
     class Meta:
@@ -555,7 +561,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
-            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id'
+            'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
+            'cliente_id',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -666,6 +673,15 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         elif arancel_obj:
             raise serializers.ValidationError({"metodo_pago": "No se permite seleccionar un Arancel para el método de pago seleccionado."})
 
+        # Cuenta Corriente: el cliente es obligatorio y debe pertenecer a la misma tienda
+        # de esta venta (nunca al conjunto ampliado de tiendas_autorizadas del usuario).
+        cliente_obj = data.get('cliente')
+        if data.get('metodo_pago') == 'Cuenta Corriente':
+            if not cliente_obj:
+                raise serializers.ValidationError({"cliente_id": "Se requiere seleccionar un Cliente para el método de pago Cuenta Corriente."})
+            if cliente_obj.tienda != data['tienda']:
+                raise serializers.ValidationError({"cliente_id": "El cliente seleccionado no pertenece a la tienda actual."})
+
         data['fecha_venta'] = timezone.now()
 
         return data
@@ -673,7 +689,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         cambio_devolucion_id = validated_data.pop('cambio_devolucion_id', None)
-        
+        cliente_obj = validated_data.pop('cliente', None)
+
         arancel_aplicado = validated_data.pop('arancel_aplicado', None)
         arancel_total = validated_data.pop('arancel_total', Decimal('0.00'))
 
@@ -770,8 +787,23 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             costo_envio_ml=costo_envio_ml,
             arancel_total=arancel_total,
             fecha_venta=validated_data['fecha_venta'],
+            cliente=cliente_obj,
         )
-        
+
+        # Cuenta Corriente: registrar el débito en el libro de movimientos del cliente.
+        # La venta cuenta como ingreso real desde ya (no se excluye de métricas); lo único
+        # que queda pendiente es el cobro físico, que se registra aparte vía cobrar_deuda.
+        if validated_data['metodo_pago'] == 'Cuenta Corriente' and cliente_obj:
+            MovimientoCuentaCorriente.objects.create(
+                cliente=cliente_obj,
+                tienda=validated_data['tienda'],
+                venta=venta,
+                usuario=user_obj,
+                tipo='DEBITO',
+                monto=venta.total,
+                concepto=f'Venta {venta.id}',
+            )
+
         # Si viene de un cambio/devolución, relacionar la venta con el cambio/devolución
         if cambio_devolucion_id:
             try:
@@ -909,6 +941,58 @@ class EgresoCajaSerializer(serializers.ModelSerializer):
         model = EgresoCaja
         fields = ['id', 'cierre_caja', 'tipo', 'tipo_display', 'concepto', 'importe', 'fecha', 'usuario', 'usuario_nombre']
         read_only_fields = ['id', 'fecha', 'usuario', 'tienda']
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.username if obj.usuario else 'N/A'
+
+    def get_tipo_display(self, obj):
+        return obj.get_tipo_display()
+
+
+# ── Clientes y Cuenta Corriente ────────────────────────────────────────────────
+
+def calcular_saldo_pendiente(cliente):
+    """Saldo siempre recalculado a partir del libro de movimientos: nunca se cachea."""
+    from django.db.models import Sum, Case, When, F, DecimalField
+    total = cliente.movimientos_cuenta_corriente.aggregate(
+        saldo=Sum(
+            Case(
+                When(tipo='DEBITO', then=F('monto')),
+                When(tipo='CREDITO', then=-F('monto')),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            )
+        )
+    )['saldo']
+    return total or Decimal('0.00')
+
+
+class ClienteSerializer(serializers.ModelSerializer):
+    tienda_slug = serializers.SlugRelatedField(
+        source='tienda', slug_field='nombre', queryset=Tienda.objects.all(), write_only=True
+    )
+    saldo_pendiente = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Cliente
+        fields = [
+            'id', 'tienda_slug', 'nombre_razon_social', 'cuit_cuil',
+            'direccion', 'telefono', 'email', 'activo', 'saldo_pendiente',
+            'fecha_creacion',
+        ]
+        read_only_fields = ['id', 'fecha_creacion']
+
+    def get_saldo_pendiente(self, obj):
+        return str(calcular_saldo_pendiente(obj))
+
+
+class MovimientoCuentaCorrienteSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.SerializerMethodField()
+    tipo_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MovimientoCuentaCorriente
+        fields = ['id', 'tipo', 'tipo_display', 'monto', 'concepto', 'venta', 'usuario', 'usuario_nombre', 'fecha']
+        read_only_fields = fields
 
     def get_usuario_nombre(self, obj):
         return obj.usuario.username if obj.usuario else 'N/A'
