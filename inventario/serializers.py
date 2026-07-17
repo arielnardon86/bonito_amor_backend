@@ -37,6 +37,12 @@ class ProductoSerializer(serializers.ModelSerializer):
         required=False
     )
     variantes = VarianteSimpleSerializer(many=True, read_only=True)
+    # Declarado explícito: al estar en unique_together con tienda, el
+    # UniqueTogetherValidator de DRF exige que la clave esté presente en el payload
+    # (enforce_required_fields), sin importar required=False en el campo. El
+    # default=None asegura que siempre esté presente aunque no se envíe (solo se
+    # completa desde la carga masiva; la creación manual no lo pide).
+    codigo_interno = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
 
     def get_fields(self):
         """Genera fields dinámicamente verificando si los campos de ML existen"""
