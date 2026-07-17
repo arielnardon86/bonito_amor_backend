@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -999,6 +999,24 @@ class MovimientoCuentaCorrienteSerializer(serializers.ModelSerializer):
 
     def get_tipo_display(self, obj):
         return obj.get_tipo_display()
+
+
+# ── Carga masiva de productos (rubros con IVA por tienda) ────────────────────
+
+class RubroSerializer(serializers.ModelSerializer):
+    tienda_slug = serializers.SlugRelatedField(
+        source='tienda', slug_field='nombre', queryset=Tienda.objects.all(), write_only=True
+    )
+
+    class Meta:
+        model = Rubro
+        fields = ['id', 'tienda_slug', 'nombre', 'iva_porcentaje']
+        read_only_fields = ['id']
+
+    def validate_iva_porcentaje(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("El IVA debe estar entre 0 y 100%.")
+        return value
 
 
 class CierreCajaSerializer(serializers.ModelSerializer):

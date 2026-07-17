@@ -271,7 +271,13 @@ class Producto(models.Model):
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
     codigo_barras = models.CharField(max_length=100, blank=True, null=True)
-    
+
+    # Carga masiva desde Excel/CSV: identificador propio de la tienda (distinto del
+    # código de barras) para detectar reposición de stock vs. producto nuevo.
+    codigo_interno = models.CharField(max_length=100, blank=True, null=True)
+    # IVA resuelto al momento de cargar/actualizar el producto (por rubro o manual).
+    iva_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
     # Integración con Mercado Libre
     ml_item_id = models.CharField(
         max_length=50, blank=True, null=True,
@@ -317,7 +323,7 @@ class Producto(models.Model):
     class Meta:
         verbose_name = "Producto"
         verbose_name_plural = "Productos"
-        unique_together = [('nombre', 'tienda', 'talle'), ('codigo_barras', 'tienda')]
+        unique_together = [('nombre', 'tienda', 'talle'), ('codigo_barras', 'tienda'), ('codigo_interno', 'tienda')]
         ordering = ['nombre']
         indexes = [
             models.Index(fields=['tienda'], name='producto_tienda_idx'),
@@ -325,6 +331,31 @@ class Producto(models.Model):
 
     def __str__(self):
         return f"{self.nombre} ({self.talle}) - {self.tienda.nombre}"
+
+
+class Rubro(models.Model):
+    """
+    Catálogo propio de la tienda de "rubro -> % IVA", usado en la carga masiva de
+    productos por Excel/CSV para resolver el IVA sin tener que re-tipearlo en cada
+    archivo. No tiene relación con el modelo Categoria (legacy, sin uso real hoy).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='rubros')
+    nombre = models.CharField(max_length=100)
+    iva_porcentaje = models.DecimalField(max_digits=5, decimal_places=2)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Rubro"
+        verbose_name_plural = "Rubros"
+        unique_together = ('tienda', 'nombre')
+        ordering = ['nombre']
+
+    def __str__(self):
+        return f"{self.nombre} ({self.iva_porcentaje}%) - {self.tienda.nombre}"
+
 
 # Modelo de Método de Pago
 class MetodoPago(models.Model):
@@ -1175,5 +1206,5 @@ __all__ = [
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
     'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',
-    'Cliente', 'MovimientoCuentaCorriente',
+    'Cliente', 'MovimientoCuentaCorriente', 'Rubro',
 ]

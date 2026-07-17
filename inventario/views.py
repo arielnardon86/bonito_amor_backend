@@ -41,6 +41,22 @@ def _registrar_accion(tienda, usuario, accion, detalle, objeto_id=None):
         logger.warning("No se pudo registrar historial accion '%s': %s", accion, e)
 
 
+def _generar_codigo_barras_unico(tienda):
+    """Genera un EAN13 (mismo criterio '779' + hash + checksum que ya usa el frontend
+    al crear un producto sin código de barras), garantizando unicidad para la tienda."""
+    import random
+    for _ in range(20):
+        base = '779' + ''.join(str(random.randint(0, 9)) for _ in range(9))
+        suma = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(base))
+        checksum = (10 - (suma % 10)) % 10
+        codigo = base + str(checksum)
+        if not Producto.objects.filter(tienda=tienda, codigo_barras=codigo).exists():
+            return codigo
+    # Extremadamente improbable: fallback determinístico único
+    import uuid as _uuid
+    return '779' + str(_uuid.uuid4().int)[:10]
+
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, A4
@@ -59,7 +75,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -136,6 +152,7 @@ from .serializers import (
     CierreCajaSerializer, EgresoCajaSerializer,
     ClienteSerializer, MovimientoCuentaCorrienteSerializer,
     calcular_saldo_pendiente,
+    RubroSerializer,
 )
 # Importación condicional de serializers de ArancelMercadoLibre
 try:
@@ -361,6 +378,177 @@ class ProductoViewSet(viewsets.ModelViewSet):
         productos = self.get_queryset().filter(stock__gt=0)
         serializer = self.get_serializer(productos, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='carga_masiva')
+    def carga_masiva(self, request):
+        """
+        Carga masiva de productos desde Excel/CSV (el parseo del archivo ocurre en el
+        frontend; acá se recibe la lista de filas ya estructurada).
+
+        Body: {
+            tienda_slug, modo: 'preview' | 'confirmar',
+            filas: [{
+                fila, codigo_interno, nombre, rubro, iva_porcentaje,
+                costo, precio_venta, margen_porcentaje, cantidad, codigo_barras,
+            }, ...]
+        }
+
+        Por fila: si 'codigo_interno' ya existe en la tienda -> reposición (suma stock,
+        actualiza costo/precio/iva). Si no existe -> crea el producto. El precio de
+        venta se prioriza si viene en la fila; si no, se calcula como
+        costo * (1 + iva/100) * (1 + margen/100). Cada fila se procesa de forma
+        independiente (un error en una fila no aborta el resto).
+        """
+        tienda_slug = request.data.get('tienda_slug')
+        modo = request.data.get('modo', 'preview')
+        filas = request.data.get('filas') or []
+
+        if modo not in ('preview', 'confirmar'):
+            return Response({'error': "El modo debe ser 'preview' o 'confirmar'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({'error': 'No se pudo determinar la tienda.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not filas:
+            return Response({'error': 'No se recibieron filas para procesar.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        codigos_vistos = {}
+        resultados = []
+        creados = 0
+        actualizados = 0
+
+        for idx, fila in enumerate(filas, start=1):
+            numero_fila = fila.get('fila', idx)
+            try:
+                codigo_interno = str(fila.get('codigo_interno') or '').strip()
+                nombre = str(fila.get('nombre') or '').strip()
+                costo_raw = fila.get('costo')
+                precio_venta_raw = fila.get('precio_venta')
+                margen_raw = fila.get('margen_porcentaje')
+                cantidad_raw = fila.get('cantidad')
+                rubro_nombre = str(fila.get('rubro') or '').strip()
+                iva_raw = fila.get('iva_porcentaje')
+                codigo_barras = str(fila.get('codigo_barras') or '').strip() or None
+
+                if not codigo_interno:
+                    raise ValueError("Falta 'Código Interno'.")
+                if codigo_interno in codigos_vistos:
+                    raise ValueError(f"Código interno duplicado en el archivo (fila {codigos_vistos[codigo_interno]}).")
+                codigos_vistos[codigo_interno] = numero_fila
+
+                if not nombre:
+                    raise ValueError("Falta 'Nombre'.")
+
+                if costo_raw is None or str(costo_raw).strip() == '':
+                    raise ValueError("Falta 'Costo'.")
+                costo = Decimal(str(costo_raw))
+                if costo <= 0:
+                    raise ValueError("El costo debe ser mayor a 0.")
+
+                if cantidad_raw is None or str(cantidad_raw).strip() == '':
+                    cantidad = 0
+                else:
+                    cantidad = int(float(cantidad_raw))
+                if cantidad < 0:
+                    raise ValueError("La cantidad no puede ser negativa.")
+
+                # Resolver IVA: prioridad al valor explícito de la fila, si no por rubro.
+                if iva_raw is not None and str(iva_raw).strip() != '':
+                    iva_porcentaje = Decimal(str(iva_raw))
+                elif rubro_nombre:
+                    rubro = Rubro.objects.filter(tienda=tienda, nombre__iexact=rubro_nombre).first()
+                    if not rubro:
+                        raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
+                    iva_porcentaje = rubro.iva_porcentaje
+                else:
+                    raise ValueError("Falta 'Rubro' o 'IVA %'.")
+
+                # Resolver precio de venta: el precio manual siempre prioriza sobre el margen.
+                precio_venta_manual = precio_venta_raw is not None and str(precio_venta_raw).strip() != ''
+                margen_presente = margen_raw is not None and str(margen_raw).strip() != ''
+                if precio_venta_manual:
+                    precio_venta = Decimal(str(precio_venta_raw))
+                elif margen_presente:
+                    margen = Decimal(str(margen_raw))
+                    precio_venta = costo * (Decimal('1') + iva_porcentaje / Decimal('100')) * (Decimal('1') + margen / Decimal('100'))
+                else:
+                    raise ValueError("Debe indicar 'Precio de Venta' o 'Margen %'.")
+                precio_venta = precio_venta.quantize(Decimal('0.01'))
+
+                producto_existente = Producto.objects.filter(tienda=tienda, codigo_interno=codigo_interno).first()
+                estado = 'reposicion' if producto_existente else 'nuevo'
+
+                resultado_fila = {
+                    'fila': numero_fila,
+                    'codigo_interno': codigo_interno,
+                    'nombre': nombre,
+                    'estado': estado,
+                    'iva_porcentaje': str(iva_porcentaje),
+                    'precio_venta': str(precio_venta),
+                    'cantidad': cantidad,
+                    'error': None,
+                }
+
+                if modo == 'confirmar':
+                    if producto_existente:
+                        stock_anterior = producto_existente.stock or 0
+                        nuevo_stock = stock_anterior + cantidad
+                        producto_existente.stock = nuevo_stock
+                        producto_existente.costo = costo
+                        producto_existente.precio = precio_venta
+                        producto_existente.iva_porcentaje = iva_porcentaje
+                        if codigo_barras:
+                            producto_existente.codigo_barras = codigo_barras
+                        producto_existente.stock_ultimo_ingreso = nuevo_stock
+                        producto_existente.fecha_ultimo_ingreso = timezone.now()
+                        producto_existente.save()
+                        actualizados += 1
+                        _registrar_accion(
+                            tienda=tienda, usuario=request.user, accion='ingreso_stock',
+                            detalle=f'Carga masiva: +{cantidad} · {nombre} · stock anterior: {stock_anterior} → nuevo: {nuevo_stock}',
+                            objeto_id=producto_existente.id,
+                        )
+                    else:
+                        codigo_final = codigo_barras or _generar_codigo_barras_unico(tienda)
+                        nuevo_producto = Producto.objects.create(
+                            tienda=tienda,
+                            nombre=nombre,
+                            codigo_interno=codigo_interno,
+                            codigo_barras=codigo_final,
+                            costo=costo,
+                            precio=precio_venta,
+                            iva_porcentaje=iva_porcentaje,
+                            stock=cantidad,
+                            stock_ultimo_ingreso=cantidad,
+                            fecha_ultimo_ingreso=timezone.now(),
+                        )
+                        creados += 1
+                        resultado_fila['codigo_barras'] = codigo_final
+                        _registrar_accion(
+                            tienda=tienda, usuario=request.user, accion='ingreso_stock',
+                            detalle=f'Carga masiva: producto nuevo · {nombre} · stock inicial: {cantidad}',
+                            objeto_id=nuevo_producto.id,
+                        )
+
+                resultados.append(resultado_fila)
+            except Exception as e:
+                resultados.append({
+                    'fila': numero_fila,
+                    'codigo_interno': fila.get('codigo_interno'),
+                    'nombre': fila.get('nombre'),
+                    'estado': None,
+                    'error': str(e),
+                })
+
+        return Response({
+            'modo': modo,
+            'total_filas': len(filas),
+            'creados': creados,
+            'actualizados': actualizados,
+            'errores': len([r for r in resultados if r.get('error')]),
+            'resultados': resultados,
+        })
 
     @action(detail=True, methods=['post'], url_path='agrupar-variantes')
     def agrupar_variantes(self, request, pk=None):
@@ -6185,6 +6373,31 @@ class ClienteViewSet(viewsets.ModelViewSet):
             'saldo_pendiente': str(saldo_final),
             'egreso_caja_creado': cierre_abierto is not None,
         })
+
+
+# ── Rubros (IVA por rubro para carga masiva de productos) ────────────────────
+
+class RubroViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = RubroSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Rubro.objects.select_related('tienda')
+        tienda_slug = self.request.query_params.get('tienda_slug')
+
+        if user.is_superuser:
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+        else:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return Rubro.objects.none()
+            qs = qs.filter(tienda__pk__in=tiendas_ids)
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+
+        return qs
 
 
 # ── Registro público + Suscripciones ─────────────────────────────────────────
