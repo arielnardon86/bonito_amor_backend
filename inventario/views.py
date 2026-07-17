@@ -472,7 +472,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     precio_venta = Decimal(str(precio_venta_raw))
                 elif margen_presente:
                     margen = Decimal(str(margen_raw))
-                    precio_venta = costo * (Decimal('1') + iva_porcentaje / Decimal('100')) * (Decimal('1') + margen / Decimal('100'))
+                    # El margen se aplica sobre el costo CON IVA, no sobre el costo puro.
+                    costo_con_iva = costo * (Decimal('1') + iva_porcentaje / Decimal('100'))
+                    precio_venta = costo_con_iva * (Decimal('1') + margen / Decimal('100'))
                 else:
                     raise ValueError("Debe indicar 'Precio de Venta' o 'Margen %'.")
                 precio_venta = precio_venta.quantize(Decimal('0.01'))
