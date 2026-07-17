@@ -453,7 +453,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 if cantidad < 0:
                     raise ValueError("La cantidad no puede ser negativa.")
 
-                # Resolver IVA: prioridad al valor explícito de la fila, si no por rubro.
+                # Resolver IVA: prioridad al valor explícito de la fila, si no por rubro,
+                # y si no vino ninguno de los dos se asume 0% (no es un error).
                 if iva_raw is not None and str(iva_raw).strip() != '':
                     iva_porcentaje = Decimal(str(iva_raw))
                 elif rubro_nombre:
@@ -462,7 +463,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
                     iva_porcentaje = rubro.iva_porcentaje
                 else:
-                    raise ValueError("Falta 'Rubro' o 'IVA %'.")
+                    iva_porcentaje = Decimal('0')
 
                 # Resolver precio de venta: el precio manual siempre prioriza sobre el margen.
                 precio_venta_manual = precio_venta_raw is not None and str(precio_venta_raw).strip() != ''
