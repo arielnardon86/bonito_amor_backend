@@ -583,6 +583,9 @@ class Venta(models.Model):
     # Cliente de la base de Clientes (opcional en cualquier venta; obligatorio si metodo_pago='Cuenta Corriente')
     cliente = models.ForeignKey('Cliente', on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas')
 
+    # Solo relevante para metodo_pago='Cuenta Corriente': fecha límite acordada para cancelar la deuda.
+    fecha_limite_pago = models.DateField(null=True, blank=True, help_text="Fecha límite para cancelar el pago (Cuenta Corriente).")
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 
@@ -670,6 +673,7 @@ class Presupuesto(models.Model):
     )
 
     notas = models.TextField(blank=True, null=True)
+    fecha_vigencia = models.DateField(null=True, blank=True, help_text="Fecha hasta la cual el presupuesto es válido.")
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

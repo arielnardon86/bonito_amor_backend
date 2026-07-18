@@ -513,10 +513,10 @@ class VentaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Venta
         fields = [
-            'id', 'fecha_venta', 'total', 'anulada', 
+            'id', 'fecha_venta', 'total', 'anulada',
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago', 'metodo_pago_nombre', 
+            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago',
             'usuario', 'tienda', 'tienda_nombre', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
@@ -569,7 +569,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
-            'presupuesto_id', 'cliente_id',
+            'presupuesto_id', 'cliente_id', 'fecha_limite_pago',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -577,6 +577,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje': {'required': False},
             'recargo_monto': {'required': False},
             'monto_efectivo': {'required': False},
+            'fecha_limite_pago': {'required': False, 'allow_null': True},
         }
 
     def validate(self, data):
@@ -796,6 +797,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             arancel_total=arancel_total,
             fecha_venta=validated_data['fecha_venta'],
             cliente=cliente_obj,
+            fecha_limite_pago=validated_data.get('fecha_limite_pago'),
         )
 
         # Cuenta Corriente: registrar el débito en el libro de movimientos del cliente.
@@ -912,7 +914,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
             'id', 'tienda', 'tienda_nombre', 'cliente', 'cliente_nombre', 'cliente_cuit', 'cliente_email',
             'usuario', 'usuario_nombre', 'estado', 'estado_display', 'metodo_pago_sugerido',
             'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto', 'total',
-            'venta_generada', 'notas', 'fecha_creacion', 'fecha_actualizacion', 'detalles',
+            'venta_generada', 'notas', 'fecha_vigencia', 'fecha_creacion', 'fecha_actualizacion', 'detalles',
         ]
         read_only_fields = ['id', 'estado', 'venta_generada', 'fecha_creacion', 'fecha_actualizacion']
 
@@ -934,7 +936,7 @@ class PresupuestoCreateSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'tienda_slug', 'cliente_id', 'detalles',
             'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago_sugerido', 'notas',
+            'metodo_pago_sugerido', 'notas', 'fecha_vigencia',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -943,6 +945,7 @@ class PresupuestoCreateSerializer(serializers.ModelSerializer):
             'recargo_monto': {'required': False},
             'metodo_pago_sugerido': {'required': False, 'allow_null': True, 'allow_blank': True},
             'notas': {'required': False, 'allow_null': True, 'allow_blank': True},
+            'fecha_vigencia': {'required': False, 'allow_null': True},
         }
 
     def validate(self, data):
@@ -1036,6 +1039,7 @@ class PresupuestoCreateSerializer(serializers.ModelSerializer):
             recargo_monto=validated_data.get('recargo_monto') or Decimal('0.00'),
             metodo_pago_sugerido=validated_data.get('metodo_pago_sugerido') or None,
             notas=validated_data.get('notas') or None,
+            fecha_vigencia=validated_data.get('fecha_vigencia') or None,
         )
 
         for detalle_data in detalles_data:
@@ -1051,6 +1055,39 @@ class PresupuestoCreateSerializer(serializers.ModelSerializer):
             )
 
         return presupuesto
+
+    def update(self, instance, validated_data):
+        detalles_data = validated_data.pop('detalles')
+        tienda_obj = validated_data.pop('tienda')
+        cliente_obj = validated_data.pop('cliente')
+
+        instance.tienda = tienda_obj
+        instance.cliente = cliente_obj
+        instance.total = validated_data.get('total', Decimal('0.00'))
+        instance.descuento_porcentaje = validated_data.get('descuento_porcentaje') or Decimal('0.00')
+        instance.descuento_monto = validated_data.get('descuento_monto') or Decimal('0.00')
+        instance.recargo_porcentaje = validated_data.get('recargo_porcentaje') or Decimal('0.00')
+        instance.recargo_monto = validated_data.get('recargo_monto') or Decimal('0.00')
+        instance.metodo_pago_sugerido = validated_data.get('metodo_pago_sugerido') or None
+        instance.notas = validated_data.get('notas') or None
+        instance.fecha_vigencia = validated_data.get('fecha_vigencia') or None
+        instance.save()
+
+        # Reemplazar el detalle completo: más simple y confiable que diffear ítem por ítem.
+        instance.detalles.all().delete()
+        for detalle_data in detalles_data:
+            producto_obj = Producto.objects.get(id=detalle_data['producto'])
+            cantidad = int(detalle_data['cantidad'])
+            precio_unitario = Decimal(str(detalle_data['precio_unitario']))
+            DetallePresupuesto.objects.create(
+                presupuesto=instance,
+                producto=producto_obj,
+                cantidad=cantidad,
+                precio_unitario=precio_unitario,
+                subtotal=precio_unitario * cantidad,
+            )
+
+        return instance
 
 
 # Serializers para Facturación

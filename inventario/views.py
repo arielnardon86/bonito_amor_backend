@@ -5203,8 +5203,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             story.append(Paragraph(f"<b>CAE:</b> {factura.cae}", normal_style))
         if factura.fecha_vencimiento_cae:
             story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
+        if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
+            story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
         story.append(Spacer(1, 12))
-        
+
         # Datos del cliente
         story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
         story.append(Paragraph(f"<b>Nombre:</b> {factura.cliente_nombre}", normal_style))
@@ -6408,10 +6410,10 @@ class RubroViewSet(viewsets.ModelViewSet):
 
 class PresupuestoViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ['get', 'post', 'head', 'options']
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     def get_serializer_class(self):
-        if self.action == 'create':
+        if self.action in ('create', 'update', 'partial_update'):
             return PresupuestoCreateSerializer
         return PresupuestoSerializer
 
@@ -6435,10 +6437,43 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
         if id_busqueda:
             qs = qs.filter(id__istartswith=id_busqueda.strip())
 
+        cliente_busqueda = self.request.query_params.get('cliente')
+        if cliente_busqueda:
+            qs = qs.filter(
+                models.Q(cliente__nombre_razon_social__icontains=cliente_busqueda) |
+                models.Q(cliente__cuit_cuil__icontains=cliente_busqueda)
+            )
+
+        fecha_desde = self.request.query_params.get('fecha_desde')
+        if fecha_desde:
+            qs = qs.filter(fecha_creacion__date__gte=fecha_desde)
+
+        fecha_hasta = self.request.query_params.get('fecha_hasta')
+        if fecha_hasta:
+            qs = qs.filter(fecha_creacion__date__lte=fecha_hasta)
+
+        estado = self.request.query_params.get('estado')
+        if estado:
+            qs = qs.filter(estado=estado)
+
         return qs
 
     def perform_create(self, serializer):
         serializer.save()
+
+    def perform_update(self, serializer):
+        if serializer.instance.estado != 'PENDIENTE':
+            raise drf_serializers.ValidationError(
+                "Solo se puede modificar un presupuesto mientras está Pendiente."
+            )
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.estado == 'CONVERTIDO':
+            raise drf_serializers.ValidationError(
+                "No se puede eliminar un presupuesto ya convertido en venta."
+            )
+        instance.delete()
 
     def _construir_pdf(self, presupuesto):
         buffer = BytesIO()
@@ -6472,6 +6507,8 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
 
         story.append(Paragraph(f"<b>Fecha:</b> {presupuesto.fecha_creacion.strftime('%d/%m/%Y %H:%M')}", normal_style))
         story.append(Paragraph(f"<b>Nº de Presupuesto:</b> {presupuesto.id}", normal_style))
+        if presupuesto.fecha_vigencia:
+            story.append(Paragraph(f"<b>Válido hasta:</b> {presupuesto.fecha_vigencia.strftime('%d/%m/%Y')}", normal_style))
         story.append(Spacer(1, 12))
 
         story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
@@ -6494,30 +6531,33 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
                 f"${detalle.subtotal:.2f}",
             ])
 
+        cantidad_items = len(data) - 1  # sin contar la fila de encabezado
+
         data.append(['', '', '', ''])
-        data.append(['', '', '<b>Subtotal:</b>', f"${subtotal_bruto:.2f}"])
+        inicio_totales = len(data)  # primera fila de la sección de totales (la separadora)
+        data.append(['', '', 'Subtotal:', f"${subtotal_bruto:.2f}"])
 
         if presupuesto.descuento_monto and presupuesto.descuento_monto > 0:
-            label = '<b>Descuento'
+            label = 'Descuento'
             if presupuesto.descuento_porcentaje and presupuesto.descuento_porcentaje > 0:
                 label += f' ({presupuesto.descuento_porcentaje}%)'
-            label += ':</b>'
+            label += ':'
             data.append(['', '', label, f"-${presupuesto.descuento_monto:.2f}"])
         elif presupuesto.descuento_porcentaje and presupuesto.descuento_porcentaje > 0:
             monto = subtotal_bruto * (presupuesto.descuento_porcentaje / Decimal('100'))
-            data.append(['', '', f'<b>Descuento ({presupuesto.descuento_porcentaje}%):</b>', f"-${monto:.2f}"])
+            data.append(['', '', f'Descuento ({presupuesto.descuento_porcentaje}%):', f"-${monto:.2f}"])
 
         if presupuesto.recargo_monto and presupuesto.recargo_monto > 0:
-            label = '<b>Recargo'
+            label = 'Recargo'
             if presupuesto.recargo_porcentaje and presupuesto.recargo_porcentaje > 0:
                 label += f' ({presupuesto.recargo_porcentaje}%)'
-            label += ':</b>'
+            label += ':'
             data.append(['', '', label, f"+${presupuesto.recargo_monto:.2f}"])
         elif presupuesto.recargo_porcentaje and presupuesto.recargo_porcentaje > 0:
             monto = subtotal_bruto * (presupuesto.recargo_porcentaje / Decimal('100'))
-            data.append(['', '', f'<b>Recargo ({presupuesto.recargo_porcentaje}%):</b>', f"+${monto:.2f}"])
+            data.append(['', '', f'Recargo ({presupuesto.recargo_porcentaje}%):', f"+${monto:.2f}"])
 
-        data.append(['', '', '<b>TOTAL:</b>', f"<b>${Decimal(str(presupuesto.total)):.2f}</b>"])
+        data.append(['', '', 'TOTAL:', f"${Decimal(str(presupuesto.total)):.2f}"])
 
         table = Table(data, colWidths=[20 * mm, 100 * mm, 30 * mm, 30 * mm])
         table.setStyle(TableStyle([
@@ -6527,11 +6567,11 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -4), colors.beige),
+            ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ALIGN', (2, -3), (-1, -1), 'RIGHT'),
-            ('FONTNAME', (2, -3), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (2, -3), (-1, -1), 10),
+            ('ALIGN', (2, inicio_totales), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (2, inicio_totales), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (2, inicio_totales), (-1, -1), 10),
         ]))
         story.append(table)
         story.append(Spacer(1, 20))

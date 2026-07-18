@@ -331,7 +331,7 @@ MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
 # En Render configurar:
 #   EMAIL_HOST_PASSWORD  → contraseña de aplicación de Zoho
 #   EMAIL_HOST_USER      → info@totalstock.com.ar  (ya tiene default)
-EMAIL_BACKEND     = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND     = 'mi_tienda_backend.email_backend.EmailBackend'
 EMAIL_HOST        = 'smtp.zoho.com'
 EMAIL_PORT        = 587
 EMAIL_USE_TLS     = True
