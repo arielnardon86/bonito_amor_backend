@@ -75,7 +75,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -153,6 +153,7 @@ from .serializers import (
     ClienteSerializer, MovimientoCuentaCorrienteSerializer,
     calcular_saldo_pendiente,
     RubroSerializer,
+    PresupuestoSerializer, PresupuestoCreateSerializer,
 )
 # Importación condicional de serializers de ArancelMercadoLibre
 try:
@@ -6401,6 +6402,215 @@ class RubroViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(tienda__nombre=tienda_slug)
 
         return qs
+
+
+# ── Presupuestos ──────────────────────────────────────────────────────────────
+
+class PresupuestoViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return PresupuestoCreateSerializer
+        return PresupuestoSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Presupuesto.objects.select_related('tienda', 'cliente', 'usuario').prefetch_related('detalles__producto')
+        tienda_slug = self.request.query_params.get('tienda_slug')
+
+        if user.is_superuser:
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+        else:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return Presupuesto.objects.none()
+            qs = qs.filter(tienda__pk__in=tiendas_ids)
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+
+        id_busqueda = self.request.query_params.get('id')
+        if id_busqueda:
+            qs = qs.filter(id__istartswith=id_busqueda.strip())
+
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def _construir_pdf(self, presupuesto):
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'PresupuestoTitle', parent=styles['Heading1'], fontSize=16,
+            textColor=colors.HexColor('#000000'), spaceAfter=12, alignment=1
+        )
+        subtitle_style = ParagraphStyle(
+            'PresupuestoSubtitle', parent=styles['Heading2'], fontSize=14,
+            textColor=colors.HexColor('#000000'), spaceAfter=8, alignment=1
+        )
+        normal_style = styles['Normal']
+        normal_style.fontSize = 10
+        normal_style.textColor = colors.HexColor('#000000')
+
+        story = []
+        tienda = presupuesto.tienda
+        cliente = presupuesto.cliente
+
+        story.append(Paragraph(f"<b>{tienda.nombre}</b>", title_style))
+        story.append(Paragraph("PRESUPUESTO", subtitle_style))
+        story.append(Spacer(1, 12))
+
+        if tienda.cuit:
+            story.append(Paragraph(f"<b>CUIT:</b> {tienda.cuit}", normal_style))
+        if tienda.direccion:
+            story.append(Paragraph(f"<b>Domicilio:</b> {tienda.direccion}", normal_style))
+        story.append(Spacer(1, 12))
+
+        story.append(Paragraph(f"<b>Fecha:</b> {presupuesto.fecha_creacion.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        story.append(Paragraph(f"<b>Nº de Presupuesto:</b> {presupuesto.id}", normal_style))
+        story.append(Spacer(1, 12))
+
+        story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
+        story.append(Paragraph(f"<b>Nombre:</b> {cliente.nombre_razon_social}", normal_style))
+        story.append(Paragraph(f"<b>CUIT/DNI:</b> {cliente.cuit_cuil}", normal_style))
+        if cliente.email:
+            story.append(Paragraph(f"<b>Email:</b> {cliente.email}", normal_style))
+        story.append(Spacer(1, 12))
+
+        data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
+        subtotal_bruto = Decimal('0.00')
+        for detalle in presupuesto.detalles.all():
+            producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
+            precio_unitario = Decimal(str(detalle.precio_unitario))
+            subtotal_bruto += precio_unitario * Decimal(str(detalle.cantidad))
+            data.append([
+                str(detalle.cantidad),
+                producto_nombre,
+                f"${precio_unitario:.2f}",
+                f"${detalle.subtotal:.2f}",
+            ])
+
+        data.append(['', '', '', ''])
+        data.append(['', '', '<b>Subtotal:</b>', f"${subtotal_bruto:.2f}"])
+
+        if presupuesto.descuento_monto and presupuesto.descuento_monto > 0:
+            label = '<b>Descuento'
+            if presupuesto.descuento_porcentaje and presupuesto.descuento_porcentaje > 0:
+                label += f' ({presupuesto.descuento_porcentaje}%)'
+            label += ':</b>'
+            data.append(['', '', label, f"-${presupuesto.descuento_monto:.2f}"])
+        elif presupuesto.descuento_porcentaje and presupuesto.descuento_porcentaje > 0:
+            monto = subtotal_bruto * (presupuesto.descuento_porcentaje / Decimal('100'))
+            data.append(['', '', f'<b>Descuento ({presupuesto.descuento_porcentaje}%):</b>', f"-${monto:.2f}"])
+
+        if presupuesto.recargo_monto and presupuesto.recargo_monto > 0:
+            label = '<b>Recargo'
+            if presupuesto.recargo_porcentaje and presupuesto.recargo_porcentaje > 0:
+                label += f' ({presupuesto.recargo_porcentaje}%)'
+            label += ':</b>'
+            data.append(['', '', label, f"+${presupuesto.recargo_monto:.2f}"])
+        elif presupuesto.recargo_porcentaje and presupuesto.recargo_porcentaje > 0:
+            monto = subtotal_bruto * (presupuesto.recargo_porcentaje / Decimal('100'))
+            data.append(['', '', f'<b>Recargo ({presupuesto.recargo_porcentaje}%):</b>', f"+${monto:.2f}"])
+
+        data.append(['', '', '<b>TOTAL:</b>', f"<b>${Decimal(str(presupuesto.total)):.2f}</b>"])
+
+        table = Table(data, colWidths=[20 * mm, 100 * mm, 30 * mm, 30 * mm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -4), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (2, -3), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (2, -3), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (2, -3), (-1, -1), 10),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 20))
+
+        if presupuesto.metodo_pago_sugerido:
+            story.append(Paragraph(f"<b>Medio de pago sugerido:</b> {presupuesto.metodo_pago_sugerido}", normal_style))
+        if presupuesto.notas:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(f"<b>Notas:</b> {presupuesto.notas}", normal_style))
+
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("<i>Presupuesto sin validez fiscal. Precios sujetos a modificación.</i>", normal_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def pdf(self, request, pk=None):
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_501_NOT_IMPLEMENTED
+            )
+        presupuesto = self.get_object()
+        buffer = self._construir_pdf(presupuesto)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="presupuesto_{presupuesto.id}.pdf"'
+        return response
+
+    @action(detail=True, methods=['post'], url_path='enviar-email', url_name='enviar-email')
+    def enviar_email(self, request, pk=None):
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_501_NOT_IMPLEMENTED
+            )
+        presupuesto = self.get_object()
+        email = (request.data.get('email') or presupuesto.cliente.email or '').strip()
+        if not email:
+            return Response(
+                {"error": "No hay un email de destino. Indicá uno o cargalo en la ficha del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        buffer = self._construir_pdf(presupuesto)
+
+        from django.core.mail import EmailMultiAlternatives
+        from django.conf import settings as dj_settings
+
+        subject = f"[{presupuesto.tienda.nombre}] Presupuesto Nº {presupuesto.id}"
+        texto = (
+            f"Hola {presupuesto.cliente.nombre_razon_social},\n\n"
+            f"Te enviamos el presupuesto Nº {presupuesto.id} generado por {presupuesto.tienda.nombre}.\n"
+            f"Total: ${presupuesto.total}\n\n"
+            "Adjuntamos el detalle en PDF."
+        )
+        html = f"""<!DOCTYPE html><html lang="es"><body>
+<p>Hola {presupuesto.cliente.nombre_razon_social},</p>
+<p>Te enviamos el presupuesto Nº <b>{presupuesto.id}</b> generado por <b>{presupuesto.tienda.nombre}</b>.</p>
+<p>Total: <b>${presupuesto.total}</b></p>
+<p>Adjuntamos el detalle en PDF.</p>
+</body></html>"""
+
+        try:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=texto,
+                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+                to=[email],
+            )
+            msg.attach_alternative(html, 'text/html')
+            msg.attach(f'presupuesto_{presupuesto.id}.pdf', buffer.getvalue(), 'application/pdf')
+            msg.send(fail_silently=False)
+        except Exception as e:
+            logger.error("Presupuesto.enviar_email: error enviando a %s: %s", email, e)
+            return Response({"error": f"No se pudo enviar el email: {e}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'ok': True, 'mensaje': f'Presupuesto enviado a {email}.'})
 
 
 # ── Registro público + Suscripciones ─────────────────────────────────────────

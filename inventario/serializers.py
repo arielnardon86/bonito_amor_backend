@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -545,6 +545,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     arancel_combinado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True,
         help_text="Suma de aranceles de todos los métodos en un pago combinado")
     cambio_devolucion_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del cambio/devolución relacionado (para ventas por diferencia)")
+    presupuesto_id = serializers.UUIDField(required=False, allow_null=True, write_only=True, help_text="ID del presupuesto que se está convirtiendo en venta")
     cliente_id = serializers.PrimaryKeyRelatedField(
         source='cliente', queryset=Cliente.objects.all(), required=False, allow_null=True, write_only=True,
         help_text="Cliente asociado a la venta. Obligatorio si metodo_pago='Cuenta Corriente'."
@@ -568,7 +569,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
-            'cliente_id',
+            'presupuesto_id', 'cliente_id',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -695,6 +696,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         cambio_devolucion_id = validated_data.pop('cambio_devolucion_id', None)
+        presupuesto_id = validated_data.pop('presupuesto_id', None)
         cliente_obj = validated_data.pop('cliente', None)
 
         arancel_aplicado = validated_data.pop('arancel_aplicado', None)
@@ -833,7 +835,21 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             except Exception as e:
                 import logging as _logging
                 _logging.getLogger(__name__).warning("Error al vincular venta %s con CambioDevolucion %s: %s", venta.id, cambio_devolucion_id, e)
-        
+
+        # Si viene de un presupuesto, marcarlo como convertido y linkear la venta generada
+        if presupuesto_id:
+            try:
+                from .models import Presupuesto as _Presupuesto
+                presupuesto = _Presupuesto.objects.get(id=presupuesto_id)
+                presupuesto.estado = 'CONVERTIDO'
+                presupuesto.venta_generada = venta
+                presupuesto.save(update_fields=['estado', 'venta_generada', 'fecha_actualizacion'])
+            except _Presupuesto.DoesNotExist:
+                pass
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("Error al vincular venta %s con Presupuesto %s: %s", venta.id, presupuesto_id, e)
+
         for detalle_data in detalles_data:
             producto_id = detalle_data['producto'] 
             cantidad = detalle_data['cantidad']
@@ -868,6 +884,174 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             logger.error(f"Error al enviar notificaciones push para venta {venta.id}: {str(e)}")
 
         return venta
+
+
+# ── Presupuestos ──────────────────────────────────────────────────────────────
+
+class DetallePresupuestoSerializer(serializers.ModelSerializer):
+    producto = ProductoSerializer(read_only=True)
+
+    class Meta:
+        model = DetallePresupuesto
+        fields = ['id', 'producto', 'cantidad', 'precio_unitario', 'subtotal']
+        read_only_fields = fields
+
+
+class PresupuestoSerializer(serializers.ModelSerializer):
+    detalles = DetallePresupuestoSerializer(many=True, read_only=True)
+    cliente_nombre = serializers.CharField(source='cliente.nombre_razon_social', read_only=True)
+    cliente_cuit = serializers.CharField(source='cliente.cuit_cuil', read_only=True)
+    cliente_email = serializers.CharField(source='cliente.email', read_only=True)
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    usuario_nombre = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+
+    class Meta:
+        model = Presupuesto
+        fields = [
+            'id', 'tienda', 'tienda_nombre', 'cliente', 'cliente_nombre', 'cliente_cuit', 'cliente_email',
+            'usuario', 'usuario_nombre', 'estado', 'estado_display', 'metodo_pago_sugerido',
+            'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto', 'total',
+            'venta_generada', 'notas', 'fecha_creacion', 'fecha_actualizacion', 'detalles',
+        ]
+        read_only_fields = ['id', 'estado', 'venta_generada', 'fecha_creacion', 'fecha_actualizacion']
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.username if obj.usuario else 'N/A'
+
+
+class PresupuestoCreateSerializer(serializers.ModelSerializer):
+    detalles = serializers.ListField(child=serializers.DictField(), write_only=True)
+    tienda_slug = serializers.CharField(write_only=True)
+    # A diferencia de Venta, el cliente es obligatorio: todo presupuesto se genera para alguien puntual.
+    cliente_id = serializers.PrimaryKeyRelatedField(
+        source='cliente', queryset=Cliente.objects.all(), write_only=True,
+        help_text="Cliente para el que se genera el presupuesto (obligatorio)."
+    )
+
+    class Meta:
+        model = Presupuesto
+        fields = [
+            'id', 'tienda_slug', 'cliente_id', 'detalles',
+            'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto',
+            'metodo_pago_sugerido', 'notas',
+        ]
+        extra_kwargs = {
+            'descuento_porcentaje': {'required': False},
+            'descuento_monto': {'required': False},
+            'recargo_porcentaje': {'required': False},
+            'recargo_monto': {'required': False},
+            'metodo_pago_sugerido': {'required': False, 'allow_null': True, 'allow_blank': True},
+            'notas': {'required': False, 'allow_null': True, 'allow_blank': True},
+        }
+
+    def validate(self, data):
+        detalles_data = data.get('detalles', [])
+        tienda_slug = data.get('tienda_slug')
+        cliente = data.get('cliente')
+
+        if not detalles_data:
+            raise serializers.ValidationError({"detalles": "El presupuesto debe tener al menos un producto."})
+        if not tienda_slug:
+            raise serializers.ValidationError({"tienda_slug": "El slug de la tienda es obligatorio."})
+        if not cliente:
+            raise serializers.ValidationError({"cliente_id": "Debe seleccionar un cliente para generar el presupuesto."})
+
+        try:
+            tienda_obj = get_object_or_404(Tienda, nombre=tienda_slug)
+        except Tienda.DoesNotExist:
+            raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
+
+        if cliente.tienda_id != tienda_obj.id:
+            raise serializers.ValidationError({"cliente_id": "El cliente seleccionado no pertenece a la tienda actual."})
+
+        data['tienda'] = tienda_obj
+
+        calculated_subtotal = Decimal('0.00')
+        for detalle_data in detalles_data:
+            producto_id = detalle_data.get('producto')
+            cantidad = detalle_data.get('cantidad')
+            precio_unitario = detalle_data.get('precio_unitario')
+
+            if not all([producto_id, cantidad, precio_unitario is not None]):
+                raise serializers.ValidationError({"detalles": "Cada detalle debe tener 'producto', 'cantidad' y 'precio_unitario'."})
+
+            try:
+                Producto.objects.get(id=producto_id, tienda=tienda_obj)
+            except Producto.DoesNotExist:
+                raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado en la tienda {tienda_slug}."})
+
+            if Decimal(str(precio_unitario)) < 0:
+                raise serializers.ValidationError({"detalles": "El precio unitario no puede ser negativo."})
+            if int(cantidad) <= 0:
+                raise serializers.ValidationError({"detalles": "La cantidad debe ser mayor a 0."})
+
+            # No se valida ni descuenta stock: un presupuesto es una cotización, no una operación de inventario.
+            calculated_subtotal += Decimal(str(precio_unitario)) * int(cantidad)
+
+        descuento_porcentaje = data.get('descuento_porcentaje') or Decimal('0.00')
+        descuento_monto = data.get('descuento_monto') or Decimal('0.00')
+        recargo_porcentaje = data.get('recargo_porcentaje') or Decimal('0.00')
+        recargo_monto = data.get('recargo_monto') or Decimal('0.00')
+
+        ajustes_aplicados = [a for a in [descuento_monto, descuento_porcentaje, recargo_monto, recargo_porcentaje] if a > Decimal('0.00')]
+        if len(ajustes_aplicados) > 1:
+            raise serializers.ValidationError({"ajustes": "Solo se puede aplicar un tipo de ajuste (descuento o recargo) a la vez."})
+
+        if recargo_monto > 0:
+            data['total'] = calculated_subtotal + recargo_monto
+        elif recargo_porcentaje > 0:
+            data['total'] = calculated_subtotal * (Decimal('1') + recargo_porcentaje / Decimal('100'))
+        elif descuento_monto > 0:
+            data['total'] = max(Decimal('0.00'), calculated_subtotal - descuento_monto)
+        elif descuento_porcentaje > 0:
+            data['total'] = calculated_subtotal * (Decimal('1') - descuento_porcentaje / Decimal('100'))
+        else:
+            data['total'] = calculated_subtotal
+
+        return data
+
+    def create(self, validated_data):
+        detalles_data = validated_data.pop('detalles')
+        tienda_obj = validated_data.pop('tienda')
+        cliente_obj = validated_data.pop('cliente')
+
+        # Mismo criterio que VentaCreateSerializer: request.user puede ser un TokenUser de SimpleJWT.
+        user = self.context['request'].user
+        user_obj = None
+        if user and not user.is_anonymous:
+            try:
+                user_obj = User.objects.get(pk=user.pk)
+            except (AttributeError, User.DoesNotExist, TypeError, ValueError):
+                user_obj = None
+
+        presupuesto = Presupuesto.objects.create(
+            tienda=tienda_obj,
+            cliente=cliente_obj,
+            usuario=user_obj,
+            total=validated_data.get('total', Decimal('0.00')),
+            descuento_porcentaje=validated_data.get('descuento_porcentaje') or Decimal('0.00'),
+            descuento_monto=validated_data.get('descuento_monto') or Decimal('0.00'),
+            recargo_porcentaje=validated_data.get('recargo_porcentaje') or Decimal('0.00'),
+            recargo_monto=validated_data.get('recargo_monto') or Decimal('0.00'),
+            metodo_pago_sugerido=validated_data.get('metodo_pago_sugerido') or None,
+            notas=validated_data.get('notas') or None,
+        )
+
+        for detalle_data in detalles_data:
+            producto_obj = Producto.objects.get(id=detalle_data['producto'])
+            cantidad = int(detalle_data['cantidad'])
+            precio_unitario = Decimal(str(detalle_data['precio_unitario']))
+            DetallePresupuesto.objects.create(
+                presupuesto=presupuesto,
+                producto=producto_obj,
+                cantidad=cantidad,
+                precio_unitario=precio_unitario,
+                subtotal=precio_unitario * cantidad,
+            )
+
+        return presupuesto
+
 
 # Serializers para Facturación
 class FacturaSerializer(serializers.ModelSerializer):

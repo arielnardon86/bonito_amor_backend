@@ -636,6 +636,74 @@ class DetalleVenta(models.Model):
     def __str__(self):
         return f"Detalle {self.id} - Venta {self.venta.id} - Producto: {self.producto.nombre if self.producto else 'N/A'} - Cantidad: {self.cantidad}"
 
+
+# ── Presupuestos (cotizaciones) ───────────────────────────────────────────────
+
+class Presupuesto(models.Model):
+    ESTADO_CHOICES = [
+        ('PENDIENTE', 'Pendiente'),
+        ('CONVERTIDO', 'Convertido en Venta'),
+        ('CANCELADO', 'Cancelado'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='presupuestos')
+    # El cliente es obligatorio: a diferencia de Venta, todo presupuesto se genera para alguien puntual.
+    cliente = models.ForeignKey('Cliente', on_delete=models.PROTECT, related_name='presupuestos')
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='presupuestos_generados',
+    )
+
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
+    metodo_pago_sugerido = models.CharField(max_length=100, blank=True, null=True)
+
+    descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    recargo_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    recargo_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    # Se completa cuando el presupuesto se convierte en una venta real (no descuenta stock antes de eso).
+    venta_generada = models.ForeignKey(
+        'Venta', on_delete=models.SET_NULL, null=True, blank=True, related_name='presupuesto_origen',
+    )
+
+    notas = models.TextField(blank=True, null=True)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Presupuesto"
+        verbose_name_plural = "Presupuestos"
+        ordering = ['-fecha_creacion']
+        indexes = [
+            models.Index(fields=['tienda', 'fecha_creacion'], name='presupuesto_tienda_fecha_idx'),
+        ]
+
+    def __str__(self):
+        return f"Presupuesto {self.id} - {self.cliente.nombre_razon_social} - ${self.total}"
+
+
+class DetallePresupuesto(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    presupuesto = models.ForeignKey(Presupuesto, on_delete=models.CASCADE, related_name='detalles')
+    producto = models.ForeignKey(Producto, on_delete=models.SET_NULL, null=True, blank=True, related_name='detalles_presupuesto')
+    cantidad = models.IntegerField(default=1)
+    # Precio "congelado" al momento de cotizar (no se recalcula si el producto cambia de precio después).
+    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Detalle de Presupuesto"
+        verbose_name_plural = "Detalles de Presupuesto"
+        ordering = ['id']
+
+    def __str__(self):
+        return f"Detalle {self.id} - Presupuesto {self.presupuesto_id} - Producto: {self.producto.nombre if self.producto else 'N/A'}"
+# ------------------------------------------------
+
 # --- MODELO PARA REGISTRO DE COMPRAS ---
 
 class Compra(models.Model):
@@ -1207,4 +1275,5 @@ __all__ = [
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
     'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',
     'Cliente', 'MovimientoCuentaCorriente', 'Rubro',
+    'Presupuesto', 'DetallePresupuesto',
 ]
