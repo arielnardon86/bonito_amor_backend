@@ -1193,23 +1193,60 @@ def calcular_saldo_pendiente(cliente):
     return total or Decimal('0.00')
 
 
+def obtener_deuda_vencida_info(cliente):
+    """
+    Determina si un cliente tiene deuda vencida: saldo pendiente > 0 y al menos una
+    venta a Cuenta Corriente cuya fecha_limite_pago ya pasó. No hace asignación FIFO
+    de pagos a ventas puntuales (el libro de movimientos es un saldo corrido, no por
+    comprobante) — es una señal de alerta, no un cálculo exacto de qué venta está impaga.
+
+    Retorna (tiene_deuda_vencida: bool, fecha_vencimiento_mas_antigua: date | None).
+    """
+    if calcular_saldo_pendiente(cliente) <= 0:
+        return False, None
+    hoy = timezone.now().date()
+    venta_vencida = Venta.objects.filter(
+        cliente=cliente, metodo_pago='Cuenta Corriente', anulada=False,
+        fecha_limite_pago__lt=hoy,
+    ).order_by('fecha_limite_pago').first()
+    if not venta_vencida:
+        return False, None
+    return True, venta_vencida.fecha_limite_pago
+
+
 class ClienteSerializer(serializers.ModelSerializer):
     tienda_slug = serializers.SlugRelatedField(
         source='tienda', slug_field='nombre', queryset=Tienda.objects.all(), write_only=True
     )
     saldo_pendiente = serializers.SerializerMethodField()
+    tiene_deuda_vencida = serializers.SerializerMethodField()
+    fecha_vencimiento_mas_antigua = serializers.SerializerMethodField()
 
     class Meta:
         model = Cliente
         fields = [
             'id', 'tienda_slug', 'nombre_razon_social', 'cuit_cuil',
             'direccion', 'telefono', 'email', 'activo', 'saldo_pendiente',
+            'tiene_deuda_vencida', 'fecha_vencimiento_mas_antigua',
             'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion']
 
     def get_saldo_pendiente(self, obj):
         return str(calcular_saldo_pendiente(obj))
+
+    def _deuda_vencida_info(self, obj):
+        # Cachea en la instancia: get_tiene_deuda_vencida y get_fecha_vencimiento_mas_antigua
+        # se llaman por separado para el mismo obj, evita duplicar la consulta.
+        if not hasattr(obj, '_deuda_vencida_cache'):
+            obj._deuda_vencida_cache = obtener_deuda_vencida_info(obj)
+        return obj._deuda_vencida_cache
+
+    def get_tiene_deuda_vencida(self, obj):
+        return self._deuda_vencida_info(obj)[0]
+
+    def get_fecha_vencimiento_mas_antigua(self, obj):
+        return self._deuda_vencida_info(obj)[1]
 
 
 class MovimientoCuentaCorrienteSerializer(serializers.ModelSerializer):

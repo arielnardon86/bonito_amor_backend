@@ -151,7 +151,7 @@ from .serializers import (
     ArancelMetodoTiendaCreateSerializer,
     CierreCajaSerializer, EgresoCajaSerializer,
     ClienteSerializer, MovimientoCuentaCorrienteSerializer,
-    calcular_saldo_pendiente,
+    calcular_saldo_pendiente, obtener_deuda_vencida_info,
     RubroSerializer,
     PresupuestoSerializer, PresupuestoCreateSerializer,
 )
@@ -6297,12 +6297,22 @@ class ClienteViewSet(viewsets.ModelViewSet):
             'tienda', 'usuario', 'arancel_aplicado', 'factura'
         ).prefetch_related('detalles__producto').order_by('-fecha_venta')
         movimientos = cliente.movimientos_cuenta_corriente.all().order_by('-fecha')
+        tiene_deuda_vencida, fecha_vencimiento_mas_antigua = obtener_deuda_vencida_info(cliente)
         return Response({
             'saldo_pendiente': str(calcular_saldo_pendiente(cliente)),
+            'tiene_deuda_vencida': tiene_deuda_vencida,
+            'fecha_vencimiento_mas_antigua': fecha_vencimiento_mas_antigua,
             # Serializer completo: permite reimprimir el recibo de cada consumo igual que en Listado de Ventas.
             'ventas': VentaSerializer(ventas, many=True, context={'request': request}).data,
             'movimientos': MovimientoCuentaCorrienteSerializer(movimientos, many=True).data,
         })
+
+    @action(detail=False, methods=['get'])
+    def deuda_vencida(self, request):
+        """Clientes con saldo pendiente y al menos una venta a Cuenta Corriente vencida (para la alerta)."""
+        clientes_con_deuda = [c for c in self.get_queryset() if obtener_deuda_vencida_info(c)[0]]
+        serializer = ClienteSerializer(clientes_con_deuda, many=True, context={'request': request})
+        return Response({'count': len(clientes_con_deuda), 'results': serializer.data})
 
     @action(detail=True, methods=['post'])
     def cobrar_deuda(self, request, pk=None):
