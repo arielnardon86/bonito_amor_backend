@@ -277,6 +277,9 @@ class Producto(models.Model):
     codigo_interno = models.CharField(max_length=100, blank=True, null=True)
     # IVA resuelto al momento de cargar/actualizar el producto (por rubro o manual).
     iva_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    # Rubro/categoría opcional (propio de cada tienda). Permite filtrar el listado y
+    # editar precio/IVA/margen de forma masiva para todos los productos del rubro.
+    rubro = models.ForeignKey('Rubro', on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
 
     # Integración con Mercado Libre
     ml_item_id = models.CharField(

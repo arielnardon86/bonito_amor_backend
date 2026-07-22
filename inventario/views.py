@@ -260,6 +260,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
         queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True).distinct()
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
+        rubro_id = self.request.query_params.get('rubro_id', None)
+        if rubro_id:
+            queryset = queryset.filter(rubro_id=rubro_id)
+
         if user.is_superuser:
             if tienda_slug:
                 return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
@@ -379,6 +383,74 @@ class ProductoViewSet(viewsets.ModelViewSet):
         productos = self.get_queryset().filter(stock__gt=0)
         serializer = self.get_serializer(productos, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='editar_masivo')
+    def editar_masivo(self, request):
+        """
+        Edición masiva de precio/IVA para todos los productos (y variantes) de un rubro.
+        Body: {tienda_slug, rubro_id, modo: 'iva'|'margen'|'ajuste_precio', valor}
+          - iva: fija iva_porcentaje = valor para todos los productos del rubro.
+          - margen: recalcula precio = costo_con_iva * (1 + valor%) usando el IVA actual
+            de cada producto (se salta los que no tienen costo cargado).
+          - ajuste_precio: aplica un % de aumento (positivo) o baja (negativo) sobre el
+            precio actual de cada producto, sin tocar costo ni IVA.
+        """
+        from decimal import InvalidOperation
+
+        if self.request.user.is_supervisor and not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Los supervisores no pueden editar precios de productos.")
+
+        tienda_slug = request.data.get('tienda_slug')
+        rubro_id = request.data.get('rubro_id')
+        modo = request.data.get('modo')
+        valor = request.data.get('valor')
+
+        if not tienda_slug or not rubro_id or modo not in ('iva', 'margen', 'ajuste_precio') or valor is None:
+            return Response(
+                {"error": "Faltan parámetros: tienda_slug, rubro_id, modo ('iva'|'margen'|'ajuste_precio') y valor."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({"error": "Tienda no encontrada o no autorizada."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            valor_decimal = Decimal(str(valor))
+        except (InvalidOperation, TypeError):
+            return Response({"error": "Valor inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not Rubro.objects.filter(id=rubro_id, tienda=tienda).exists():
+            return Response({"error": "Rubro no encontrado en esta tienda."}, status=status.HTTP_404_NOT_FOUND)
+
+        productos = Producto.objects.filter(tienda=tienda, rubro_id=rubro_id)
+        actualizados = 0
+        omitidos = 0
+
+        if modo == 'iva':
+            if valor_decimal < 0 or valor_decimal > 100:
+                return Response({"error": "El IVA debe estar entre 0 y 100%."}, status=status.HTTP_400_BAD_REQUEST)
+            actualizados = productos.update(iva_porcentaje=valor_decimal)
+        elif modo == 'margen':
+            for producto in productos:
+                if producto.costo is None:
+                    omitidos += 1
+                    continue
+                iva_actual = producto.iva_porcentaje or Decimal('0.00')
+                costo_con_iva = producto.costo * (Decimal('1') + iva_actual / Decimal('100'))
+                nuevo_precio = costo_con_iva * (Decimal('1') + valor_decimal / Decimal('100'))
+                producto.precio = max(Decimal('0.00'), nuevo_precio).quantize(Decimal('0.01'))
+                producto.save(update_fields=['precio'])
+                actualizados += 1
+        elif modo == 'ajuste_precio':
+            for producto in productos:
+                nuevo_precio = producto.precio * (Decimal('1') + valor_decimal / Decimal('100'))
+                producto.precio = max(Decimal('0.00'), nuevo_precio).quantize(Decimal('0.01'))
+                producto.save(update_fields=['precio'])
+                actualizados += 1
+
+        return Response({'actualizados': actualizados, 'omitidos': omitidos})
 
     @action(detail=False, methods=['post'], url_path='carga_masiva')
     def carga_masiva(self, request):
