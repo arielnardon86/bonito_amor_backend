@@ -7209,6 +7209,15 @@ def verificar_pago_pendiente(request):
     if suscripcion.esta_activa:
         return Response({'estado': suscripcion.estado, 'activa': True})
 
+    # Preapprovals ya vinculados a OTRAS tiendas: se excluyen de la búsqueda por plan+email
+    # de más abajo. Sin esto, a medida que se suman tiendas al mismo plan, cada vez hay más
+    # candidatos "authorized" ambiguos y el fallback de "único candidato" deja de servir.
+    ids_ya_vinculados = set(
+        Suscripcion.objects.exclude(pk=suscripcion.pk)
+        .exclude(mp_preapproval_id__isnull=True).exclude(mp_preapproval_id='')
+        .values_list('mp_preapproval_id', flat=True)
+    )
+
     # Aceptar preapproval_id directo desde el frontend (viene de la URL de MP)
     preapproval_id_directo = (request.data.get('preapproval_id') or '').strip()
     preapproval_id = suscripcion.mp_preapproval_id or preapproval_id_directo
@@ -7290,6 +7299,12 @@ def verificar_pago_pendiente(request):
 
             for pa in resultados:
                 if pa.get('status') != 'authorized':
+                    continue
+                if str(pa.get('id', '')) in ids_ya_vinculados:
+                    logger.info(
+                        "verificar_pago_pendiente: candidato %s descartado (ya vinculado a otra tienda)",
+                        pa.get('id'),
+                    )
                     continue
                 # GET individual para obtener payer_email completo
                 try:
@@ -7384,6 +7399,12 @@ def verificar_pago_pendiente(request):
             r2.raise_for_status()
             for pa in r2.json().get('results', []):
                 if pa.get('status') != 'authorized':
+                    continue
+                if str(pa.get('id', '')) in ids_ya_vinculados:
+                    logger.info(
+                        "verificar_pago_pendiente: candidato re-sub %s descartado (ya vinculado a otra tienda)",
+                        pa.get('id'),
+                    )
                     continue
                 try:
                     det = req_lib.get(f"https://api.mercadopago.com/preapproval/{pa['id']}",
