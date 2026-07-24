@@ -571,6 +571,28 @@ class ProductoViewSet(viewsets.ModelViewSet):
             r.nombre.strip().lower(): r
             for r in Rubro.objects.filter(tienda=tienda)
         }
+        # Códigos de barras ya usados en la tienda, para generar los nuevos en memoria
+        # (import por import) en vez de una query de verificación por producto nuevo.
+        codigos_barras_vistos = set(
+            Producto.objects.filter(tienda=tienda)
+            .exclude(codigo_barras__isnull=True).exclude(codigo_barras='')
+            .values_list('codigo_barras', flat=True)
+        )
+
+        def _generar_codigo_barras_en_memoria():
+            import random
+            import uuid as _uuid
+            for _ in range(30):
+                base = '779' + ''.join(str(random.randint(0, 9)) for _ in range(9))
+                suma = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(base))
+                checksum = (10 - (suma % 10)) % 10
+                codigo = base + str(checksum)
+                if codigo not in codigos_barras_vistos:
+                    codigos_barras_vistos.add(codigo)
+                    return codigo
+            codigo = '779' + str(_uuid.uuid4().int)[:10]
+            codigos_barras_vistos.add(codigo)
+            return codigo
 
         codigos_vistos = {}
         resultados = []
@@ -666,14 +688,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         producto_existente.fecha_ultimo_ingreso = timezone.now()
                         producto_existente.save()
                         actualizados += 1
-                        _registrar_accion(
-                            tienda=tienda, usuario=request.user, accion='ingreso_stock',
-                            detalle=f'Carga masiva: +{cantidad} · {nombre} · stock anterior: {stock_anterior} → nuevo: {nuevo_stock}',
-                            objeto_id=producto_existente.id,
-                        )
                     else:
-                        codigo_final = codigo_barras or _generar_codigo_barras_unico(tienda)
-                        nuevo_producto = Producto.objects.create(
+                        codigo_final = codigo_barras or _generar_codigo_barras_en_memoria()
+                        Producto.objects.create(
                             tienda=tienda,
                             nombre=nombre,
                             codigo_interno=codigo_interno,
@@ -687,11 +704,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         )
                         creados += 1
                         resultado_fila['codigo_barras'] = codigo_final
-                        _registrar_accion(
-                            tienda=tienda, usuario=request.user, accion='ingreso_stock',
-                            detalle=f'Carga masiva: producto nuevo · {nombre} · stock inicial: {cantidad}',
-                            objeto_id=nuevo_producto.id,
-                        )
 
                 resultados.append(resultado_fila)
             except Exception as e:
@@ -702,6 +714,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     'estado': None,
                     'error': str(e),
                 })
+
+        # Un único registro de historial para todo el archivo (no uno por fila): con
+        # archivos de cientos/miles de filas, llamar _registrar_accion en el loop
+        # multiplicaba la consulta de limpieza de historial (>90 días) por cada fila.
+        if modo == 'confirmar' and (creados or actualizados):
+            _registrar_accion(
+                tienda=tienda, usuario=request.user, accion='ingreso_stock',
+                detalle=f'Carga masiva: {creados} producto(s) nuevo(s), {actualizados} repuesto(s) (archivo de {len(filas)} fila(s)).',
+            )
 
         return Response({
             'modo': modo,
