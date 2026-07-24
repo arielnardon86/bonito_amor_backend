@@ -452,6 +452,52 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         return Response({'actualizados': actualizados, 'omitidos': omitidos})
 
+    @action(detail=False, methods=['get'], url_path='exportar')
+    def exportar(self, request):
+        """
+        Devuelve todos los productos de la tienda en el mismo formato de columnas que
+        la plantilla de carga masiva, para poder descargarlos y volver a importarlos
+        (por ejemplo, en otra tienda). El armado del .xlsx se hace en el frontend con
+        la librería xlsx, igual que la plantilla vacía.
+
+        La plantilla de importación no soporta variantes (no tiene columna Talle), así
+        que cada variante se exporta como fila propia con el talle agregado al nombre
+        (ej. "Remera - M") para no perder datos ni chocar con la restricción de
+        nombre+talle único; al reimportar quedan como productos sueltos, no agrupados
+        bajo un padre.
+        """
+        tienda_slug = request.query_params.get('tienda_slug')
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({"error": "Tienda no encontrada o no autorizada."}, status=status.HTTP_404_NOT_FOUND)
+
+        productos = Producto.objects.filter(tienda=tienda).select_related('rubro').prefetch_related('variantes').order_by('nombre')
+
+        filas = []
+        for producto in productos:
+            # Los "padre" que solo agrupan variantes no son un producto vendible en sí:
+            # no se exportan como fila propia, sus variantes ya se exportan por separado.
+            if producto.producto_padre_id is None and producto.variantes.exists():
+                continue
+
+            nombre = producto.nombre
+            if producto.producto_padre_id is not None and producto.talle:
+                nombre = f"{nombre} - {producto.talle}"
+
+            filas.append({
+                'codigo_interno': producto.codigo_interno or '',
+                'nombre': nombre,
+                'rubro': producto.rubro.nombre if producto.rubro_id else '',
+                'iva_porcentaje': str(producto.iva_porcentaje) if producto.iva_porcentaje is not None else '',
+                'costo': str(producto.costo) if producto.costo is not None else '',
+                'precio_venta': str(producto.precio) if producto.precio is not None else '',
+                'margen_porcentaje': '',
+                'cantidad': producto.stock,
+                'codigo_barras': producto.codigo_barras or '',
+            })
+
+        return Response({'productos': filas, 'count': len(filas)})
+
     @action(detail=False, methods=['post'], url_path='carga_masiva')
     def carga_masiva(self, request):
         """
