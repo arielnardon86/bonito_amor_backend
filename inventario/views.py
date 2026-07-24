@@ -7319,11 +7319,18 @@ def verificar_pago_pendiente(request):
                         det_data.get('payer_email', '')
                         or det_data.get('payer', {}).get('email', '')
                     )
+                    det_external_ref = str(det_data.get('external_reference', ''))
                     logger.info(
-                        "verificar_pago_pendiente: candidato %s payer=%s",
-                        pa['id'], det_email,
+                        "verificar_pago_pendiente: candidato %s payer=%s external_ref=%s",
+                        pa['id'], det_email, det_external_ref,
                     )
                     candidatos_authorized.append(det_data)
+                    # Prioridad: external_reference (UUID de la tienda, sin ambigüedad posible)
+                    # por sobre el email, que puede no coincidir con el login de Total Stock
+                    # aunque sea la persona correcta pagando.
+                    if det_external_ref == str(tienda.id):
+                        encontrado = det_data
+                        break
                     if payer_email and det_email.lower() == payer_email.lower():
                         encontrado = det_data
                         break
@@ -7412,8 +7419,15 @@ def verificar_pago_pendiente(request):
                     if det.ok:
                         det_data = det.json()
                         det_email = det_data.get('payer_email', '') or det_data.get('payer', {}).get('email', '')
-                        logger.info("verificar_pago_pendiente: candidato re-sub %s payer=%s", pa['id'], det_email)
+                        det_external_ref = str(det_data.get('external_reference', ''))
+                        logger.info(
+                            "verificar_pago_pendiente: candidato re-sub %s payer=%s external_ref=%s",
+                            pa['id'], det_email, det_external_ref,
+                        )
                         candidatos.append(det_data)
+                        if det_external_ref == str(tienda.id):
+                            datos_mp = det_data
+                            break
                         if payer_email and det_email.lower() == payer_email.lower():
                             datos_mp = det_data
                             break
