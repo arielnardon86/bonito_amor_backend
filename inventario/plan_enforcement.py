@@ -109,7 +109,7 @@ def verificar_limite_usuarios(tienda) -> tuple[bool, dict]:
 # ── Features booleanas ────────────────────────────────────────────────────────
 
 FEATURE_LABELS = {
-    'factura_electronica':   'Factura electrónica (ARCA/AFIP)',
+    'factura_electronica':   'Factura electrónica (ARCA)',
     'ecommerce':             'Integración E-Commerce (Mercado Libre / Tienda Nube)',
 }
 

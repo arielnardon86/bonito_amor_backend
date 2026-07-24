@@ -113,7 +113,7 @@ class TiendaAdmin(admin.ModelAdmin):
                     'condicion_iva_emisor',
                 ),
             }),
-            ('Configuración AFIP', {
+            ('Configuración ARCA', {
                 'fields': (
                     'certificado_afip',
                     'clave_privada_afip',
@@ -327,7 +327,7 @@ class FacturaAdmin(admin.ModelAdmin):
         ('Totales', {
             'fields': ('subtotal', 'impuesto_iva', 'total')
         }),
-        ('Respuesta AFIP/ARCA', {
+        ('Respuesta ARCA', {
             'fields': (
                 'sistema_facturacion', 'cae', 'fecha_vencimiento_cae',
                 'numero_comprobante_afip', 'error_mensaje'

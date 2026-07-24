@@ -1,5 +1,5 @@
 """
-Comando de Django para convertir certificados AFIP a base64
+Comando de Django para convertir certificados ARCA a base64
 Uso: python manage.py convertir_certificados_afip certificado.crt clave.key
 """
 import base64
@@ -8,7 +8,7 @@ from django.core.management.base import BaseCommand
 
 
 class Command(BaseCommand):
-    help = 'Convierte certificados AFIP (.crt y .key) a base64 para almacenarlos en la base de datos'
+    help = 'Convierte certificados ARCA (.crt y .key) a base64 para almacenarlos en la base de datos'
 
     def add_arguments(self, parser):
         parser.add_argument('certificado', type=str, help='Ruta al archivo certificado.crt')
@@ -31,17 +31,17 @@ class Command(BaseCommand):
             
             self.stdout.write(self.style.SUCCESS('\n✅ Certificados convertidos exitosamente\n'))
             self.stdout.write('=' * 80)
-            self.stdout.write('\n📄 CERTIFICADO AFIP (Certificado.crt):')
+            self.stdout.write('\n📄 CERTIFICADO ARCA (Certificado.crt):')
             self.stdout.write('=' * 80)
             self.stdout.write(certificado_base64)
             self.stdout.write('\n' + '=' * 80)
-            self.stdout.write('\n🔐 CLAVE PRIVADA AFIP (Clave.key):')
+            self.stdout.write('\n🔐 CLAVE PRIVADA ARCA (Clave.key):')
             self.stdout.write('=' * 80)
             self.stdout.write(clave_base64)
             self.stdout.write('\n' + '=' * 80)
             self.stdout.write(self.style.SUCCESS('\n✅ Copia y pega estos valores en el admin de Django:\n'))
-            self.stdout.write('   1. Certificado AFIP: pega el primer bloque de texto')
-            self.stdout.write('   2. Clave Privada AFIP: pega el segundo bloque de texto\n')
+            self.stdout.write('   1. Certificado ARCA: pega el primer bloque de texto')
+            self.stdout.write('   2. Clave Privada ARCA: pega el segundo bloque de texto\n')
             
         except FileNotFoundError as e:
             self.stdout.write(self.style.ERROR(f'\n❌ Error: Archivo no encontrado: {e}\n'))

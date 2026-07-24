@@ -24,8 +24,10 @@ class User(AbstractUser):
 # Modelo de Tienda
 class Tienda(models.Model):
     FACTURACION_CHOICES = [
-        ('AFIP', 'AFIP (Administración Federal de Ingresos Públicos)'),
-        ('ARCA', 'ARCA (Administración de Recursos de la Administración Nacional)'),
+        # El valor interno 'AFIP' se conserva por compatibilidad (es el que efectivamente
+        # implementa facturacion_service.py); la etiqueta ya refleja el nombre actual del organismo.
+        ('AFIP', 'ARCA (ex AFIP) — Agencia de Recaudación y Control Aduanero'),
+        ('ARCA', 'ARCA (alternativa, sin integración implementada)'),
         ('NINGUNA', 'Sin facturación electrónica'),
     ]
     
@@ -37,7 +39,7 @@ class Tienda(models.Model):
     
     # Campos fiscales para facturación
     cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")
-    punto_venta = models.IntegerField(default=1, help_text="Punto de venta AFIP/ARCA")
+    punto_venta = models.IntegerField(default=1, help_text="Punto de venta ARCA")
     tipo_facturacion = models.CharField(max_length=10, choices=FACTURACION_CHOICES, default='NINGUNA', help_text="Sistema de facturación a utilizar")
     
     # Condición IVA del emisor (tienda)
@@ -55,7 +57,7 @@ class Tienda(models.Model):
         help_text="Condición frente al IVA del emisor (tienda). IMPORTANTE: Monotributistas SOLO pueden emitir Factura C. Responsables Inscriptos pueden emitir Factura A, B o C según el cliente."
     )
     
-    # Configuración AFIP
+    # Configuración ARCA
     certificado_afip = models.TextField(
         blank=True, null=True, 
         help_text="⚠️ IMPORTANTE: Pega aquí el CONTENIDO COMPLETO del archivo .crt codificado en base64 (NO solo el nombre del archivo). Usa: python manage.py convertir_certificados_afip certificado.crt clave.key"
@@ -66,7 +68,7 @@ class Tienda(models.Model):
     )
     modo_test_afip = models.BooleanField(
         default=True, 
-        help_text="Marca esta casilla para usar el ambiente de testing/homologación de AFIP. Desmarca para producción."
+        help_text="Marca esta casilla para usar el ambiente de testing/homologación de ARCA. Desmarca para producción."
     )
     
     # Configuración ARCA (si aplica)
@@ -145,7 +147,7 @@ class Tienda(models.Model):
     # Ventas automáticas: facturación
     ml_facturar_ventas = models.BooleanField(
         default=True,
-        help_text="Si está activo, las ventas procesadas por el webhook de Mercado Libre se facturan automáticamente (AFIP/ARCA). Si está desactivado, solo se emite recibo (no se genera factura electrónica)."
+        help_text="Si está activo, las ventas procesadas por el webhook de Mercado Libre se facturan automáticamente (ARCA). Si está desactivado, solo se emite recibo (no se genera factura electrónica)."
     )
     ml_aranceles_automaticos = models.BooleanField(
         default=True,
@@ -758,7 +760,7 @@ class Factura(models.Model):
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='facturas')
     
     # Números de factura
-    numero_comprobante = models.IntegerField(blank=True, null=True, help_text="Número de comprobante asignado por AFIP/ARCA")
+    numero_comprobante = models.IntegerField(blank=True, null=True, help_text="Número de comprobante asignado por ARCA")
     punto_venta = models.IntegerField(help_text="Punto de venta utilizado")
     tipo_comprobante = models.CharField(max_length=1, choices=TIPO_FACTURA_CHOICES, default='B')
     
@@ -774,14 +776,14 @@ class Factura(models.Model):
     impuesto_iva = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     total = models.DecimalField(max_digits=10, decimal_places=2)
     
-    # Estado y respuesta de AFIP/ARCA
+    # Estado y respuesta de ARCA
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
     sistema_facturacion = models.CharField(max_length=10, choices=Tienda.FACTURACION_CHOICES)
     
-    # Respuesta de AFIP/ARCA
-    cae = models.CharField(max_length=14, blank=True, null=True, help_text="CAE (Código de Autorización Electrónica) de AFIP")
+    # Respuesta de ARCA
+    cae = models.CharField(max_length=14, blank=True, null=True, help_text="CAE (Código de Autorización Electrónica) de ARCA")
     fecha_vencimiento_cae = models.DateField(blank=True, null=True, help_text="Fecha de vencimiento del CAE")
-    numero_comprobante_afip = models.BigIntegerField(blank=True, null=True, help_text="Número de comprobante retornado por AFIP")
+    numero_comprobante_afip = models.BigIntegerField(blank=True, null=True, help_text="Número de comprobante retornado por ARCA")
     
     # Datos adicionales de la respuesta
     respuesta_bruta = models.TextField(blank=True, null=True, help_text="Respuesta completa del servicio de facturación (JSON)")
@@ -847,7 +849,7 @@ class NotaCredito(models.Model):
     cliente_nombre = models.CharField(max_length=255)
     cliente_cuit = models.CharField(max_length=13, blank=True, null=True)
 
-    # Estado y respuesta AFIP/ARCA
+    # Estado y respuesta ARCA
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
     sistema_facturacion = models.CharField(max_length=10, choices=Tienda.FACTURACION_CHOICES)
     cae = models.CharField(max_length=14, blank=True, null=True)

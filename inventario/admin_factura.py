@@ -34,7 +34,7 @@ class FacturaAdmin(admin.ModelAdmin):
         ('Totales', {
             'fields': ('subtotal', 'impuesto_iva', 'total')
         }),
-        ('Respuesta AFIP/ARCA', {
+        ('Respuesta ARCA', {
             'fields': (
                 'sistema_facturacion', 'cae', 'fecha_vencimiento_cae',
                 'numero_comprobante_afip', 'error_mensaje'

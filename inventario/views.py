@@ -1135,10 +1135,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def facturacion_generar_csr(self, request, pk=None):
         """
         Genera automáticamente la clave privada RSA y el CSR (Certificate Signing Request)
-        para AFIP con los datos de la tienda. La clave privada se guarda en base64 en la tienda.
-        El usuario debe subir el CSR a AFIP, obtener el .crt y cargar el certificado en base64.
+        para ARCA con los datos de la tienda. La clave privada se guarda en base64 en la tienda.
+        El usuario debe subir el CSR a ARCA, obtener el .crt y cargar el certificado en base64.
 
-        DN del certificado (por diseño AFIP): SERIALNUMBER=CUIT nnnnnnnnnnn, CN=alias
+        DN del certificado (por diseño ARCA): SERIALNUMBER=CUIT nnnnnnnnnnn, CN=alias
         Body opcional: { "alias": "MiAlias", "razon_social": "Mi Empresa S.A." }
         """
         tienda = self.get_object()
@@ -1206,7 +1206,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             )
             key_b64 = base64.b64encode(key_pem).decode('ascii')
 
-            # CSR en PEM (para que el usuario lo descargue y suba a AFIP)
+            # CSR en PEM (para que el usuario lo descargue y suba a ARCA)
             csr_pem = csr.public_bytes(serialization.Encoding.PEM)
 
             # Guardar clave privada en la tienda (solo si el modelo tiene el campo)
@@ -1217,7 +1217,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     'success': True,
-                    'message': 'Clave privada generada y guardada. Subí el CSR a AFIP y luego cargá el certificado (.crt) en base64.',
+                    'message': 'Clave privada generada y guardada. Subí el CSR a ARCA y luego cargá el certificado (.crt) en base64.',
                     'csr_base64': base64.b64encode(csr_pem).decode('ascii'),
                     'csr_pem': csr_pem.decode('utf-8'),
                 },
@@ -1236,7 +1236,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
         Prueba la configuración de facturación electrónica de la tienda
         emitiendo una factura de prueba por $1.
 
-        - Usa el tipo de facturación configurado en la tienda (AFIP o ARCA).
+        - Usa el tipo de facturación configurado en la tienda (ARCA).
         - Crea una venta de prueba de $1 y emite la factura.
         - Devuelve feedback claro: éxito (con datos de la factura) o mensaje de error.
         """
@@ -1246,7 +1246,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     'success': False,
-                    'message': 'La tienda no tiene configurado un tipo de facturación (AFIP / ARCA).',
+                    'message': 'La tienda no tiene configurado un tipo de facturación (ARCA).',
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1255,7 +1255,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     'success': False,
-                    'message': 'Por el momento, la prueba automática de facturación está disponible solo para AFIP.',
+                    'message': 'Por el momento, la prueba automática de facturación está disponible solo para ARCA.',
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1266,7 +1266,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
         if not tienda.punto_venta:
             missing_fields.append('punto_venta')
 
-        # Campos específicos AFIP
+        # Campos específicos ARCA
         if not getattr(tienda, 'certificado_afip', None):
             missing_fields.append('certificado_afip')
         if not getattr(tienda, 'clave_privada_afip', None):
@@ -1390,12 +1390,12 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
     
-    # ========== AFIP: ESTADO, CONFIGURAR, CARGAR CERTIFICADO ==========
+    # ========== ARCA: ESTADO, CONFIGURAR, CARGAR CERTIFICADO ==========
 
     @action(detail=True, methods=['get'], url_path='facturacion/estado')
     def facturacion_estado(self, request, pk=None):
         """
-        Devuelve el estado de cada paso del wizard de configuración AFIP.
+        Devuelve el estado de cada paso del wizard de configuración ARCA.
         Usado por el frontend para mostrar qué pasos están completos.
         """
         tienda = self.get_object()
@@ -1418,7 +1418,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='facturacion/configurar')
     def facturacion_configurar(self, request, pk=None):
         """
-        Guarda la configuración básica de AFIP: CUIT, punto de venta,
+        Guarda la configuración básica de ARCA: CUIT, punto de venta,
         tipo_facturacion, condicion_iva_emisor, modo_test_afip.
         """
         tienda = self.get_object()
@@ -1461,7 +1461,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
         if update_fields:
             tienda.save(update_fields=update_fields)
-            logger.info(f"Configuración AFIP actualizada para tienda {tienda.id}: {update_fields}")
+            logger.info(f"Configuración ARCA actualizada para tienda {tienda.id}: {update_fields}")
 
         return Response({
             'success': True,
@@ -1472,7 +1472,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='facturacion/cargar-certificado')
     def facturacion_cargar_certificado(self, request, pk=None):
         """
-        Acepta el certificado AFIP en dos formatos:
+        Acepta el certificado ARCA en dos formatos:
         - Archivo .crt/.pem subido (multipart/form-data, campo 'certificado_file')
         - Texto base64 en el campo 'certificado_base64'
         Valida el formato y lo guarda en tienda.certificado_afip.
@@ -1526,7 +1526,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
         tienda.certificado_afip = certificado_b64_clean
         tienda.save(update_fields=['certificado_afip'])
-        logger.info(f"Certificado AFIP cargado para tienda {tienda.id} ({len(decoded)} bytes)")
+        logger.info(f"Certificado ARCA cargado para tienda {tienda.id} ({len(decoded)} bytes)")
 
         return Response({'success': True, 'message': 'Certificado guardado correctamente.'})
 
