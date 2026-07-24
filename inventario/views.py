@@ -558,6 +558,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if not filas:
             return Response({'error': 'No se recibieron filas para procesar.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Se resuelven de una sola vez (en vez de una consulta por fila) para evitar
+        # timeouts del worker con archivos grandes: contra una base remota, N filas
+        # con 1-2 queries cada una suman varios segundos de latencia de red y superan
+        # el timeout de gunicorn mucho antes de llegar a procesar todo el archivo.
+        productos_existentes_por_codigo = {
+            p.codigo_interno: p
+            for p in Producto.objects.filter(tienda=tienda)
+            .exclude(codigo_interno__isnull=True).exclude(codigo_interno='')
+        }
+        rubros_por_nombre = {
+            r.nombre.strip().lower(): r
+            for r in Rubro.objects.filter(tienda=tienda)
+        }
+
         codigos_vistos = {}
         resultados = []
         creados = 0
@@ -603,7 +617,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 if iva_raw is not None and str(iva_raw).strip() != '':
                     iva_porcentaje = Decimal(str(iva_raw))
                 elif rubro_nombre:
-                    rubro = Rubro.objects.filter(tienda=tienda, nombre__iexact=rubro_nombre).first()
+                    rubro = rubros_por_nombre.get(rubro_nombre.lower())
                     if not rubro:
                         raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
                     iva_porcentaje = rubro.iva_porcentaje
@@ -624,7 +638,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     raise ValueError("Debe indicar 'Precio de Venta' o 'Margen %'.")
                 precio_venta = precio_venta.quantize(Decimal('0.01'))
 
-                producto_existente = Producto.objects.filter(tienda=tienda, codigo_interno=codigo_interno).first()
+                producto_existente = productos_existentes_por_codigo.get(codigo_interno)
                 estado = 'reposicion' if producto_existente else 'nuevo'
 
                 resultado_fila = {
