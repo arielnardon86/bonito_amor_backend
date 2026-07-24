@@ -465,6 +465,13 @@ class ProductoViewSet(viewsets.ModelViewSet):
         (ej. "Remera - M") para no perder datos ni chocar con la restricción de
         nombre+talle único; al reimportar quedan como productos sueltos, no agrupados
         bajo un padre.
+
+        'Código Interno' solo se completa cuando el producto se creó (o se repuso) por
+        carga masiva; los cargados a mano desde Gestión de Productos no tienen uno
+        asignado. Como la importación exige ese campo, acá se genera uno automático
+        para esos casos (a partir del id del producto, así queda estable si se vuelve a
+        exportar) verificando que no choque con ningún código interno ya existente en
+        la tienda ni con otro generado en esta misma exportación.
         """
         tienda_slug = request.query_params.get('tienda_slug')
         tienda = self._resolver_tienda(tienda_slug)
@@ -472,6 +479,23 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({"error": "Tienda no encontrada o no autorizada."}, status=status.HTTP_404_NOT_FOUND)
 
         productos = Producto.objects.filter(tienda=tienda).select_related('rubro').prefetch_related('variantes').order_by('nombre')
+
+        codigos_existentes = set(
+            Producto.objects.filter(tienda=tienda)
+            .exclude(codigo_interno__isnull=True).exclude(codigo_interno='')
+            .values_list('codigo_interno', flat=True)
+        )
+        codigos_generados = set()
+
+        def _generar_codigo_interno_unico(producto):
+            base = 'AUTO' + str(producto.id).replace('-', '')[:10].upper()
+            candidato = base
+            sufijo = 1
+            while candidato in codigos_existentes or candidato in codigos_generados:
+                sufijo += 1
+                candidato = f"{base}-{sufijo}"
+            codigos_generados.add(candidato)
+            return candidato
 
         filas = []
         for producto in productos:
@@ -484,8 +508,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
             if producto.producto_padre_id is not None and producto.talle:
                 nombre = f"{nombre} - {producto.talle}"
 
+            codigo_interno = producto.codigo_interno or _generar_codigo_interno_unico(producto)
+
             filas.append({
-                'codigo_interno': producto.codigo_interno or '',
+                'codigo_interno': codigo_interno,
                 'nombre': nombre,
                 'rubro': producto.rubro.nombre if producto.rubro_id else '',
                 'iva_porcentaje': str(producto.iva_porcentaje) if producto.iva_porcentaje is not None else '',
