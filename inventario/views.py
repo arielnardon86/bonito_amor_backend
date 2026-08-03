@@ -219,6 +219,24 @@ def _get_tiendas_ids_usuario(user):
     return tiendas_ids
 
 
+def _resolver_tienda_suscripcion(request):
+    """
+    Resuelve la tienda efectiva para los endpoints de suscripción, igual que el
+    resto de la app: prioriza `tienda_slug` (querystring o body) para que un
+    superuser/staff operando sobre una tienda autorizada distinta a la propia
+    (vía selectedStoreSlug en el frontend) actúe sobre esa tienda y no sobre
+    `user.tienda`. Si no viene `tienda_slug`, cae a `user.tienda`.
+    """
+    user = request.user
+    tienda_slug = request.query_params.get('tienda_slug') or request.data.get('tienda_slug')
+    if not tienda_slug:
+        return user.tienda
+    if user.is_superuser:
+        return Tienda.objects.filter(nombre=tienda_slug).first()
+    tiendas_ids = _get_tiendas_ids_usuario(user)
+    return Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).first()
+
+
 class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -7147,7 +7165,7 @@ def mp_webhook_suscripcion(request):
 def mi_suscripcion(request):
     """Devuelve el estado del plan de la tienda del usuario autenticado."""
     from .plan_enforcement import info_suscripcion
-    tienda = request.user.tienda
+    tienda = _resolver_tienda_suscripcion(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
     return Response(info_suscripcion(tienda))
@@ -7258,7 +7276,7 @@ def verificar_pago_pendiente(request):
         obtener_preaprobacion, activar_suscripcion,
     )
 
-    tienda = getattr(request.user, 'tienda', None)
+    tienda = _resolver_tienda_suscripcion(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
 
@@ -7539,8 +7557,9 @@ def cancelar_suscripcion_view(request):
         cancelar_preaprobacion_mp, cancelar_suscripcion,
     )
 
+    tienda = _resolver_tienda_suscripcion(request)
     try:
-        suscripcion = request.user.tienda.suscripcion
+        suscripcion = tienda.suscripcion
     except (AttributeError, Suscripcion.DoesNotExist):
         return Response({'error': 'No se encontró suscripción activa.'}, status=404)
 
@@ -7561,7 +7580,7 @@ def cancelar_suscripcion_view(request):
     cancelar_suscripcion(suscripcion)
     logger.info(
         "Baja iniciada por usuario %s — tienda %s",
-        request.user.username, request.user.tienda.nombre
+        request.user.username, tienda.nombre
     )
     return Response({
         'ok': True,
@@ -7586,7 +7605,7 @@ def cambiar_plan(request):
     from .services.suscripcion_service import cancelar_preaprobacion_mp
 
     user = request.user
-    tienda = user.tienda
+    tienda = _resolver_tienda_suscripcion(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
 
