@@ -7573,9 +7573,11 @@ def cancelar_suscripcion_view(request):
 @permission_classes([permissions.IsAuthenticated])
 def cambiar_plan(request):
     """
-    Upgrade/downgrade de plan.
-    Cancela el preapproval anterior en MP y devuelve el checkout URL del nuevo
-    plan para que el usuario complete la nueva suscripción.
+    Upgrade/downgrade de plan, o alta de un plan pago para una tienda Legacy
+    (con o sin registro de Suscripcion todavía — una tienda legacy "por ausencia"
+    de Suscripcion no tiene ninguna hasta que elige su primer plan acá).
+    Cancela el preapproval anterior en MP (si había) y devuelve el checkout URL
+    del nuevo plan para que el usuario complete la suscripción.
     Body: { plan: 'starter' | 'pro' | 'advanced' }
     """
     import urllib.parse
@@ -7588,11 +7590,6 @@ def cambiar_plan(request):
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
 
-    try:
-        suscripcion = tienda.suscripcion
-    except Suscripcion.DoesNotExist:
-        return Response({'error': 'La tienda no tiene suscripción activa.'}, status=400)
-
     plan_nombre = request.data.get('plan', '').lower()
     if plan_nombre == 'legacy':
         return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
@@ -7601,34 +7598,50 @@ def cambiar_plan(request):
     except Plan.DoesNotExist:
         return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
 
-    # Para re-suscripción desde estado cancelada se permite el mismo plan
-    if plan_nuevo == suscripcion.plan and suscripcion.estado != 'cancelada':
-        return Response({'error': 'Ya estás en ese plan.'}, status=400)
+    try:
+        suscripcion = tienda.suscripcion
+    except Suscripcion.DoesNotExist:
+        suscripcion = None
 
-    # Cancelar preapproval anterior en MP para evitar cobro doble
-    if suscripcion.mp_preapproval_id:
-        try:
-            cancelar_preaprobacion_mp(suscripcion.mp_preapproval_id)
-            logger.info(
-                "Preapproval %s cancelado por upgrade de plan (%s → %s) — tienda %s",
-                suscripcion.mp_preapproval_id, suscripcion.plan.nombre,
-                plan_nuevo.nombre, tienda.nombre,
-            )
-        except Exception as e:
-            logger.error("Error cancelando preapproval anterior en MP: %s", e)
-            # Continuamos igual: el usuario debe poder hacer upgrade aunque falle la cancelación en MP
+    if suscripcion is None:
+        # Tienda legacy sin ningún registro de Suscripcion: se crea uno nuevo
+        # apuntando directo al plan elegido, listo para completar el checkout.
+        suscripcion = Suscripcion.objects.create(tienda=tienda, plan=plan_nuevo, estado='pending')
+        logger.info(
+            "Suscripción creada para tienda legacy %s → plan %s",
+            tienda.nombre, plan_nuevo.nombre,
+        )
+    else:
+        es_legacy_con_registro = suscripcion.plan.nombre == 'legacy'
+        # Para re-suscripción desde estado cancelada, o alta desde legacy con
+        # Suscripcion ya existente, se permite elegir el mismo plan.
+        if plan_nuevo == suscripcion.plan and suscripcion.estado != 'cancelada' and not es_legacy_con_registro:
+            return Response({'error': 'Ya estás en ese plan.'}, status=400)
 
-    # Actualizar plan y resetear estado para que el usuario complete el nuevo checkout
-    suscripcion.plan = plan_nuevo
-    suscripcion.estado = 'pending'
-    suscripcion.mp_preapproval_id = None
-    suscripcion.mp_payer_email = None
-    suscripcion.fecha_proximo_cobro = None
-    suscripcion.fecha_inicio_gracia = None
-    suscripcion.save(update_fields=[
-        'plan', 'estado', 'mp_preapproval_id', 'mp_payer_email',
-        'fecha_proximo_cobro', 'fecha_inicio_gracia',
-    ])
+        # Cancelar preapproval anterior en MP para evitar cobro doble
+        if suscripcion.mp_preapproval_id:
+            try:
+                cancelar_preaprobacion_mp(suscripcion.mp_preapproval_id)
+                logger.info(
+                    "Preapproval %s cancelado por upgrade de plan (%s → %s) — tienda %s",
+                    suscripcion.mp_preapproval_id, suscripcion.plan.nombre,
+                    plan_nuevo.nombre, tienda.nombre,
+                )
+            except Exception as e:
+                logger.error("Error cancelando preapproval anterior en MP: %s", e)
+                # Continuamos igual: el usuario debe poder hacer upgrade aunque falle la cancelación en MP
+
+        # Actualizar plan y resetear estado para que el usuario complete el nuevo checkout
+        suscripcion.plan = plan_nuevo
+        suscripcion.estado = 'pending'
+        suscripcion.mp_preapproval_id = None
+        suscripcion.mp_payer_email = None
+        suscripcion.fecha_proximo_cobro = None
+        suscripcion.fecha_inicio_gracia = None
+        suscripcion.save(update_fields=[
+            'plan', 'estado', 'mp_preapproval_id', 'mp_payer_email',
+            'fecha_proximo_cobro', 'fecha_inicio_gracia',
+        ])
 
     # Construir checkout URL del nuevo plan
     checkout_url = None
