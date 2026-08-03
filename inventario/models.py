@@ -186,6 +186,10 @@ class Tienda(models.Model):
         default=True,
         help_text="Facturar automáticamente ventas procesadas por webhook de Tienda Nube"
     )
+    requiere_eleccion_plan = models.BooleanField(
+        default=False,
+        help_text="Fuerza a esta tienda (aunque sea legacy) a elegir y pagar un plan para poder seguir usando el sistema. No afecta a otras tiendas legacy."
+    )
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

@@ -113,6 +113,10 @@ class TiendaAdmin(admin.ModelAdmin):
                     'condicion_iva_emisor',
                 ),
             }),
+            ('Suscripción', {
+                'fields': ('requiere_eleccion_plan',),
+                'description': 'Si está tildado, esta tienda (aunque sea legacy) queda bloqueada hasta que elija y pague un plan. No afecta a otras tiendas legacy.',
+            }),
             ('Configuración ARCA', {
                 'fields': (
                     'certificado_afip',

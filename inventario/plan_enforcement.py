@@ -154,9 +154,19 @@ def info_suscripcion(tienda) -> dict:
     """
     Devuelve un dict con el estado actual del plan de la tienda.
     Usado por el endpoint de perfil / panel de administración.
+
+    Una tienda legacy con `requiere_eleccion_plan=True` se reporta como no-legacy
+    y con estado 'requiere_plan', para que el frontend la bloquee con la pantalla
+    de elección de plan aunque nunca haya tenido (o ya no tenga) un plan real
+    asignado. El resto de las tiendas legacy no se ven afectadas por este flag.
     """
     sus = _get_suscripcion(tienda)
+    legacy = _es_legacy(sus)
+    forzar_eleccion = legacy and tienda.requiere_eleccion_plan
+
     if sus is None:
+        if forzar_eleccion:
+            return {'legacy': False, 'plan': None, 'estado': 'requiere_plan', 'esta_activa': False}
         return {'legacy': True, 'plan': None, 'estado': 'activa'}
 
     cantidad_productos = Producto.objects.filter(
@@ -165,11 +175,11 @@ def info_suscripcion(tienda) -> dict:
     cantidad_usuarios = User.objects.filter(tienda=tienda).count()
 
     return {
-        'legacy': _es_legacy(sus),
+        'legacy': False if forzar_eleccion else legacy,
         'plan': sus.plan.nombre,
         'plan_display': sus.plan.get_nombre_display(),
-        'estado': sus.estado,
-        'esta_activa': sus.esta_activa,
+        'estado': 'requiere_plan' if forzar_eleccion else sus.estado,
+        'esta_activa': False if forzar_eleccion else sus.esta_activa,
         'dias_gracia_restantes': sus.dias_gracia_restantes,
         'fecha_fin_trial': sus.fecha_fin_trial,
         'fecha_proximo_cobro': sus.fecha_proximo_cobro,
