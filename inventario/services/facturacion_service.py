@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import re
+import time
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
@@ -27,6 +28,37 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+def _es_respuesta_arca_vacia(exc: Exception) -> bool:
+    """
+    True si la excepción corresponde a una respuesta SOAP vacía/no parseable de
+    ARCA — típicamente 'Tag not found: Body (No elements found)'. Es un error
+    transitorio conocido, más frecuente cuando varias tiendas comparten el
+    mismo CUIT (sucursales) y llaman a WSFEv1 casi al mismo tiempo.
+    """
+    msg = str(exc).lower()
+    return 'tag not found' in msg and 'body' in msg
+
+
+def _llamar_wsfev1_con_reintento(func, *args, intentos=3, espera_seg=2, **kwargs):
+    """
+    Ejecuta una llamada a WSFEv1 (pyafipws) reintentando si ARCA devuelve una
+    respuesta vacía/no parseable (ver _es_respuesta_arca_vacia). El resto de
+    los errores se propagan de inmediato, sin reintentar.
+    """
+    for intento in range(1, intentos + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if _es_respuesta_arca_vacia(e) and intento < intentos:
+                logger.warning(
+                    f"⚠️ ARCA devolvió una respuesta vacía (intento {intento}/{intentos}). "
+                    f"Reintentando en {espera_seg}s..."
+                )
+                time.sleep(espera_seg)
+                continue
+            raise
 
 
 class FacturacionService:
@@ -614,7 +646,9 @@ class FacturacionService:
                 logger.info(f"Consultando último número autorizado para tipo {tipo_comprobante}, punto venta {punto_venta}...")
                 
                 try:
-                    ultimo_numero_result = wsfev1.CompUltimoAutorizado(tipo_comprobante, punto_venta)
+                    ultimo_numero_result = _llamar_wsfev1_con_reintento(
+                        wsfev1.CompUltimoAutorizado, tipo_comprobante, punto_venta
+                    )
                     
                     # Convertir a entero si es necesario
                     if ultimo_numero_result is None:
@@ -828,7 +862,7 @@ class FacturacionService:
                 # Autorizar comprobante
                 logger.info(f"⚠️ Solicitando autorización CAE...")
                 try:
-                    wsfev1.CAESolicitar()
+                    _llamar_wsfev1_con_reintento(wsfev1.CAESolicitar)
                 except Exception as e:
                     error_msg = f"Error al solicitar CAE: {str(e)}"
                     logger.error(f"❌ {error_msg}")
@@ -1404,7 +1438,7 @@ class FacturacionService:
 
             # Próximo número de NC del mismo tipo
             try:
-                ultimo_nc = wsfev1.CompUltimoAutorizado(tipo_nc, punto_venta)
+                ultimo_nc = _llamar_wsfev1_con_reintento(wsfev1.CompUltimoAutorizado, tipo_nc, punto_venta)
                 if ultimo_nc is None:
                     ultimo_nc = 0
                 elif isinstance(ultimo_nc, str):
@@ -1485,7 +1519,7 @@ class FacturacionService:
             # Solicitar CAE
             logger.info("Solicitando CAE para NC...")
             try:
-                wsfev1.CAESolicitar()
+                _llamar_wsfev1_con_reintento(wsfev1.CAESolicitar)
             except Exception as e:
                 error_msg = f"Error al solicitar CAE para NC: {e}"
                 if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
