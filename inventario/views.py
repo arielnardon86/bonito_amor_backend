@@ -219,10 +219,11 @@ def _get_tiendas_ids_usuario(user):
     return tiendas_ids
 
 
-def _resolver_tienda_suscripcion(request):
+def _resolver_tienda_por_slug(request):
     """
-    Resuelve la tienda efectiva para los endpoints de suscripción, igual que el
-    resto de la app: prioriza `tienda_slug` (querystring o body) para que un
+    Resuelve la tienda efectiva para endpoints scoped-por-tienda que no son un
+    ModelViewSet (suscripción, datos básicos de tienda), igual que el resto de
+    la app: prioriza `tienda_slug` (querystring o body) para que un
     superuser/staff operando sobre una tienda autorizada distinta a la propia
     (vía selectedStoreSlug en el frontend) actúe sobre esa tienda y no sobre
     `user.tienda`. Si no viene `tienda_slug`, cae a `user.tienda`.
@@ -6904,7 +6905,7 @@ def registro_publico(request):
     data = request.data
 
     # Validaciones básicas
-    required = ['nombre_tienda', 'email', 'username', 'password', 'plan']
+    required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit']
     missing = [f for f in required if not data.get(f)]
     if missing:
         return Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400)
@@ -6914,6 +6915,15 @@ def registro_publico(request):
     email         = data['email'].strip().lower()
     password      = data['password']
     plan_nombre   = data['plan'].lower()
+    cuit          = data['cuit'].strip()
+    logo          = (data.get('logo') or '').strip() or None
+
+    cuit_limpio = re.sub(r'[^0-9]', '', cuit)
+    if len(cuit_limpio) != 11:
+        return Response({'error': 'El CUIT/CUIL debe tener 11 dígitos.'}, status=400)
+
+    if logo and len(logo) > MAX_LOGO_BASE64_CHARS:
+        return Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400)
 
     if Tienda.objects.filter(nombre__iexact=nombre_tienda).exists():
         return Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400)
@@ -6938,6 +6948,8 @@ def registro_publico(request):
             nombre=nombre_tienda,
             email=email,
             telefono=data.get('telefono', ''),
+            cuit=cuit,
+            logo=logo,
         )
 
         # Crear usuario admin de la tienda (superuser para acceso completo al panel)
@@ -7160,12 +7172,55 @@ def mp_webhook_suscripcion(request):
     return Response(status=200)
 
 
+MAX_LOGO_BASE64_CHARS = 700_000  # ~500KB decodificado, de sobra para un logo ya redimensionado chico
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def actualizar_datos_tienda(request):
+    """
+    Permite a un usuario de la tienda (o superuser/staff operando sobre una
+    tienda autorizada) modificar el nombre visible y el logo de su tienda
+    desde el Panel de Administración.
+    Body: { tienda_slug, nombre?: str, logo?: str|null }  (logo: data URI base64, o null/'' para quitarlo)
+    """
+    tienda = _resolver_tienda_por_slug(request)
+    if not tienda:
+        return Response({'error': 'No se encontró la tienda.'}, status=400)
+
+    campos_actualizados = []
+
+    if 'nombre' in request.data:
+        nuevo_nombre = (request.data.get('nombre') or '').strip()
+        if not nuevo_nombre:
+            return Response({'error': 'El nombre de la tienda no puede estar vacío.'}, status=400)
+        if Tienda.objects.exclude(pk=tienda.pk).filter(nombre__iexact=nuevo_nombre).exists():
+            return Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400)
+        tienda.nombre = nuevo_nombre
+        campos_actualizados.append('nombre')
+
+    if 'logo' in request.data:
+        logo = request.data.get('logo') or None
+        if logo and len(logo) > MAX_LOGO_BASE64_CHARS:
+            return Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400)
+        tienda.logo = logo
+        campos_actualizados.append('logo')
+
+    if campos_actualizados:
+        tienda.save(update_fields=campos_actualizados)
+
+    return Response({
+        'nombre': tienda.nombre,
+        'logo': tienda.logo,
+    })
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def mi_suscripcion(request):
     """Devuelve el estado del plan de la tienda del usuario autenticado."""
     from .plan_enforcement import info_suscripcion
-    tienda = _resolver_tienda_suscripcion(request)
+    tienda = _resolver_tienda_por_slug(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
     return Response(info_suscripcion(tienda))
@@ -7276,7 +7331,7 @@ def verificar_pago_pendiente(request):
         obtener_preaprobacion, activar_suscripcion,
     )
 
-    tienda = _resolver_tienda_suscripcion(request)
+    tienda = _resolver_tienda_por_slug(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
 
@@ -7557,7 +7612,7 @@ def cancelar_suscripcion_view(request):
         cancelar_preaprobacion_mp, cancelar_suscripcion,
     )
 
-    tienda = _resolver_tienda_suscripcion(request)
+    tienda = _resolver_tienda_por_slug(request)
     try:
         suscripcion = tienda.suscripcion
     except (AttributeError, Suscripcion.DoesNotExist):
@@ -7597,7 +7652,9 @@ def cambiar_plan(request):
     de Suscripcion no tiene ninguna hasta que elige su primer plan acá).
     Cancela el preapproval anterior en MP (si había) y devuelve el checkout URL
     del nuevo plan para que el usuario complete la suscripción.
-    Body: { plan: 'starter' | 'pro' | 'advanced' }
+    Body: { plan: 'starter' | 'pro' | 'advanced', cuit?: str }
+    El CUIT/CUIL es obligatorio: si la tienda todavía no tiene uno cargado, debe
+    venir en el body (se guarda en la tienda antes de continuar).
     """
     import urllib.parse
     from django.conf import settings as dj_settings
@@ -7605,9 +7662,25 @@ def cambiar_plan(request):
     from .services.suscripcion_service import cancelar_preaprobacion_mp
 
     user = request.user
-    tienda = _resolver_tienda_suscripcion(request)
+    tienda = _resolver_tienda_por_slug(request)
     if not tienda:
         return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
+
+    if not tienda.cuit or not tienda.cuit.strip():
+        cuit_input = (request.data.get('cuit') or '').strip()
+        if not cuit_input:
+            return Response(
+                {'error': 'Necesitamos el CUIT/CUIL de tu tienda para suscribirte.', 'requiere_cuit': True},
+                status=400,
+            )
+        cuit_limpio = re.sub(r'[^0-9]', '', cuit_input)
+        if len(cuit_limpio) != 11:
+            return Response(
+                {'error': 'El CUIT/CUIL debe tener 11 dígitos.', 'requiere_cuit': True},
+                status=400,
+            )
+        tienda.cuit = cuit_input
+        tienda.save(update_fields=['cuit'])
 
     plan_nombre = request.data.get('plan', '').lower()
     if plan_nombre == 'legacy':

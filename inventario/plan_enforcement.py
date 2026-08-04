@@ -164,10 +164,12 @@ def info_suscripcion(tienda) -> dict:
     legacy = _es_legacy(sus)
     forzar_eleccion = legacy and tienda.requiere_eleccion_plan
 
+    datos_tienda = {'nombre': tienda.nombre, 'logo': tienda.logo, 'cuit': tienda.cuit or ''}
+
     if sus is None:
         if forzar_eleccion:
-            return {'legacy': False, 'plan': None, 'estado': 'requiere_plan', 'esta_activa': False}
-        return {'legacy': True, 'plan': None, 'estado': 'activa'}
+            return {'legacy': False, 'plan': None, 'estado': 'requiere_plan', 'esta_activa': False, **datos_tienda}
+        return {'legacy': True, 'plan': None, 'estado': 'activa', **datos_tienda}
 
     cantidad_productos = Producto.objects.filter(
         tienda=tienda, producto_padre__isnull=True
@@ -175,6 +177,7 @@ def info_suscripcion(tienda) -> dict:
     cantidad_usuarios = User.objects.filter(tienda=tienda).count()
 
     return {
+        **datos_tienda,
         'legacy': False if forzar_eleccion else legacy,
         'plan': sus.plan.nombre,
         'plan_display': sus.plan.get_nombre_display(),

@@ -36,7 +36,11 @@ class Tienda(models.Model):
     direccion = models.CharField(max_length=255, blank=True, null=True)
     telefono = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
-    
+    logo = models.TextField(
+        blank=True, null=True,
+        help_text="Logo de la tienda como data URI en base64 (ya redimensionado a un tamaño chico desde el frontend antes de subir). Se muestra en el navbar."
+    )
+
     # Campos fiscales para facturación
     cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")
     punto_venta = models.IntegerField(default=1, help_text="Punto de venta ARCA")
