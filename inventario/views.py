@@ -7705,9 +7705,15 @@ def cambiar_plan(request):
         )
     else:
         es_legacy_con_registro = suscripcion.plan.nombre == 'legacy'
-        # Para re-suscripción desde estado cancelada, o alta desde legacy con
-        # Suscripcion ya existente, se permite elegir el mismo plan.
-        if plan_nuevo == suscripcion.plan and suscripcion.estado != 'cancelada' and not es_legacy_con_registro:
+        # Para re-suscripción desde estado cancelada, o desde 'pending' (el
+        # usuario eligió el plan pero nunca completó el pago en MP y necesita
+        # volver al checkout), o alta desde legacy con Suscripcion ya existente,
+        # se permite elegir el mismo plan.
+        if (
+            plan_nuevo == suscripcion.plan
+            and suscripcion.estado not in ('cancelada', 'pending')
+            and not es_legacy_con_registro
+        ):
             return Response({'error': 'Ya estás en ese plan.'}, status=400)
 
         # Cancelar preapproval anterior en MP para evitar cobro doble
