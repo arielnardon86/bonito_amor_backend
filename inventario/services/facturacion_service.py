@@ -41,6 +41,21 @@ def _es_respuesta_arca_vacia(exc: Exception) -> bool:
     return 'tag not found' in msg and 'body' in msg
 
 
+def _loguear_xml_request_arca(wsfev1):
+    """
+    Loguea el XML de la última request enviada a ARCA (guardado por pysimplesoap
+    en wsfev1.client.xml_request) cuando una llamada a WSFEv1 falla, para poder
+    diagnosticar errores de formato (p.ej. 'Input string was not in a correct
+    format') sin tener que reproducir el error manualmente.
+    """
+    try:
+        xml_request = getattr(getattr(wsfev1, 'client', None), 'xml_request', None)
+        if xml_request:
+            logger.error(f"📄 XML de request enviado a ARCA (para diagnóstico): {xml_request[:3000]}")
+    except Exception:
+        pass
+
+
 def _llamar_wsfev1_con_reintento(func, *args, intentos=3, espera_seg=2, **kwargs):
     """
     Ejecuta una llamada a WSFEv1 (pyafipws) reintentando si ARCA devuelve una
@@ -745,10 +760,22 @@ class FacturacionService:
                 # Preparar parámetros base de la factura
                 # Para comprobantes A (tipos 1, 2, 3): DocTipo DEBE ser 80 (CUIT), regla AFIP 10013.
                 # La clave en cliente_data es 'cliente_cuit', no 'cuit'.
-                cuit_cliente = (
+                cuit_cliente_raw = (
                     cliente_data.get('cliente_cuit') or
                     cliente_data.get('cuit') or ''
-                ).replace('-', '')
+                )
+                # Limpiar cualquier caracter no numérico (guiones, puntos, espacios).
+                # Si lo que queda no son 11 dígitos, es un CUIT mal tipeado: se ignora
+                # (se factura sin identificar al comprador) en vez de mandarle a ARCA
+                # un DocNro no numérico, que provoca "Input string was not in a
+                # correct format" del lado de AFIP al parsear la request.
+                cuit_cliente = re.sub(r'[^0-9]', '', cuit_cliente_raw)
+                if cuit_cliente and len(cuit_cliente) != 11:
+                    logger.warning(
+                        f"⚠️ CUIT de cliente con formato inválido ('{cuit_cliente_raw}'), "
+                        f"se ignora y se factura sin identificar al comprador"
+                    )
+                    cuit_cliente = ''
 
                 if tipo_comprobante in [1, 2, 3]:  # Factura/ND/NC clase A
                     doc_tipo = 80
@@ -866,6 +893,7 @@ class FacturacionService:
                 except Exception as e:
                     error_msg = f"Error al solicitar CAE: {str(e)}"
                     logger.error(f"❌ {error_msg}")
+                    _loguear_xml_request_arca(wsfev1)
                     if 'junk after document element' in str(e).lower():
                         error_msg += " (Problema al parsear XML de respuesta. Esto puede indicar certificados inválidos o formato incorrecto)"
                     if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
@@ -1469,7 +1497,10 @@ class FacturacionService:
             condicion_iva_codigo_map = {'RI': 1, 'EX': 4, 'CF': 5, 'MT': 6, 'NR': 0}
             condicion_iva_codigo = condicion_iva_codigo_map.get(factura.cliente_condicion_iva, 5)
 
-            nro_doc_cliente  = (factura.cliente_cuit or '').replace('-', '') or '0'
+            nro_doc_cliente = re.sub(r'[^0-9]', '', factura.cliente_cuit or '')
+            if nro_doc_cliente and len(nro_doc_cliente) != 11:
+                nro_doc_cliente = ''
+            nro_doc_cliente = nro_doc_cliente or '0'
             # NC clase A (tipo 3): DocTipo DEBE ser 80 (CUIT), igual que Factura A
             if tipo_nc in [3]:
                 tipo_doc_cliente = 80
@@ -1522,6 +1553,8 @@ class FacturacionService:
                 _llamar_wsfev1_con_reintento(wsfev1.CAESolicitar)
             except Exception as e:
                 error_msg = f"Error al solicitar CAE para NC: {e}"
+                logger.error(f"❌ {error_msg}")
+                _loguear_xml_request_arca(wsfev1)
                 if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
                     error_msg += f" | {wsfev1.Excepcion}"
                 if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
