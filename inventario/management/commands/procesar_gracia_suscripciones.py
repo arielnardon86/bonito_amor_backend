@@ -5,6 +5,13 @@ Ejecutar diariamente (ej. cron job en Render):
     python manage.py procesar_gracia_suscripciones
 
 Lógica (MP cobra el día 10 de cada mes):
+  0. Reconciliar contra MP: suscripciones en pending/trial/gracia/pausada con
+     preapproval vinculado se consultan contra la API de MP. Si MP ya cobró
+     (charged_quantity >= 1) pero localmente seguimos sin reflejarlo, es que
+     el webhook de pago nunca se procesó → se corrige llamando a
+     renovar_suscripcion(). Si MP la cancelló y acá seguimos con acceso, se
+     cancela. Corre ANTES del resto para no mandar a gracia/pausa a una
+     tienda que en realidad está pagando bien (solo perdimos su webhook).
   1. Suscripciones en trial/activa cuyo fecha_proximo_cobro ya pasó y no llegó
      webhook de pago → iniciar gracia (5 días).
   2. Suscripciones ya en gracia → avanzar contador y avisar.
@@ -29,6 +36,11 @@ class Command(BaseCommand):
 
     DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
 
+    # Estados desde los que tiene sentido reconciliar: si ya está 'activa' o
+    # 'cancelada' asumimos que está al día (evita pegarle a MP por cada una en
+    # cada corrida del cron).
+    ESTADOS_A_RECONCILIAR = ('pending', 'trial', 'gracia', 'pausada')
+
     def handle(self, *args, **options):
         from inventario.models import Suscripcion
         from inventario.services.suscripcion_service import (
@@ -38,7 +50,11 @@ class Command(BaseCommand):
 
         ahora = timezone.now()
 
-        # 0. Canceladas hace más de 30 días → eliminar todos los datos
+        # 0. Reconciliar estado local contra el estado real en Mercado Pago
+        #    (safety net para webhooks de pago que nunca se procesaron).
+        self._reconciliar_con_mp()
+
+        # 0.1. Canceladas hace más de 30 días → eliminar todos los datos
         limite_borrado = ahora - timedelta(days=self.DIAS_RETENCION)
         a_borrar = Suscripcion.objects.filter(
             estado='cancelada',
@@ -103,6 +119,63 @@ class Command(BaseCommand):
                 self._enviar_aviso(sus, dia=dias_en_gracia + 1)
 
         self.stdout.write(self.style.SUCCESS("procesar_gracia_suscripciones completado."))
+
+    def _reconciliar_con_mp(self):
+        """Consulta en MP el estado real de cada preapproval vinculado y corrige
+        la suscripción local si quedó desactualizada por un webhook perdido."""
+        from inventario.models import Suscripcion
+        from inventario.services.suscripcion_service import (
+            obtener_preaprobacion,
+            renovar_suscripcion,
+            cancelar_suscripcion,
+        )
+
+        candidatas = Suscripcion.objects.filter(
+            estado__in=self.ESTADOS_A_RECONCILIAR,
+        ).exclude(
+            mp_preapproval_id__isnull=True,
+        ).exclude(
+            mp_preapproval_id='',
+        ).select_related('tienda', 'plan')
+
+        corregidas = 0
+        for sus in candidatas:
+            try:
+                datos = obtener_preaprobacion(sus.mp_preapproval_id)
+            except Exception as e:
+                logger.warning(
+                    "Reconciliación MP: no se pudo consultar preapproval %s (%s): %s",
+                    sus.mp_preapproval_id, sus.tienda.nombre, e,
+                )
+                continue
+
+            estado_mp = datos.get('status', '')
+            resumen = datos.get('summarized') or {}
+            cobros_realizados = resumen.get('charged_quantity') or 0
+
+            if estado_mp == 'authorized' and cobros_realizados >= 1:
+                # MP ya cobró al menos una vez pero acá seguíamos sin reflejarlo
+                # (pending/trial/gracia/pausada) → el webhook de pago se perdió.
+                self.stdout.write(self.style.SUCCESS(
+                    f"Reconciliado con MP: {sus.tienda.nombre} estaba en "
+                    f"'{sus.get_estado_display()}' con {cobros_realizados} cobro(s) "
+                    f"confirmado(s) en MP → activa"
+                ))
+                renovar_suscripcion(sus)
+                corregidas += 1
+            elif estado_mp == 'cancelled' and sus.estado != 'cancelada':
+                # MP la canceló (o nunca llegó a autorizarla) pero acá seguía con acceso.
+                self.stdout.write(self.style.WARNING(
+                    f"Reconciliado con MP: {sus.tienda.nombre} estaba cancelada en MP "
+                    f"pero localmente seguía en '{sus.get_estado_display()}' → cancelada"
+                ))
+                cancelar_suscripcion(sus)
+                corregidas += 1
+
+        self.stdout.write(
+            f"Reconciliación MP: {len(candidatas)} suscripción(es) revisada(s), "
+            f"{corregidas} corregida(s)."
+        )
 
     def _enviar_aviso(self, sus, dia: int):
         """Envía email de aviso al admin de la tienda."""
