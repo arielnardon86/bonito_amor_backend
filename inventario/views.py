@@ -1112,8 +1112,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'list':
             permission_classes = [permissions.AllowAny]
-        elif self.action in ['ml_webhook', 'tn_webhook']:
-            # Los webhooks deben ser accesibles sin autenticación
+        elif self.action in [
+            'ml_webhook', 'tn_webhook',
+            'tn_privacy_store_redact', 'tn_privacy_customers_redact', 'tn_privacy_customers_data_request',
+        ]:
+            # Los webhooks (incluidos los de privacidad de Tiendanube) deben ser accesibles sin autenticación
             permission_classes = [permissions.AllowAny]
         elif self.action in ['facturacion_test']:
             # Probar configuración de facturación: requiere usuario autenticado (staff/admin recomendado)
