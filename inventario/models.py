@@ -1071,6 +1071,7 @@ class HistorialAccion(models.Model):
         ('ingreso_stock',     'Ingreso de stock'),
         ('ajuste_stock',      'Ajuste de stock'),
         ('cambio_devolucion', 'Cambio / Devolución'),
+        ('transferencia_stock', 'Transferencia de stock'),
     ]
     id       = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda   = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='historial_acciones')

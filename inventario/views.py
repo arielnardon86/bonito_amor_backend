@@ -58,6 +58,92 @@ def _generar_codigo_barras_unico(tienda):
     return '779' + str(_uuid.uuid4().int)[:10]
 
 
+def _clonar_producto_a_tienda(producto, tienda, producto_padre, stock):
+    """Crea en `tienda` un producto equivalente a `producto` (mismo nombre/talle/precio/etc),
+    usado cuando una transferencia de stock no encuentra un producto ya existente en destino."""
+    codigo_barras = producto.codigo_barras
+    if codigo_barras and Producto.objects.filter(tienda=tienda, codigo_barras=codigo_barras).exists():
+        # Evita romper el unique_together ('codigo_barras', 'tienda') si por casualidad
+        # ya hay otro producto con ese código en la tienda destino.
+        codigo_barras = None
+    rubro_destino = None
+    if producto.rubro_id:
+        rubro_destino = Rubro.objects.filter(tienda=tienda, nombre=producto.rubro.nombre).first()
+    return Producto.objects.create(
+        nombre=producto.nombre,
+        descripcion=producto.descripcion,
+        precio=producto.precio,
+        costo=producto.costo,
+        talle=producto.talle,
+        stock=stock,
+        iva_porcentaje=producto.iva_porcentaje,
+        codigo_barras=codigo_barras,
+        rubro=rubro_destino,
+        producto_padre=producto_padre,
+        tienda=tienda,
+    )
+
+
+def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_cache=None):
+    """Resta `cantidad` de producto_origen.stock y la suma en el producto equivalente de
+    `tienda_destino` (matcheando por codigo_barras o nombre+talle), creándolo si no existe.
+    Si producto_origen es una variante, resuelve/crea también su padre en destino para no
+    romper la agrupación de variantes. Devuelve (producto_destino, creado: bool)."""
+    if padre_destino_cache is None:
+        padre_destino_cache = {}
+
+    if producto_origen.producto_padre_id:
+        padre_origen = producto_origen.producto_padre
+        padre_destino = padre_destino_cache.get(padre_origen.id)
+        if padre_destino is None:
+            padre_destino = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre__isnull=True, nombre__iexact=padre_origen.nombre,
+            ).first()
+            if padre_destino is None:
+                padre_destino = _clonar_producto_a_tienda(padre_origen, tienda_destino, None, 0)
+            padre_destino_cache[padre_origen.id] = padre_destino
+
+        variante_destino = None
+        if producto_origen.codigo_barras:
+            variante_destino = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre=padre_destino, codigo_barras=producto_origen.codigo_barras,
+            ).first()
+        if variante_destino is None:
+            variante_destino = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre=padre_destino, talle=producto_origen.talle,
+            ).first()
+
+        if variante_destino:
+            variante_destino.stock = (variante_destino.stock or 0) + cantidad
+            variante_destino.save(update_fields=['stock'])
+            creado = False
+        else:
+            variante_destino = _clonar_producto_a_tienda(producto_origen, tienda_destino, padre_destino, cantidad)
+            creado = True
+        producto_destino = variante_destino
+    else:
+        match = None
+        if producto_origen.codigo_barras:
+            match = Producto.objects.filter(tienda=tienda_destino, codigo_barras=producto_origen.codigo_barras).first()
+        if match is None:
+            match = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre__isnull=True,
+                nombre__iexact=producto_origen.nombre, talle=producto_origen.talle,
+            ).first()
+        if match:
+            match.stock = (match.stock or 0) + cantidad
+            match.save(update_fields=['stock'])
+            creado = False
+        else:
+            match = _clonar_producto_a_tienda(producto_origen, tienda_destino, None, cantidad)
+            creado = True
+        producto_destino = match
+
+    producto_origen.stock = (producto_origen.stock or 0) - cantidad
+    producto_origen.save(update_fields=['stock'])
+    return producto_destino, creado
+
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, A4
@@ -790,6 +876,121 @@ class ProductoViewSet(viewsets.ModelViewSet):
         producto.producto_padre = None
         producto.save(update_fields=['producto_padre'])
         return Response({'mensaje': f'"{producto.nombre}" ahora es un producto independiente.'})
+
+    @action(detail=True, methods=['post'], url_path='transferir-stock')
+    def transferir_stock(self, request, pk=None):
+        """Transfiere stock de este producto (o variante) hacia el mismo producto en otra
+        tienda a la que el usuario tenga acceso, creándolo en destino si no existe."""
+        user = request.user
+        if not (user.is_superuser or user.is_supervisor):
+            return Response({'error': 'No tenés permiso para transferir stock.'}, status=403)
+
+        producto_origen = self.get_object()
+
+        try:
+            cantidad = int(request.data.get('cantidad'))
+        except (TypeError, ValueError):
+            return Response({'error': 'Cantidad inválida.'}, status=400)
+        if cantidad <= 0:
+            return Response({'error': 'La cantidad debe ser mayor a cero.'}, status=400)
+        if cantidad > (producto_origen.stock or 0):
+            return Response({'error': 'Stock insuficiente para transferir.'}, status=400)
+
+        tienda_destino = self._resolver_tienda(request.data.get('tienda_destino'))
+        if not tienda_destino:
+            return Response({'error': 'Tienda destino inválida o no autorizada.'}, status=400)
+        if tienda_destino.pk == producto_origen.tienda_id:
+            return Response({'error': 'La tienda destino debe ser distinta de la tienda de origen.'}, status=400)
+
+        with transaction.atomic():
+            producto_destino, creado = _transferir_unidad(producto_origen, tienda_destino, cantidad)
+            talle_str = f' (T: {producto_origen.talle})' if producto_origen.talle else ''
+            _registrar_accion(
+                tienda=producto_origen.tienda, usuario=user, accion='transferencia_stock',
+                detalle=f'Transferencia -{cantidad} · {producto_origen.nombre}{talle_str} → {tienda_destino.nombre}',
+                objeto_id=producto_origen.id,
+            )
+            _registrar_accion(
+                tienda=tienda_destino, usuario=user, accion='transferencia_stock',
+                detalle=f'Transferencia +{cantidad} · {producto_destino.nombre}{talle_str} · desde {producto_origen.tienda.nombre}',
+                objeto_id=producto_destino.id,
+            )
+
+        serializer = self.get_serializer(producto_origen)
+        data = dict(serializer.data)
+        data['transferencia'] = {
+            'tienda_destino': tienda_destino.nombre,
+            'producto_destino_id': str(producto_destino.id),
+            'creado': creado,
+        }
+        return Response(data)
+
+    @action(detail=True, methods=['post'], url_path='transferir-stock-lote')
+    def transferir_stock_lote(self, request, pk=None):
+        """Transfiere de una sola vez el stock de varias variantes de esta familia
+        (self es el producto padre) hacia la misma familia en otra tienda."""
+        user = request.user
+        if not (user.is_superuser or user.is_supervisor):
+            return Response({'error': 'No tenés permiso para transferir stock.'}, status=403)
+
+        padre = self.get_object()
+        lineas = request.data.get('variantes', [])
+        if not lineas:
+            return Response({'error': 'Debe indicar al menos una variante con cantidad.'}, status=400)
+
+        tienda_destino = self._resolver_tienda(request.data.get('tienda_destino'))
+        if not tienda_destino:
+            return Response({'error': 'Tienda destino inválida o no autorizada.'}, status=400)
+        if tienda_destino.pk == padre.tienda_id:
+            return Response({'error': 'La tienda destino debe ser distinta de la tienda de origen.'}, status=400)
+
+        variante_ids = [str(linea.get('id')) for linea in lineas]
+        variantes_por_id = {
+            str(v.id): v for v in Producto.objects.filter(id__in=variante_ids, producto_padre=padre)
+        }
+        if len(variantes_por_id) != len(set(variante_ids)):
+            return Response({'error': 'Alguna variante no pertenece a este producto.'}, status=400)
+
+        cantidades = {}
+        total = 0
+        for linea in lineas:
+            vid = str(linea.get('id'))
+            try:
+                cantidad = int(linea.get('cantidad'))
+            except (TypeError, ValueError):
+                return Response({'error': f'Cantidad inválida para la variante {vid}.'}, status=400)
+            if cantidad <= 0:
+                return Response({'error': f'La cantidad debe ser mayor a cero (variante {vid}).'}, status=400)
+            variante = variantes_por_id[vid]
+            if cantidad > (variante.stock or 0):
+                return Response({'error': f'Stock insuficiente para "{variante.talle or variante.nombre}".'}, status=400)
+            cantidades[vid] = cantidad
+            total += cantidad
+
+        with transaction.atomic():
+            cache = {}
+            for vid, cantidad in cantidades.items():
+                _transferir_unidad(variantes_por_id[vid], tienda_destino, cantidad, padre_destino_cache=cache)
+
+            _registrar_accion(
+                tienda=padre.tienda, usuario=user, accion='transferencia_stock',
+                detalle=f'Transferencia de lote -{total} · {len(cantidades)} variante(s) de "{padre.nombre}" → {tienda_destino.nombre}',
+                objeto_id=padre.id,
+            )
+            _registrar_accion(
+                tienda=tienda_destino, usuario=user, accion='transferencia_stock',
+                detalle=f'Transferencia de lote +{total} · {len(cantidades)} variante(s) de "{padre.nombre}" · desde {padre.tienda.nombre}',
+                objeto_id=padre.id,
+            )
+
+        serializer = self.get_serializer(padre)
+        data = dict(serializer.data)
+        data['transferencia'] = {
+            'tienda_destino': tienda_destino.nombre,
+            'total_transferido': total,
+            'variantes': len(cantidades),
+        }
+        return Response(data)
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
