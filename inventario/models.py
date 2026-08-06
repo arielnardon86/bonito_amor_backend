@@ -206,6 +206,28 @@ class Tienda(models.Model):
     def __str__(self):
         return self.nombre
 
+
+class InstalacionTiendaNubePendiente(models.Model):
+    """
+    Handoff de una instalación de Total Stock iniciada desde la App Store de
+    Tienda Nube por un comerciante que todavía no tiene cuenta (o no está
+    logueado). Guarda el access_token ya intercambiado hasta que el comerciante
+    termina de crear su cuenta o inicia sesión, momento en el que se adjunta a
+    la Tienda correspondiente y se borra.
+    """
+    token = models.CharField(max_length=64, unique=True, editable=False)
+    tn_store_id = models.CharField(max_length=50)
+    tn_access_token = models.TextField()
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Instalación pendiente de Tienda Nube"
+        verbose_name_plural = "Instalaciones pendientes de Tienda Nube"
+
+    def __str__(self):
+        return f"Pendiente store_id={self.tn_store_id}"
+
+
 # Modelo para almacenar categorías de Mercado Libre
 class CategoriaMercadoLibre(models.Model):
     """

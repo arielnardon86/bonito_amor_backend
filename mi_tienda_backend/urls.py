@@ -38,6 +38,7 @@ from inventario.views import (
     planes_publicos, registro_publico, mp_webhook_suscripcion, cambiar_plan,
     mi_suscripcion, verificar_suscripcion_mp, cancelar_suscripcion_view,
     verificar_pago_pendiente, actualizar_datos_tienda,
+    tn_instalar_iniciar, tn_instalar_completar_registro, tn_instalar_vincular_cuenta_existente,
     password_reset_request, password_reset_confirm, update_email,
 )
 # Importación condicional de CambioDevolucionViewSet
@@ -118,6 +119,10 @@ urlpatterns += [
     path('api/suscripcion/cancelar/', cancelar_suscripcion_view, name='cancelar-suscripcion'),
     path('api/suscripcion/verificar-pago/', verificar_pago_pendiente, name='verificar-pago-pendiente'),
     path('api/tienda/actualizar-datos/', actualizar_datos_tienda, name='actualizar-datos-tienda'),
+    # Instalación de Total Stock desde la App Store de Tienda Nube (sin cuenta previa)
+    path('api/tiendanube/instalar/iniciar/', tn_instalar_iniciar, name='tn-instalar-iniciar'),
+    path('api/tiendanube/instalar/completar-registro/', tn_instalar_completar_registro, name='tn-instalar-completar-registro'),
+    path('api/tiendanube/instalar/vincular-cuenta-existente/', tn_instalar_vincular_cuenta_existente, name='tn-instalar-vincular-existente'),
     # Recupero de contraseña
     path('api/auth/password-reset/', password_reset_request, name='password-reset-request'),
     path('api/auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),

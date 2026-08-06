@@ -5,6 +5,7 @@ import logging
 import secrets
 import re
 import threading
+from django.conf import settings
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status, pagination as rest_framework_pagination
 from rest_framework.response import Response
@@ -2934,9 +2935,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
     # Tienda Nube — OAuth, Webhook, Configuración
     # ══════════════════════════════════════════════════════════════════════════
 
-    def _tn_configured(self, tienda):
-        """True si la tienda tiene app_id y client_secret configurados."""
-        return bool(getattr(tienda, 'tn_app_id', None) and getattr(tienda, 'tn_client_secret', None))
+    def _tn_configured(self, tienda=None):
+        """
+        True si la app de Tienda Nube está configurada. App ID y Client Secret
+        son globales (una sola app "Total Stock" registrada en el Panel de
+        Partners), no algo que cada tienda cargue por su cuenta.
+        """
+        return bool(settings.TIENDANUBE_APP_ID and settings.TIENDANUBE_CLIENT_SECRET)
 
     # ── Privacy webhooks (obligatorios para el panel de Partners de TN) ────────
     # TN llama a estas URLs cuando: se desinstala la app, un cliente pide borrar datos,
@@ -2947,9 +2952,19 @@ class TiendaViewSet(viewsets.ModelViewSet):
             url_name='tn-privacy-store-redact',
             permission_classes=[permissions.AllowAny])
     def tn_privacy_store_redact(self, request):
-        """Tienda Nube llama aquí cuando una tienda desinstala la app (GDPR store redact)."""
+        """
+        Tienda Nube llama aquí cuando una tienda desinstala la app (GDPR store
+        redact). Limpiamos la conexión para que, si el comerciante vuelve a
+        instalar más adelante, no quede un token viejo/inválido en el medio.
+        """
         store_id = request.data.get('store_id') or request.data.get('user_id')
         logger.info("TN privacy store_redact — store_id=%s", store_id)
+        if store_id:
+            actualizados = Tienda.objects.filter(tn_store_id=str(store_id)).update(
+                tn_access_token=None, tn_store_id=None, tn_webhook_id=None, tn_sync_habilitado=False,
+            )
+            if actualizados:
+                logger.info("Tienda desconectada de TN por desinstalación — store_id=%s", store_id)
         return Response({'status': 'ok'}, status=200)
 
     @action(detail=False, methods=['post'],
@@ -2981,8 +2996,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
         conectado = bool(getattr(tienda, 'tn_access_token', None) and getattr(tienda, 'tn_store_id', None))
         return Response({
             'connected':         conectado,
-            'has_app_id':        bool(getattr(tienda, 'tn_app_id', None)),
-            'has_client_secret': bool(getattr(tienda, 'tn_client_secret', None)),
+            'app_configurada':   self._tn_configured(),
             'store_id':          getattr(tienda, 'tn_store_id', None),
             'sync_habilitado':   getattr(tienda, 'tn_sync_habilitado', False),
             'facturar_ventas':   getattr(tienda, 'tn_facturar_ventas', True),
@@ -2993,10 +3007,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def tn_auth_url(self, request, pk=None):
         """Devuelve la URL de autorización OAuth de Tienda Nube."""
         tienda = self.get_object()
-        if not self._tn_configured(tienda):
-            return Response({'error': 'Configurá app_id y client_secret primero.'}, status=400)
+        if not self._tn_configured():
+            return Response({'error': 'La app de Tienda Nube no está configurada en el servidor.'}, status=400)
         from .services.tiendanube_service import TiendaNubeService
-        url = TiendaNubeService.get_authorization_url(tienda.tn_app_id)
+        url = TiendaNubeService.get_authorization_url(settings.TIENDANUBE_APP_ID)
         return Response({'auth_url': url})
 
     @action(detail=True, methods=['post'], url_path='tiendanube/callback', url_name='tn-callback')
@@ -3006,8 +3020,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         El frontend (popup) llama a este endpoint con el code recibido de TN.
         """
         tienda = self.get_object()
-        if not self._tn_configured(tienda):
-            return Response({'error': 'app_id y client_secret no configurados.'}, status=400)
+        if not self._tn_configured():
+            return Response({'error': 'La app de Tienda Nube no está configurada en el servidor.'}, status=400)
 
         code = request.data.get('code')
         if not code:
@@ -3016,7 +3030,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.tiendanube_service import TiendaNubeService
         try:
             access_token, store_id = TiendaNubeService.exchange_code_for_token(
-                tienda.tn_app_id, tienda.tn_client_secret, code
+                settings.TIENDANUBE_APP_ID, settings.TIENDANUBE_CLIENT_SECRET, code
             )
         except Exception as e:
             logger.error("Error intercambiando código TN: %s", e)
@@ -3117,9 +3131,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
         # ── Verificar firma HMAC ──────────────────────────────────────────
         from .services.tiendanube_service import TiendaNubeService
         sig = request.META.get('HTTP_X_LINKEDSTORE_HMAC_SHA256', '')
-        if tienda.tn_client_secret and sig:
+        if settings.TIENDANUBE_CLIENT_SECRET and sig:
             raw = request.body
-            if not TiendaNubeService.verify_signature(tienda.tn_client_secret, raw, sig):
+            if not TiendaNubeService.verify_signature(settings.TIENDANUBE_CLIENT_SECRET, raw, sig):
                 logger.warning("Firma inválida en webhook TN para tienda %s", tienda.nombre)
                 return Response({'error': 'Firma inválida'}, status=200)
 
@@ -6890,28 +6904,29 @@ def planes_publicos(request):
     return Response(data)
 
 
-@api_view(['POST'])
-@permission_classes([permissions.AllowAny])
-def registro_publico(request):
+class _RegistroError(Exception):
+    """Envuelve una Response de error para poder validar y cortar temprano
+    dentro de _crear_tienda_usuario_suscripcion sin duplicar el chequeo en
+    cada llamador (alta pública, alta vía instalación de Tienda Nube, etc)."""
+    def __init__(self, response):
+        self.response = response
+
+
+def _crear_tienda_usuario_suscripcion(data):
     """
-    Crea una nueva tienda + usuario admin + suscripción en trial.
-    Body: { nombre_tienda, email, username, password, telefono, plan (nombre) }
-    Devuelve: { token_access, token_refresh, init_point (URL checkout MP) }
+    Valida y crea Tienda + User admin + Suscripcion 'pending', a partir del
+    mismo payload que usa el alta pública.
+    Body esperado: { nombre_tienda, email, username, password, plan, cuit,
+                      telefono (opcional), logo (opcional) }
+    Devuelve (tienda, user, plan). Lanza _RegistroError si algo no es válido.
     """
     from .models import Plan, Suscripcion
-    from rest_framework_simplejwt.tokens import RefreshToken
-    from django.conf import settings as django_settings
     from django.utils import timezone
-    from datetime import timedelta
-    import urllib.parse
 
-    data = request.data
-
-    # Validaciones básicas
     required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit']
     missing = [f for f in required if not data.get(f)]
     if missing:
-        return Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400)
+        raise _RegistroError(Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400))
 
     nombre_tienda = data['nombre_tienda'].strip()
     username      = data['username'].strip().lower()
@@ -6923,30 +6938,29 @@ def registro_publico(request):
 
     cuit_limpio = re.sub(r'[^0-9]', '', cuit)
     if len(cuit_limpio) != 11:
-        return Response({'error': 'El CUIT/CUIL debe tener 11 dígitos.'}, status=400)
+        raise _RegistroError(Response({'error': 'El CUIT/CUIL debe tener 11 dígitos.'}, status=400))
 
     if logo and len(logo) > MAX_LOGO_BASE64_CHARS:
-        return Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400)
+        raise _RegistroError(Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400))
 
     if Tienda.objects.filter(nombre__iexact=nombre_tienda).exists():
-        return Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400)
+        raise _RegistroError(Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400))
 
     if User.objects.filter(username__iexact=username).exists():
-        return Response({'error': 'Ese nombre de usuario ya está en uso.'}, status=400)
+        raise _RegistroError(Response({'error': 'Ese nombre de usuario ya está en uso.'}, status=400))
 
     if User.objects.filter(email__iexact=email).exists():
-        return Response({'error': 'Ya existe una cuenta con ese email.'}, status=400)
+        raise _RegistroError(Response({'error': 'Ya existe una cuenta con ese email.'}, status=400))
 
     if plan_nombre == 'legacy':
-        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
+        raise _RegistroError(Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400))
 
     try:
         plan = Plan.objects.get(nombre=plan_nombre)
     except Plan.DoesNotExist:
-        return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
+        raise _RegistroError(Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400))
 
     with transaction.atomic():
-        # Crear tienda
         tienda = Tienda.objects.create(
             nombre=nombre_tienda,
             email=email,
@@ -6954,8 +6968,6 @@ def registro_publico(request):
             cuit=cuit,
             logo=logo,
         )
-
-        # Crear usuario admin de la tienda (superuser para acceso completo al panel)
         user = User.objects.create_user(
             username=username,
             email=email,
@@ -6964,14 +6976,33 @@ def registro_publico(request):
             is_superuser=True,
             tienda=tienda,
         )
-
-        # Crear suscripción pendiente — se activa cuando MP confirme vía webhook
-        suscripcion = Suscripcion.objects.create(  # noqa: F841
+        Suscripcion.objects.create(
             tienda=tienda,
             plan=plan,
             estado='pending',
             fecha_inicio=timezone.now(),
         )
+
+    return tienda, user, plan
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def registro_publico(request):
+    """
+    Crea una nueva tienda + usuario admin + suscripción en trial.
+    Body: { nombre_tienda, email, username, password, telefono, plan (nombre) }
+    Devuelve: { token_access, token_refresh, init_point (URL checkout MP) }
+    """
+    from .models import Suscripcion
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from django.conf import settings as django_settings
+    import urllib.parse
+
+    try:
+        tienda, user, plan = _crear_tienda_usuario_suscripcion(request.data)
+    except _RegistroError as e:
+        return e.response
 
     # Generar tokens JWT para que el usuario quede logueado
     refresh = RefreshToken.for_user(user)
@@ -7004,6 +7035,183 @@ def registro_publico(request):
         'trial_dias':    Suscripcion.DIAS_TRIAL,
         'plan':          plan.nombre,
     }, status=201)
+
+
+def _registrar_webhook_tn(tienda, request):
+    """
+    Registra (o re-registra) el webhook order/paid en Tienda Nube para una
+    tienda recién conectada. No interrumpe el flujo si falla — se puede
+    reintentar a mano desde el panel.
+    """
+    from .services.tiendanube_service import TiendaNubeService
+    try:
+        tn = TiendaNubeService(tienda)
+        if tienda.tn_webhook_id:
+            tn.delete_webhook(tienda.tn_webhook_id)
+        base = request.build_absolute_uri('/').rstrip('/')
+        webhook_url = f"{base}/api/tiendas/{tienda.id}/tiendanube/webhook/"
+        webhook_id = tn.register_webhook('order/paid', webhook_url)
+        tienda.tn_webhook_id = webhook_id
+        tienda.save(update_fields=['tn_webhook_id'])
+        logger.info("Webhook TN auto-registrado tras instalación — tienda=%s id=%s", tienda.nombre, webhook_id)
+    except Exception as e:
+        logger.error("No se pudo auto-registrar el webhook TN para %s: %s", tienda.nombre, e)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def tn_instalar_iniciar(request):
+    """
+    Primer paso de una instalación de Total Stock iniciada desde la App Store
+    de Tienda Nube: recibe el `code` que Tienda Nube manda por query string al
+    autorizar, lo intercambia por un access_token, y:
+      - Si ese store_id YA está conectado a una tienda existente de Total
+        Stock (reinstalación), refresca el token y avisa que solo hace falta
+        iniciar sesión.
+      - Si es la primera vez, guarda el token en un registro temporal y
+        devuelve un `instalacion_token` opaco para completar el alta (o
+        vincularlo a una cuenta existente) en el siguiente paso.
+    Body: { code }
+    """
+    from .models import InstalacionTiendaNubePendiente
+    from .services.tiendanube_service import TiendaNubeService
+
+    if not (settings.TIENDANUBE_APP_ID and settings.TIENDANUBE_CLIENT_SECRET):
+        return Response({'error': 'La app de Tienda Nube no está configurada en el servidor.'}, status=400)
+
+    code = request.data.get('code')
+    if not code:
+        return Response({'error': 'Falta el código de autorización.'}, status=400)
+
+    try:
+        access_token, store_id = TiendaNubeService.exchange_code_for_token(
+            settings.TIENDANUBE_APP_ID, settings.TIENDANUBE_CLIENT_SECRET, code
+        )
+    except Exception as e:
+        logger.error("Error intercambiando código TN (instalación): %s", e)
+        return Response({'error': f'Error al obtener token: {e}'}, status=400)
+
+    tienda_existente = Tienda.objects.filter(tn_store_id=store_id).first()
+    if tienda_existente:
+        tienda_existente.tn_access_token = access_token
+        tienda_existente.tn_sync_habilitado = True
+        tienda_existente.save(update_fields=['tn_access_token', 'tn_sync_habilitado'])
+        _registrar_webhook_tn(tienda_existente, request)
+        logger.info("Reinstalación de TN detectada — tienda=%s store_id=%s", tienda_existente.nombre, store_id)
+        return Response({'ya_conectada': True})
+
+    instalacion = InstalacionTiendaNubePendiente.objects.create(
+        token=secrets.token_urlsafe(32),
+        tn_store_id=store_id,
+        tn_access_token=access_token,
+    )
+    return Response({'ya_conectada': False, 'instalacion_token': instalacion.token})
+
+
+def _obtener_instalacion_pendiente(instalacion_token):
+    """Devuelve el registro de InstalacionTiendaNubePendiente, o None si no existe/ya se usó."""
+    from .models import InstalacionTiendaNubePendiente
+    try:
+        return InstalacionTiendaNubePendiente.objects.get(token=instalacion_token)
+    except InstalacionTiendaNubePendiente.DoesNotExist:
+        return None
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def tn_instalar_completar_registro(request):
+    """
+    Segundo paso (comerciante SIN cuenta previa): crea la cuenta de Total
+    Stock igual que el alta pública, y de paso adjunta la conexión de Tienda
+    Nube que quedó pendiente de `tn_instalar_iniciar`.
+    Body: { instalacion_token, nombre_tienda, email, username, password, plan, cuit, telefono? }
+
+    Importante: el token de instalación se valida (y recién se borra) DESPUÉS
+    de crear la tienda con éxito, para que un error de validación normal del
+    alta (usuario duplicado, etc.) no deje al comerciante sin forma de
+    reintentar con el mismo token.
+    """
+    instalacion_token = request.data.get('instalacion_token')
+    if not instalacion_token:
+        return Response({'error': 'Falta instalacion_token.'}, status=400)
+
+    instalacion = _obtener_instalacion_pendiente(instalacion_token)
+    if not instalacion:
+        return Response({'error': 'La instalación expiró o ya fue utilizada. Volvé a instalar desde Tienda Nube.'}, status=400)
+
+    try:
+        tienda, user, plan = _crear_tienda_usuario_suscripcion(request.data)
+    except _RegistroError as e:
+        return e.response
+
+    tienda.tn_store_id = instalacion.tn_store_id
+    tienda.tn_access_token = instalacion.tn_access_token
+    tienda.tn_sync_habilitado = True
+    tienda.save(update_fields=['tn_store_id', 'tn_access_token', 'tn_sync_habilitado'])
+    instalacion.delete()
+    _registrar_webhook_tn(tienda, request)
+
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from django.conf import settings as django_settings
+    from .models import Suscripcion
+    import urllib.parse
+    refresh = RefreshToken.for_user(user)
+
+    # Mismo armado de checkout de MP que registro_publico, para que el
+    # frontend pueda reusar exactamente la misma lógica post-alta.
+    frontend_url = getattr(django_settings, 'FRONTEND_URL', 'http://localhost:3000')
+    back_url = f"{frontend_url}/"
+    init_point = None
+    if plan.mp_plan_id:
+        backend_url = getattr(django_settings, 'BACKEND_URL', '').rstrip('/')
+        params = {
+            'preapproval_plan_id': plan.mp_plan_id,
+            'back_url':            back_url,
+            'external_reference':  str(tienda.id),
+        }
+        if backend_url:
+            params['notification_url'] = f"{backend_url}/api/mp-webhook-suscripcion/"
+        init_point = f"https://www.mercadopago.com.ar/subscriptions/checkout?{urllib.parse.urlencode(params)}"
+
+    return Response({
+        'token_access':  str(refresh.access_token),
+        'token_refresh': str(refresh),
+        'tienda_slug':   tienda.nombre,
+        'username':      user.username,
+        'init_point':    init_point,
+        'trial_dias':    Suscripcion.DIAS_TRIAL,
+        'plan':          plan.nombre,
+    }, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def tn_instalar_vincular_cuenta_existente(request):
+    """
+    Segundo paso (comerciante que YA tiene cuenta de Total Stock): adjunta la
+    conexión de Tienda Nube pendiente a la tienda del usuario ya logueado.
+    Body: { instalacion_token, tienda_slug? }
+    """
+    instalacion_token = request.data.get('instalacion_token')
+    if not instalacion_token:
+        return Response({'error': 'Falta instalacion_token.'}, status=400)
+
+    instalacion = _obtener_instalacion_pendiente(instalacion_token)
+    if not instalacion:
+        return Response({'error': 'La instalación expiró o ya fue utilizada. Volvé a instalar desde Tienda Nube.'}, status=400)
+
+    tienda = _resolver_tienda_por_slug(request)
+    if not tienda:
+        return Response({'error': 'El usuario no tiene tienda asignada.'}, status=400)
+
+    tienda.tn_store_id = instalacion.tn_store_id
+    tienda.tn_access_token = instalacion.tn_access_token
+    tienda.tn_sync_habilitado = True
+    tienda.save(update_fields=['tn_store_id', 'tn_access_token', 'tn_sync_habilitado'])
+    instalacion.delete()
+    _registrar_webhook_tn(tienda, request)
+
+    return Response({'success': True, 'tienda_slug': tienda.nombre})
 
 
 @api_view(['POST'])

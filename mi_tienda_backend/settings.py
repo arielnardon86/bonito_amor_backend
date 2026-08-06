@@ -327,6 +327,13 @@ BACKEND_URL = os.environ.get('BACKEND_URL', '')
 # Clave secreta para validar firma de webhooks de MP (Configurar notificaciones → clave secreta)
 MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
 
+# ── Tienda Nube / Nuvemshop ───────────────────────────────────────────────────
+# Hay una sola app de Total Stock registrada en el Panel de Partners de Tienda
+# Nube: el App ID y Client Secret son globales para toda la plataforma, no algo
+# que cada tienda tenga que cargar por su cuenta.
+TIENDANUBE_APP_ID = os.environ.get('TIENDANUBE_APP_ID', '')
+TIENDANUBE_CLIENT_SECRET = os.environ.get('TIENDANUBE_CLIENT_SECRET', '')
+
 # ── Email — Zoho Mail (info@totalstock.com.ar) ───────────────────────────────
 # En Render configurar:
 #   EMAIL_HOST_PASSWORD  → contraseña de aplicación de Zoho

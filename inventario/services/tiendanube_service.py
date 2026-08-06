@@ -31,11 +31,12 @@ class TiendaNubeService:
     """Wrapper sobre la API de Tienda Nube para una tienda ya autenticada."""
 
     def __init__(self, tienda):
+        from django.conf import settings
         self.tienda        = tienda
         self.access_token  = tienda.tn_access_token
         self.store_id      = tienda.tn_store_id
-        self.app_id        = tienda.tn_app_id
-        self.client_secret = tienda.tn_client_secret
+        self.app_id        = settings.TIENDANUBE_APP_ID
+        self.client_secret = settings.TIENDANUBE_CLIENT_SECRET
 
     # ── Helpers de petición ──────────────────────────────────────────────────
 
