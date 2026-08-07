@@ -3375,7 +3375,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
             try:
                 from .services.facturacion_service import FacturacionService
                 fs = FacturacionService(tienda)
-                fs.emitir_factura(venta)
+                cliente_data = _cliente_data_desde_orden_tn(order, venta)
+                fs.emitir_factura(venta, cliente_data)
             except Exception as e:
                 logger.warning("Error al facturar venta TN %s: %s", venta.id, e)
 
@@ -3675,6 +3676,31 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 errores.append(f"{prod.nombre}: {str(e)}")
 
         return Response({'actualizados': ok, 'errores': errores}, status=200)
+
+
+def _cliente_data_desde_orden_tn(order, venta):
+    """
+    Arma el dict cliente_data que espera FacturacionService.emitir_factura()
+    a partir de los datos de facturación de una orden de Tienda Nube.
+    Sin CUIT informado por TN, se factura como Consumidor Final (comportamiento
+    seguro por defecto, igual que en el resto de la app).
+    """
+    customer = order.get('customer') or {}
+    billing_address = order.get('billing_address') or order.get('customer', {}).get('default_address') or {}
+    cuit = (
+        order.get('billing_document') or
+        customer.get('identification') or
+        ''
+    )
+    domicilio = ', '.join(
+        p for p in [billing_address.get('address'), billing_address.get('city')] if p
+    )
+    return {
+        'cliente_nombre': venta.cliente_nombre or 'Consumidor Final',
+        'cliente_cuit': cuit,
+        'cliente_domicilio': domicilio,
+        'cliente_condicion_iva': 'CF',
+    }
 
 
 def _procesar_orden_tiendanube(tienda, order, order_id):
