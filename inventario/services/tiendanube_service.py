@@ -206,10 +206,10 @@ class TiendaNubeService:
 
     # ── Stock ────────────────────────────────────────────────────────────────
 
-    def update_variant_stock(self, variant_id, quantity):
-        """Actualiza el stock de una variante."""
+    def update_variant_stock(self, product_id, variant_id, quantity):
+        """Actualiza el stock de una variante (anidada bajo su producto en la API de TN)."""
         resp = requests.put(
-            self._url(f"variants/{variant_id}"),
+            self._url(f"products/{product_id}/variants/{variant_id}"),
             headers=self._headers(),
             json={"stock": quantity},
             timeout=15,

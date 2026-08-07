@@ -3654,7 +3654,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
         errores = []
         for prod in productos:
             try:
-                tn.update_variant_stock(prod.tn_variant_id, prod.stock)
+                tn.update_variant_stock(prod.tn_product_id, prod.tn_variant_id, prod.stock)
                 ok += 1
             except Exception as e:
                 # Si la variante no existe (404), intentar refrescar el ID desde TN
@@ -3667,7 +3667,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             new_vid = str(variants[0]['id'])
                             prod.tn_variant_id = new_vid
                             prod.save(update_fields=['tn_variant_id'])
-                            tn.update_variant_stock(new_vid, prod.stock)
+                            tn.update_variant_stock(prod.tn_product_id, new_vid, prod.stock)
                             ok += 1
                             continue
                     except Exception as inner:
