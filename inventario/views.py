@@ -702,8 +702,13 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         codigos_vistos = {}
         resultados = []
-        creados = 0
-        actualizados = 0
+        # En modo 'confirmar' no se escribe a la DB fila por fila (eso es lo que
+        # provocaba WORKER TIMEOUT con archivos de miles de filas: cada
+        # Producto.objects.create()/save() es un round-trip aparte contra una DB
+        # remota). Se acumulan acá y se escriben con bulk_create/bulk_update al
+        # final, en lotes.
+        productos_a_crear = []
+        productos_a_actualizar = []
 
         for idx, fila in enumerate(filas, start=1):
             numero_fila = fila.get('fila', idx)
@@ -792,11 +797,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
                             producto_existente.codigo_barras = codigo_barras
                         producto_existente.stock_ultimo_ingreso = nuevo_stock
                         producto_existente.fecha_ultimo_ingreso = timezone.now()
-                        producto_existente.save()
-                        actualizados += 1
+                        producto_existente.fecha_actualizacion = timezone.now()
+                        productos_a_actualizar.append(producto_existente)
                     else:
-                        codigo_final = codigo_barras or _generar_codigo_barras_en_memoria()
-                        Producto.objects.create(
+                        if codigo_barras:
+                            if codigo_barras in codigos_barras_vistos:
+                                raise ValueError(
+                                    f"Código de barras '{codigo_barras}' duplicado "
+                                    f"(ya usado en esta tienda o en otra fila del archivo)."
+                                )
+                            codigo_final = codigo_barras
+                            codigos_barras_vistos.add(codigo_final)
+                        else:
+                            codigo_final = _generar_codigo_barras_en_memoria()
+                        productos_a_crear.append(Producto(
                             tienda=tienda,
                             nombre=nombre,
                             codigo_interno=codigo_interno,
@@ -807,8 +821,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                             stock=cantidad,
                             stock_ultimo_ingreso=cantidad,
                             fecha_ultimo_ingreso=timezone.now(),
-                        )
-                        creados += 1
+                        ))
                         resultado_fila['codigo_barras'] = codigo_final
 
                 resultados.append(resultado_fila)
@@ -820,6 +833,45 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     'estado': None,
                     'error': str(e),
                 })
+
+        creados = 0
+        actualizados = 0
+
+        if modo == 'confirmar':
+            if productos_a_crear:
+                try:
+                    Producto.objects.bulk_create(productos_a_crear, batch_size=500)
+                    creados = len(productos_a_crear)
+                except Exception as e:
+                    logger.error(
+                        "Carga masiva: bulk_create falló para %s producto(s) nuevo(s) en tienda %s: %s",
+                        len(productos_a_crear), tienda.nombre, e,
+                    )
+                    codigos_fallidos = {p.codigo_interno for p in productos_a_crear}
+                    for r in resultados:
+                        if r.get('estado') == 'nuevo' and r.get('codigo_interno') in codigos_fallidos:
+                            r['error'] = 'No se pudo guardar (error interno). Reintentá la importación.'
+                            r['estado'] = None
+
+            if productos_a_actualizar:
+                try:
+                    Producto.objects.bulk_update(
+                        productos_a_actualizar,
+                        ['stock', 'costo', 'precio', 'iva_porcentaje', 'codigo_barras',
+                         'stock_ultimo_ingreso', 'fecha_ultimo_ingreso', 'fecha_actualizacion'],
+                        batch_size=500,
+                    )
+                    actualizados = len(productos_a_actualizar)
+                except Exception as e:
+                    logger.error(
+                        "Carga masiva: bulk_update falló para %s reposición(es) en tienda %s: %s",
+                        len(productos_a_actualizar), tienda.nombre, e,
+                    )
+                    codigos_fallidos = {p.codigo_interno for p in productos_a_actualizar}
+                    for r in resultados:
+                        if r.get('estado') == 'reposicion' and r.get('codigo_interno') in codigos_fallidos:
+                            r['error'] = 'No se pudo actualizar (error interno). Reintentá la importación.'
+                            r['estado'] = None
 
         # Un único registro de historial para todo el archivo (no uno por fila): con
         # archivos de cientos/miles de filas, llamar _registrar_accion en el loop
