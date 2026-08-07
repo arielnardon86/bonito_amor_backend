@@ -799,6 +799,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         producto_existente.fecha_ultimo_ingreso = timezone.now()
                         producto_existente.fecha_actualizacion = timezone.now()
                         productos_a_actualizar.append(producto_existente)
+                        # Se informa siempre el código de barras final (nuevo o ya
+                        # existente) para que el frontend pueda imprimir etiquetas
+                        # del lote recién importado sin otra consulta.
+                        resultado_fila['codigo_barras'] = producto_existente.codigo_barras
                     else:
                         if codigo_barras:
                             if codigo_barras in codigos_barras_vistos:
