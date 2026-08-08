@@ -35,7 +35,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from inventario.views import (
     verificar_database_config, registrar_token_fcm, eliminar_token_fcm,
-    planes_publicos, registro_publico, mp_webhook_suscripcion, cambiar_plan,
+    planes_publicos, registro_publico, verificar_cuit_disponible, mp_webhook_suscripcion, cambiar_plan,
     mi_suscripcion, verificar_suscripcion_mp, cancelar_suscripcion_view,
     verificar_pago_pendiente, actualizar_datos_tienda,
     tn_instalar_iniciar, tn_instalar_completar_registro, tn_instalar_vincular_cuenta_existente,
@@ -112,6 +112,7 @@ urlpatterns += [
     # Suscripciones / registro público
     path('api/planes/', planes_publicos, name='planes-publicos'),
     path('api/registro/', registro_publico, name='registro-publico'),
+    path('api/verificar-cuit/', verificar_cuit_disponible, name='verificar-cuit'),
     path('api/mp-webhook-suscripcion/', mp_webhook_suscripcion, name='mp-webhook-suscripcion'),
     path('api/suscripcion/cambiar-plan/', cambiar_plan, name='cambiar-plan'),
     path('api/suscripcion/mi-plan/', mi_suscripcion, name='mi-suscripcion'),

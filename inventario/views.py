@@ -7224,28 +7224,36 @@ def _crear_tienda_usuario_suscripcion(data):
     Valida y crea Tienda + User admin + Suscripcion 'pending', a partir del
     mismo payload que usa el alta pública.
     Body esperado: { nombre_tienda, email, username, password, plan, cuit,
-                      telefono (opcional), logo (opcional) }
+                      mp_payer_email, telefono (opcional), logo (opcional) }
     Devuelve (tienda, user, plan). Lanza _RegistroError si algo no es válido.
     """
+    from django.core.validators import validate_email
+    from django.core.exceptions import ValidationError as DjangoValidationError
     from .models import Plan, Suscripcion
     from django.utils import timezone
 
-    required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit']
+    required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit', 'mp_payer_email']
     missing = [f for f in required if not data.get(f)]
     if missing:
         raise _RegistroError(Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400))
 
-    nombre_tienda = data['nombre_tienda'].strip()
-    username      = data['username'].strip().lower()
-    email         = data['email'].strip().lower()
-    password      = data['password']
-    plan_nombre   = data['plan'].lower()
-    cuit          = data['cuit'].strip()
-    logo          = (data.get('logo') or '').strip() or None
+    nombre_tienda   = data['nombre_tienda'].strip()
+    username        = data['username'].strip().lower()
+    email           = data['email'].strip().lower()
+    password        = data['password']
+    plan_nombre     = data['plan'].lower()
+    cuit            = data['cuit'].strip()
+    mp_payer_email  = data['mp_payer_email'].strip().lower()
+    logo            = (data.get('logo') or '').strip() or None
 
     cuit_limpio = re.sub(r'[^0-9]', '', cuit)
     if len(cuit_limpio) != 11:
         raise _RegistroError(Response({'error': 'El CUIT/CUIL debe tener 11 dígitos.'}, status=400))
+
+    try:
+        validate_email(mp_payer_email)
+    except DjangoValidationError:
+        raise _RegistroError(Response({'error': 'El email de Mercado Pago no es válido.'}, status=400))
 
     if logo and len(logo) > MAX_LOGO_BASE64_CHARS:
         raise _RegistroError(Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400))
@@ -7288,9 +7296,30 @@ def _crear_tienda_usuario_suscripcion(data):
             plan=plan,
             estado='pending',
             fecha_inicio=timezone.now(),
+            mp_payer_email=mp_payer_email,
         )
 
     return tienda, user, plan
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def verificar_cuit_disponible(request):
+    """
+    Chequeo informativo (no bloqueante) para el formulario de alta: indica si ya
+    existe una tienda registrada con este CUIT, para poder avisarle al usuario
+    que puede pedir que le unifiquen el acceso en vez de crear una cuenta suelta.
+
+    No devuelve nombre de tienda ni ningún otro dato identificable: que dos CUITs
+    coincidan no prueba que sea el mismo dueño, y el CUIT no es un dato secreto.
+    """
+    cuit_query = re.sub(r'[^0-9]', '', request.query_params.get('cuit', ''))
+    if len(cuit_query) != 11:
+        return Response({'existe': False})
+
+    cuits_existentes = Tienda.objects.exclude(cuit__isnull=True).exclude(cuit='').values_list('cuit', flat=True)
+    existe = any(re.sub(r'[^0-9]', '', c) == cuit_query for c in cuits_existentes)
+    return Response({'existe': existe})
 
 
 @api_view(['POST'])
