@@ -325,9 +325,20 @@ def _resolver_tienda_por_slug(request):
     return Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).first()
 
 
+class ProductoPagination(rest_framework_pagination.PageNumberPagination):
+    """Paginación de productos: 10 por página por defecto (comportamiento actual),
+    pero acepta ?page_size= para casos puntuales que necesitan traer un lote grande
+    de una sola vez (ej. 'seleccionar todos' para imprimir etiquetas de un rubro
+    completo, que puede abarcar muchas más de 10 filas)."""
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 5000  # mismo tope que carga_masiva, por la misma razón (memoria del navegador)
+
+
 class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ProductoPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ['nombre', 'talle', 'codigo_barras', 'variantes__codigo_barras']
 
