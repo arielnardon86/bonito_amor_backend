@@ -664,6 +664,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
         tienda_slug = request.data.get('tienda_slug')
         modo = request.data.get('modo', 'preview')
         filas = request.data.get('filas') or []
+        # Permite re-subir el mismo archivo para corregir precio/IVA/rubro de
+        # productos ya existentes sin volver a sumarles stock (por ejemplo si un
+        # import anterior no guardó bien el rubro). Por default se comporta igual
+        # que siempre: reposición suma la cantidad de la fila al stock.
+        actualizar_stock = request.data.get('actualizar_stock', True)
 
         if modo not in ('preview', 'confirmar'):
             return Response({'error': "El modo debe ser 'preview' o 'confirmar'."}, status=status.HTTP_400_BAD_REQUEST)
@@ -756,15 +761,19 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 if cantidad < 0:
                     raise ValueError("La cantidad no puede ser negativa.")
 
+                # Se resuelve el rubro siempre que venga en la fila (para vincular
+                # Producto.rubro), independientemente de si el IVA sale de él o vino
+                # explícito en la fila.
+                rubro = rubros_por_nombre.get(rubro_nombre.lower()) if rubro_nombre else None
+
                 # Resolver IVA: prioridad al valor explícito de la fila, si no por rubro,
                 # y si no vino ninguno de los dos se asume 0% (no es un error).
                 if iva_raw is not None and str(iva_raw).strip() != '':
                     iva_porcentaje = Decimal(str(iva_raw))
-                elif rubro_nombre:
-                    rubro = rubros_por_nombre.get(rubro_nombre.lower())
-                    if not rubro:
-                        raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
+                elif rubro:
                     iva_porcentaje = rubro.iva_porcentaje
+                elif rubro_nombre:
+                    raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
                 else:
                     iva_porcentaje = Decimal('0')
 
@@ -798,17 +807,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
                 if modo == 'confirmar':
                     if producto_existente:
-                        stock_anterior = producto_existente.stock or 0
-                        nuevo_stock = stock_anterior + cantidad
-                        producto_existente.stock = nuevo_stock
                         producto_existente.costo = costo
                         producto_existente.precio = precio_venta
                         producto_existente.iva_porcentaje = iva_porcentaje
+                        if rubro:
+                            producto_existente.rubro = rubro
                         if codigo_barras:
                             producto_existente.codigo_barras = codigo_barras
-                        producto_existente.stock_ultimo_ingreso = nuevo_stock
-                        producto_existente.fecha_ultimo_ingreso = timezone.now()
                         producto_existente.fecha_actualizacion = timezone.now()
+                        if actualizar_stock:
+                            stock_anterior = producto_existente.stock or 0
+                            nuevo_stock = stock_anterior + cantidad
+                            producto_existente.stock = nuevo_stock
+                            producto_existente.stock_ultimo_ingreso = nuevo_stock
+                            producto_existente.fecha_ultimo_ingreso = timezone.now()
                         productos_a_actualizar.append(producto_existente)
                         # Se informa siempre el código de barras final (nuevo o ya
                         # existente) para que el frontend pueda imprimir etiquetas
@@ -833,6 +845,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                             costo=costo,
                             precio=precio_venta,
                             iva_porcentaje=iva_porcentaje,
+                            rubro=rubro,
                             stock=cantidad,
                             stock_ultimo_ingreso=cantidad,
                             fecha_ultimo_ingreso=timezone.now(),
@@ -872,7 +885,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 try:
                     Producto.objects.bulk_update(
                         productos_a_actualizar,
-                        ['stock', 'costo', 'precio', 'iva_porcentaje', 'codigo_barras',
+                        ['stock', 'costo', 'precio', 'iva_porcentaje', 'rubro', 'codigo_barras',
                          'stock_ultimo_ingreso', 'fecha_ultimo_ingreso', 'fecha_actualizacion'],
                         batch_size=500,
                     )
