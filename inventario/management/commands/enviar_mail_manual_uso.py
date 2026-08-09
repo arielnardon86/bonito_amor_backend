@@ -145,21 +145,40 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f"Error enviando prueba a {test_email}: {e}"))
             return
 
-        tiendas = Tienda.objects.exclude(email__isnull=True).exclude(email='').select_related('suscripcion')
-        destinatarios = []
+        from inventario.models import User
+
+        tiendas = Tienda.objects.select_related('suscripcion')
+        destinatarios = []  # lista de (tienda, email, origen)
+        sin_email = []
         for t in tiendas:
             try:
                 sus = t.suscripcion
             except Exception:
                 sus = None
-            if sus is None or sus.estado in ('trial', 'activa', 'gracia'):
-                destinatarios.append(t)
+            if not (sus is None or sus.estado in ('trial', 'activa', 'gracia')):
+                continue
+
+            if t.email:
+                destinatarios.append((t, t.email, 'tienda'))
+                continue
+
+            # La tienda no tiene email cargado: usar el de su usuario administrador.
+            owner = User.objects.filter(tienda=t, is_superuser=True).exclude(email='').exclude(email__isnull=True).first()
+            if owner:
+                destinatarios.append((t, owner.email, f'usuario {owner.username}'))
+            else:
+                sin_email.append(t)
 
         self.stdout.write(f"Tiendas destinatarias (trial/activa/gracia o sin suscripción): {len(destinatarios)}")
+        if sin_email:
+            self.stdout.write(self.style.WARNING(
+                f"{len(sin_email)} tienda(s) sin ningún email disponible (ni tienda ni administrador), se omiten: "
+                + ', '.join(t.nombre for t in sin_email)
+            ))
 
         if not confirmar:
-            for t in destinatarios:
-                self.stdout.write(f"  - {t.nombre} -> {t.email}")
+            for t, email, origen in destinatarios:
+                self.stdout.write(f"  - {t.nombre} -> {email} ({origen})")
             self.stdout.write(self.style.WARNING(
                 "Dry-run: no se envió nada. Volvé a correr con --confirmar para el envío real."
             ))
@@ -167,15 +186,15 @@ class Command(BaseCommand):
 
         enviados = 0
         errores = 0
-        for t in destinatarios:
+        for t, email, origen in destinatarios:
             subject, texto, html = _armar_email(t.nombre)
             try:
-                self._enviar(t.email, subject, texto, html)
+                self._enviar(email, subject, texto, html)
                 enviados += 1
-                self.stdout.write(f"  ✓ {t.nombre} ({t.email})")
+                self.stdout.write(f"  ✓ {t.nombre} ({email}, {origen})")
             except Exception as e:
                 errores += 1
-                logger.error("Error enviando mail de novedades a %s (%s): %s", t.nombre, t.email, e)
-                self.stdout.write(self.style.ERROR(f"  ✗ {t.nombre} ({t.email}): {e}"))
+                logger.error("Error enviando mail de novedades a %s (%s): %s", t.nombre, email, e)
+                self.stdout.write(self.style.ERROR(f"  ✗ {t.nombre} ({email}): {e}"))
 
         self.stdout.write(self.style.SUCCESS(f"\nListo: {enviados} enviados, {errores} errores."))
