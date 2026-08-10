@@ -187,7 +187,7 @@ class Tienda(models.Model):
         help_text="Habilitar procesamiento automático de ventas desde Tienda Nube"
     )
     tn_facturar_ventas = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Facturar automáticamente ventas procesadas por webhook de Tienda Nube"
     )
     requiere_eleccion_plan = models.BooleanField(
