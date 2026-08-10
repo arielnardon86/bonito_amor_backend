@@ -3580,13 +3580,18 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def tn_import_products(self, request, pk=None):
         """
         Importa productos desde Tienda Nube al sistema.
-        - Si ya existe un producto con el mismo tn_variant_id → lo actualiza (precio/stock).
-        - Si no existe → intenta matchear por SKU o nombre, y vincula.
-        - Si no hay match → crea el producto.
+        - Si ya existe un producto con el mismo tn_variant_id → lo actualiza (stock, y precio solo si se pide).
+        - Si no existe → intenta matchear por SKU o nombre, y vincula (stock, y precio solo si se pide).
+        - Si no hay match → crea el producto (siempre con el precio de TN, al no haber uno local que preservar).
+        Body opcional: { importar_precio: bool }  — default False: los precios pueden
+        diferir a propósito entre la tienda física y la online, así que por defecto
+        NO se pisa el precio local de productos ya existentes, solo el stock.
         """
         tienda = self.get_object()
         if not tienda.tn_access_token or not tienda.tn_store_id:
             return Response({'error': 'Tienda Nube no conectada.'}, status=400)
+
+        importar_precio = bool(request.data.get('importar_precio', False))
 
         from .services.tiendanube_service import TiendaNubeService
         tn = TiendaNubeService(tienda)
@@ -3649,15 +3654,17 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
 
                     if producto:
-                        producto.precio          = precio
+                        campos_actualizados = ['stock', 'tn_product_id', 'tn_sincronizado']
+                        if importar_precio:
+                            producto.precio = precio
+                            campos_actualizados.append('precio')
                         producto.stock           = stock_tn
                         producto.tn_product_id   = tn_product_id
                         producto.tn_sincronizado = True
                         if es_multivar and padre and not producto.producto_padre_id:
                             producto.producto_padre = padre
-                            producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado', 'producto_padre'])
-                        else:
-                            producto.save(update_fields=['precio', 'stock', 'tn_product_id', 'tn_sincronizado'])
+                            campos_actualizados.append('producto_padre')
+                        producto.save(update_fields=campos_actualizados)
                         actualizados += 1
                         continue
 
@@ -3673,7 +3680,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         producto.tn_product_id   = tn_product_id
                         producto.tn_variant_id   = tn_variant_id
                         producto.tn_sincronizado = True
-                        producto.precio          = precio
+                        if importar_precio:
+                            producto.precio = precio
                         producto.stock           = stock_tn
                         if es_multivar and padre:
                             producto.producto_padre = padre
@@ -4256,6 +4264,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                                 if producto.stock < 0:
                                     producto.stock = 0
                                 producto.save()
+                                from .services.tiendanube_service import sincronizar_stock_producto
+                                sincronizar_stock_producto(producto)
                                 logger.info(f"✅ Stock revertido para producto devuelto: {producto.nombre} (-{detalle_cambio.cantidad})")
 
                             if detalle_venta.anulado_individualmente:
@@ -4274,6 +4284,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                                 if producto_devuelto.stock < 0:
                                     producto_devuelto.stock = 0
                                 producto_devuelto.save()
+                                from .services.tiendanube_service import sincronizar_stock_producto
+                                sincronizar_stock_producto(producto_devuelto)
                                 logger.info(f"✅ Stock revertido para producto devuelto en cambio: {producto_devuelto.nombre} (-{detalle_cambio.cantidad})")
 
                             if detalle_venta.anulado_individualmente:
@@ -4285,6 +4297,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                             producto_nuevo = detalle_cambio.producto_nuevo
                             producto_nuevo.stock += detalle_cambio.cantidad
                             producto_nuevo.save()
+                            from .services.tiendanube_service import sincronizar_stock_producto
+                            sincronizar_stock_producto(producto_nuevo)
                             logger.info(f"✅ Stock revertido para producto nuevo en cambio: {producto_nuevo.nombre} (+{detalle_cambio.cantidad})")
                     
                     elif detalle_cambio.accion == 'AGREGAR':
@@ -4294,6 +4308,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                             producto = detalle_cambio.producto_nuevo
                             producto.stock += detalle_cambio.cantidad
                             producto.save()
+                            from .services.tiendanube_service import sincronizar_stock_producto
+                            sincronizar_stock_producto(producto)
                             logger.info(f"✅ Stock restaurado para producto agregado: {producto.nombre} (+{detalle_cambio.cantidad})")
                 
                 # Recalcular el total de la venta original respetando descuentos/recargos originales
@@ -4335,6 +4351,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                     producto = detalle.producto
                     producto.stock += detalle.cantidad
                     producto.save()
+                    from .services.tiendanube_service import sincronizar_stock_producto
+                    sincronizar_stock_producto(producto)
                     logger.info(f"✅ Stock restaurado para venta normal: {producto.nombre} (+{detalle.cantidad})")
 
             # Cuenta Corriente: revertir la deuda pendiente de esta venta. venta.total ya
@@ -4402,6 +4420,8 @@ class VentaViewSet(viewsets.ModelViewSet):
             producto = detalle.producto
             producto.stock += detalle.cantidad
             producto.save()
+            from .services.tiendanube_service import sincronizar_stock_producto
+            sincronizar_stock_producto(producto)
             detalle.anulado_individualmente = True
             detalle.save()
             
@@ -6280,6 +6300,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                         producto = detalle_venta_original.producto
                         producto.stock = (producto.stock or 0) + cantidad
                         producto.save(update_fields=['stock'])
+                        from .services.tiendanube_service import sincronizar_stock_producto
+                        sincronizar_stock_producto(producto)
 
                         # Anular el detalle de venta si se devuelve todo
                         if cantidad >= detalle_venta_original.cantidad:
@@ -6292,6 +6314,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                         producto = detalle_venta_original.producto
                         producto.stock = (producto.stock or 0) + cantidad
                         producto.save(update_fields=['stock'])
+                        from .services.tiendanube_service import sincronizar_stock_producto
+                        sincronizar_stock_producto(producto)
 
                         # Anular el detalle de venta si se cambia todo
                         if cantidad >= detalle_venta_original.cantidad:
@@ -6304,6 +6328,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                             raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
                         producto_nuevo.stock = (producto_nuevo.stock or 0) - cantidad
                         producto_nuevo.save(update_fields=['stock'])
+                        from .services.tiendanube_service import sincronizar_stock_producto
+                        sincronizar_stock_producto(producto_nuevo)
 
                 elif accion == 'AGREGAR':
                     # Reducir stock del producto nuevo
@@ -6312,6 +6338,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                             raise drf_serializers.ValidationError({"error": f"Stock insuficiente para el producto {producto_nuevo.nombre}."})
                         producto_nuevo.stock = (producto_nuevo.stock or 0) - cantidad
                         producto_nuevo.save(update_fields=['stock'])
+                        from .services.tiendanube_service import sincronizar_stock_producto
+                        sincronizar_stock_producto(producto_nuevo)
             
             # Después de procesar todos los detalles: calcular montos totales y generar nota de crédito/venta pendiente
             monto_diferencia = monto_nuevo - monto_devolucion
@@ -6417,6 +6445,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                                 producto = detalle.detalle_venta_original.producto
                                 producto.stock = (producto.stock or 0) - detalle.cantidad
                                 producto.save(update_fields=['stock'])
+                                from .services.tiendanube_service import sincronizar_stock_producto
+                                sincronizar_stock_producto(producto)
 
                             if detalle.detalle_venta_original.anulado_individualmente:
                                 detalle.detalle_venta_original.anulado_individualmente = False
@@ -6426,6 +6456,8 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                             producto = detalle.producto_nuevo
                             producto.stock = (producto.stock or 0) + detalle.cantidad
                             producto.save(update_fields=['stock'])
+                            from .services.tiendanube_service import sincronizar_stock_producto
+                            sincronizar_stock_producto(producto)
 
                     cambio_devolucion.estado = 'CANCELADO'
                     cambio_devolucion.save()
