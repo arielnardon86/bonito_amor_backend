@@ -880,6 +880,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             if not cambio_devolucion_id:
                 producto_obj.stock -= cantidad
                 producto_obj.save()
+                from .services.tiendanube_service import sincronizar_stock_producto
+                sincronizar_stock_producto(producto_obj)
 
         # Enviar notificaciones push a usuarios de la tienda
         try:

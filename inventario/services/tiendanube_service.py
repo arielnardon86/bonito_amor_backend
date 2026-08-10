@@ -251,3 +251,26 @@ class TiendaNubeService:
             hashlib.sha256,
         ).hexdigest()
         return hmac.compare_digest(expected, signature_header.lower())
+
+
+def sincronizar_stock_producto(producto):
+    """
+    Empuja el stock actual de un producto hacia Tienda Nube, si está vinculado
+    (tn_product_id/tn_variant_id) y la tienda tiene la integración conectada.
+    Pensado para llamarse después de cualquier baja de stock local (venta,
+    cambio/devolución) para que TN no quede desactualizado — la dirección
+    TN → Total Stock ya se mantiene sola vía el webhook de order/paid.
+
+    Nunca rompe al llamador si falla: la sincronización de stock es
+    best-effort, no puede tirar abajo una venta.
+    """
+    tienda = producto.tienda
+    if not producto.tn_product_id or not producto.tn_variant_id:
+        return
+    if not tienda.tn_access_token or not tienda.tn_store_id or not tienda.tn_sync_habilitado:
+        return
+    try:
+        tn = TiendaNubeService(tienda)
+        tn.update_variant_stock(producto.tn_product_id, producto.tn_variant_id, producto.stock)
+    except Exception as e:
+        logger.warning("No se pudo sincronizar stock a Tienda Nube para producto %s: %s", producto.nombre, e)
