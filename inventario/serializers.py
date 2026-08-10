@@ -611,6 +611,20 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             if not all([producto_id, cantidad, precio_unitario is not None]):
                 raise serializers.ValidationError({"detalles": "Cada detalle debe tener un 'producto', 'cantidad' y 'precio_unitario'."})
 
+            # 'detalles' es un DictField suelto (sin coerción automática de tipos de DRF),
+            # así que cantidad/precio_unitario llegan tal cual los mandó el cliente (puede
+            # ser int, float o string según el precio tenga decimales o no). Normalizar acá
+            # a los tipos numéricos reales evita mezclar Decimal con float más abajo.
+            try:
+                cantidad = int(cantidad)
+                precio_unitario = Decimal(str(precio_unitario))
+            except (TypeError, ValueError, InvalidOperation):
+                raise serializers.ValidationError({"detalles": "'cantidad' y 'precio_unitario' deben ser numéricos."})
+            # Persistir los valores normalizados en el dict: create() vuelve a leerlos
+            # de acá y necesita los mismos tipos ya limpios.
+            detalle_data['cantidad'] = cantidad
+            detalle_data['precio_unitario'] = precio_unitario
+
             try:
                 producto_obj = Producto.objects.get(id=producto_id, tienda=tienda_obj)
             except Producto.DoesNotExist:
