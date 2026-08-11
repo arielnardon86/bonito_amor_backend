@@ -948,6 +948,43 @@ class ProductoViewSet(viewsets.ModelViewSet):
             'resultados': resultados,
         })
 
+    @action(detail=False, methods=['post'], url_path='eliminar_todos')
+    def eliminar_todos(self, request):
+        """
+        Borra TODOS los productos (y sus variantes) de una tienda de una sola vez.
+        Pensado para resetear el catálogo antes de una reimportación completa (por
+        ejemplo tras una duplicación masiva por reimportaciones repetidas de carga
+        masiva). No afecta historial de ventas/presupuestos (Producto ahí usa
+        SET_NULL), solo el catálogo de productos.
+
+        Body: { tienda_slug, confirmar_nombre } -- 'confirmar_nombre' tiene que
+        coincidir exactamente con el nombre de la tienda, como capa extra contra un
+        borrado accidental por un tienda_slug incorrecto.
+        """
+        if self.request.user.is_supervisor and not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Los supervisores no pueden eliminar productos.")
+
+        tienda_slug = request.data.get('tienda_slug')
+        confirmar_nombre = str(request.data.get('confirmar_nombre') or '').strip()
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({'error': 'No se pudo determinar la tienda.'}, status=status.HTTP_400_BAD_REQUEST)
+        if confirmar_nombre != tienda.nombre:
+            return Response(
+                {'error': "El nombre de confirmación no coincide con el de la tienda."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        total_antes = Producto.objects.filter(tienda=tienda).count()
+        Producto.objects.filter(tienda=tienda).delete()
+
+        _registrar_accion(
+            tienda=tienda, usuario=request.user, accion='ajuste_stock',
+            detalle=f'Eliminación masiva de catálogo: {total_antes} producto(s) eliminado(s) (reset previo a reimportación).',
+        )
+        return Response({'eliminados': total_antes})
+
     @action(detail=True, methods=['post'], url_path='agrupar-variantes')
     def agrupar_variantes(self, request, pk=None):
         """
