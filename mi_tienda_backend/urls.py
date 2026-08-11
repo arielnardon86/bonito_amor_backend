@@ -40,6 +40,7 @@ from inventario.views import (
     verificar_pago_pendiente, actualizar_datos_tienda,
     tn_instalar_iniciar, tn_instalar_completar_registro, tn_instalar_vincular_cuenta_existente,
     password_reset_request, password_reset_confirm, update_email,
+    enviar_comunicado,
 )
 # Importación condicional de CambioDevolucionViewSet
 try:
@@ -126,6 +127,7 @@ urlpatterns += [
     path('api/tiendanube/instalar/vincular-cuenta-existente/', tn_instalar_vincular_cuenta_existente, name='tn-instalar-vincular-existente'),
     # Recupero de contraseña
     path('api/auth/password-reset/', password_reset_request, name='password-reset-request'),
+    path('api/admin/enviar-comunicado/', enviar_comunicado, name='enviar-comunicado'),
     path('api/auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),
     path('api/auth/update-email/', update_email, name='update-email'),
 ]

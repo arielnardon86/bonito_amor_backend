@@ -8468,6 +8468,82 @@ def update_email(request):
 
 
 @api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def enviar_comunicado(request):
+    """
+    Envío manual de un comunicado por email a una lista de destinatarios. Es una
+    herramienta administrativa genérica (solo superuser) para anuncios de producto
+    puntuales -- el contenido (subject/text/html) lo arma quien lo llama, acá solo
+    se resuelve el envío por SMTP reusando la configuración ya existente.
+
+    Body: {
+        emails: [str, ...],
+        subject: str, text: str, html: str,
+        imagen_base64: str (opcional, PNG en base64, se referencia en el html como
+            src="cid:<imagen_cid>"),
+        imagen_cid: str (opcional, default 'imagen1'),
+        dry_run: bool (opcional, default false -- solo normaliza y cuenta destinatarios)
+    }
+    """
+    if not request.user.is_superuser:
+        return Response({'error': 'Solo superusuarios pueden enviar comunicados.'}, status=403)
+
+    emails = request.data.get('emails') or []
+    emails = sorted({str(e).strip().lower() for e in emails if e and '@' in str(e)})
+    dry_run = bool(request.data.get('dry_run', False))
+
+    if dry_run:
+        return Response({'destinatarios': emails, 'total': len(emails)})
+
+    subject = request.data.get('subject')
+    text = request.data.get('text') or ''
+    html = request.data.get('html')
+    if not emails:
+        return Response({'error': 'No se indicaron destinatarios.'}, status=400)
+    if not subject or not html:
+        return Response({'error': 'Faltan subject o html.'}, status=400)
+
+    imagen_base64 = request.data.get('imagen_base64')
+    imagen_cid = request.data.get('imagen_cid') or 'imagen1'
+
+    from django.core.mail import EmailMultiAlternatives
+    from email.mime.image import MIMEImage
+    from django.conf import settings as dj_settings
+    import base64 as base64_mod
+
+    imagen_bytes = None
+    if imagen_base64:
+        try:
+            imagen_bytes = base64_mod.b64decode(imagen_base64)
+        except Exception:
+            return Response({'error': 'imagen_base64 inválida.'}, status=400)
+
+    enviados, fallidos = [], []
+    for destinatario in emails:
+        try:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=text,
+                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+                to=[destinatario],
+            )
+            msg.attach_alternative(html, 'text/html')
+            if imagen_bytes:
+                msg.mixed_subtype = 'related'
+                img = MIMEImage(imagen_bytes, 'png')
+                img.add_header('Content-ID', f'<{imagen_cid}>')
+                img.add_header('Content-Disposition', 'inline', filename='imagen.png')
+                msg.attach(img)
+            msg.send(fail_silently=False)
+            enviados.append(destinatario)
+        except Exception as e:
+            logger.error("enviar_comunicado: error enviando a %s: %s", destinatario, e)
+            fallidos.append({'email': destinatario, 'error': str(e)})
+
+    return Response({'enviados': enviados, 'fallidos': fallidos, 'total': len(emails)})
+
+
+@api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def password_reset_request(request):
     """
