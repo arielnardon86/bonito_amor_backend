@@ -693,6 +693,31 @@ class ProductoViewSet(viewsets.ModelViewSet):
             r.nombre.strip().lower(): r
             for r in Rubro.objects.filter(tienda=tienda)
         }
+        # Si una fila trae un rubro que todavía no existe en la tienda pero también
+        # trae el IVA explícito en su propia columna, se crea el rubro con ese IVA en
+        # vez de dejarlo sin resolver: el frontend solo pide asignar IVA manualmente a
+        # los rubros nuevos cuando el archivo NO trae IVA por fila (ver
+        # resolverRubros() en CargaMasivaProductos.js), así que si ambas columnas
+        # vienen completas (por ejemplo un archivo generado con "Exportar", que
+        # siempre completa las dos) el rubro quedaba sin crear y sin guardar en el
+        # producto, sin ningún error visible.
+        if modo == 'confirmar':
+            from decimal import InvalidOperation
+            for fila in filas:
+                rubro_nombre = str(fila.get('rubro') or '').strip()
+                if not rubro_nombre or rubro_nombre.lower() in rubros_por_nombre:
+                    continue
+                iva_raw = fila.get('iva_porcentaje')
+                if iva_raw is None or str(iva_raw).strip() == '':
+                    continue
+                try:
+                    iva_valor = Decimal(str(iva_raw))
+                except (InvalidOperation, ValueError):
+                    continue
+                rubro_obj, _ = Rubro.objects.get_or_create(
+                    tienda=tienda, nombre=rubro_nombre, defaults={'iva_porcentaje': iva_valor}
+                )
+                rubros_por_nombre[rubro_nombre.lower()] = rubro_obj
         # Códigos de barras ya usados en la tienda, para generar los nuevos en memoria
         # (import por import) en vez de una query de verificación por producto nuevo.
         codigos_barras_vistos = set(
