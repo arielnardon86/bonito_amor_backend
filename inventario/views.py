@@ -7854,12 +7854,28 @@ def actualizar_datos_tienda(request):
         tienda.logo = logo
         campos_actualizados.append('logo')
 
+    if 'descuento_efectivo_porcentaje' in request.data:
+        valor = request.data.get('descuento_efectivo_porcentaje')
+        if valor is None or str(valor).strip() == '':
+            tienda.descuento_efectivo_porcentaje = None
+        else:
+            try:
+                from decimal import Decimal, InvalidOperation
+                pct = Decimal(str(valor))
+            except InvalidOperation:
+                return Response({'error': 'El % de descuento en efectivo debe ser numérico.'}, status=400)
+            if pct < 0 or pct > 100:
+                return Response({'error': 'El % de descuento en efectivo debe estar entre 0 y 100.'}, status=400)
+            tienda.descuento_efectivo_porcentaje = pct
+        campos_actualizados.append('descuento_efectivo_porcentaje')
+
     if campos_actualizados:
         tienda.save(update_fields=campos_actualizados)
 
     return Response({
         'nombre': tienda.nombre,
         'logo': tienda.logo,
+        'descuento_efectivo_porcentaje': tienda.descuento_efectivo_porcentaje,
     })
 
 

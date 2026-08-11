@@ -40,6 +40,10 @@ class Tienda(models.Model):
         blank=True, null=True,
         help_text="Logo de la tienda como data URI en base64 (ya redimensionado a un tamaño chico desde el frontend antes de subir). Se muestra en el navbar."
     )
+    descuento_efectivo_porcentaje = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="% de descuento por pago en efectivo a mostrar destacado en las etiquetas de precio. Null = no se muestra por defecto."
+    )
 
     # Campos fiscales para facturación
     cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")
