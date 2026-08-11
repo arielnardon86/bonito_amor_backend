@@ -44,6 +44,15 @@ class Tienda(models.Model):
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text="% de descuento por pago en efectivo a mostrar destacado en las etiquetas de precio. Null = no se muestra por defecto."
     )
+    DESCUENTO_EFECTIVO_REDONDEO_CHOICES = [
+        ('', 'Sin redondeo'),
+        ('abajo', 'Múltiplo de 100 hacia abajo'),
+        ('arriba', 'Múltiplo de 100 hacia arriba'),
+    ]
+    descuento_efectivo_redondeo = models.CharField(
+        max_length=10, choices=DESCUENTO_EFECTIVO_REDONDEO_CHOICES, blank=True, default='',
+        help_text="Cómo redondear el precio con descuento en efectivo calculado para las etiquetas (igual que el redondeo de Punto de Venta)."
+    )
 
     # Campos fiscales para facturación
     cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")

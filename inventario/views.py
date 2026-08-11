@@ -7869,6 +7869,14 @@ def actualizar_datos_tienda(request):
             tienda.descuento_efectivo_porcentaje = pct
         campos_actualizados.append('descuento_efectivo_porcentaje')
 
+    if 'descuento_efectivo_redondeo' in request.data:
+        valores_validos = dict(Tienda.DESCUENTO_EFECTIVO_REDONDEO_CHOICES)
+        redondeo = request.data.get('descuento_efectivo_redondeo') or ''
+        if redondeo not in valores_validos:
+            return Response({'error': 'Redondeo inválido.'}, status=400)
+        tienda.descuento_efectivo_redondeo = redondeo
+        campos_actualizados.append('descuento_efectivo_redondeo')
+
     if campos_actualizados:
         tienda.save(update_fields=campos_actualizados)
 
@@ -7876,6 +7884,7 @@ def actualizar_datos_tienda(request):
         'nombre': tienda.nombre,
         'logo': tienda.logo,
         'descuento_efectivo_porcentaje': tienda.descuento_efectivo_porcentaje,
+        'descuento_efectivo_redondeo': tienda.descuento_efectivo_redondeo,
     })
 
 
