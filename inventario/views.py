@@ -791,12 +791,16 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 # explícito en la fila.
                 rubro = rubros_por_nombre.get(rubro_nombre.lower()) if rubro_nombre else None
 
-                # Resolver IVA: prioridad al valor explícito de la fila, si no por rubro,
-                # y si no vino ninguno de los dos se asume 0% (no es un error).
-                if iva_raw is not None and str(iva_raw).strip() != '':
-                    iva_porcentaje = Decimal(str(iva_raw))
-                elif rubro:
+                # Resolver IVA: si el rubro ya existe en la tienda (o se acaba de crear
+                # más arriba a partir de esta misma planilla), su IVA configurado es la
+                # fuente de verdad y se prioriza sobre el valor de la fila -- así una
+                # planilla vieja con un % desactualizado no pisa el IVA ya cargado en
+                # Rubros. Si el rubro no existe, se usa el IVA de la fila. Si no vino
+                # ninguno de los dos, se asume 0% (no es un error).
+                if rubro:
                     iva_porcentaje = rubro.iva_porcentaje
+                elif iva_raw is not None and str(iva_raw).strip() != '':
+                    iva_porcentaje = Decimal(str(iva_raw))
                 elif rubro_nombre:
                     raise ValueError(f"El rubro '{rubro_nombre}' no tiene IVA asignado. Asignalo antes de importar.")
                 else:
