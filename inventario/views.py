@@ -340,7 +340,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = ProductoPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    search_fields = ['nombre', 'talle', 'codigo_barras', 'variantes__codigo_barras']
+    search_fields = ['nombre', 'talle', 'codigo_barras', 'codigo_interno', 'variantes__codigo_barras']
 
     def _resolver_tienda(self, tienda_slug=None):
         """Devuelve el objeto Tienda autorizado para el usuario actual.
@@ -475,12 +475,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if not codigo or not tienda_slug:
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            producto = Producto.objects.get(codigo_barras=codigo, tienda__nombre=tienda_slug)
-            serializer = self.get_serializer(producto)
-            return Response(serializer.data)
-        except Producto.DoesNotExist:
+        producto = Producto.objects.filter(codigo_barras=codigo, tienda__nombre=tienda_slug).first()
+        if not producto:
+            # Permite tipear/escanear el Código Interno (el de la carga masiva) en el
+            # mismo buscador rápido, no solo el código de barras.
+            producto = Producto.objects.filter(codigo_interno=codigo, tienda__nombre=tienda_slug).first()
+        if not producto:
             return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = self.get_serializer(producto)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'], url_path='nombre_por_barcode')
     def nombre_por_barcode(self, request):
