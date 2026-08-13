@@ -5249,16 +5249,28 @@ class InventarioMetricsAPIView(APIView):
         except:
             return Response({"error": "Tienda no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
+        # Los "padre" que solo agrupan variantes (producto_padre_id=None pero con
+        # variantes.exists()) no son un producto vendible en sí -- mismo criterio que
+        # ya usa la exportación a Excel. Si un producto ya existente se agrupó como
+        # padre vía "Agrupar variantes" (a diferencia de crearlo directamente con
+        # variantes, que sí pone stock=0 al padre), conserva su stock/costo previos
+        # a la agrupación; sumarlos junto con los de sus variantes duplicaría la
+        # cantidad y el valor real del stock.
+        padres_con_variantes = Producto.objects.filter(
+            tienda=tienda_obj, producto_padre__isnull=True, variantes__isnull=False
+        ).distinct()
+        productos_qs = Producto.objects.filter(tienda=tienda_obj).exclude(pk__in=padres_con_variantes)
+
         # Métrica de stock total (cantidad)
-        total_stock = Producto.objects.filter(tienda=tienda_obj).aggregate(total_stock=Sum('stock'))['total_stock'] or 0
+        total_stock = productos_qs.aggregate(total_stock=Sum('stock'))['total_stock'] or 0
 
         # Métrica de monto total del stock (precio de venta)
-        monto_total_stock_precio = Producto.objects.filter(tienda=tienda_obj).aggregate(
+        monto_total_stock_precio = productos_qs.aggregate(
             total_monto_stock=Sum(F('stock') * Coalesce('precio', Value(0), output_field=DecimalField()))
         )['total_monto_stock'] or Decimal('0.00')
-        
+
         # Métrica de monto total del stock (costo)
-        monto_total_stock_costo = Producto.objects.filter(tienda=tienda_obj).aggregate(
+        monto_total_stock_costo = productos_qs.aggregate(
             total_monto_stock_costo=Sum(F('stock') * Coalesce('costo', Value(0), output_field=DecimalField()))
         )['total_monto_stock_costo'] or Decimal('0.00')
 
