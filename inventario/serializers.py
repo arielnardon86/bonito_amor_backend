@@ -414,10 +414,14 @@ class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
 # ------------------------------------------------
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
-    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True, allow_null=True) 
-    
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True, allow_null=True)
+    # Precio de catálogo ACTUAL del producto (distinto de precio_unitario, que es el
+    # precio al momento de esta venta) -- lo usa Cambio/Devolución para detectar
+    # canjes de variante al mismo precio de catálogo.
+    producto_precio_actual = serializers.DecimalField(source='producto.precio', max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+
     class Meta:
-        fields = ['id', 'venta', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
+        fields = ['id', 'venta', 'producto', 'producto_nombre', 'producto_precio_actual', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
         model = DetalleVenta
         read_only_fields = ['subtotal']
 
