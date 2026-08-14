@@ -951,8 +951,18 @@ class CambioDevolucion(models.Model):
     
     # Totales del cambio/devolución
     monto_devolucion = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto a devolver al cliente (productos devueltos)")
-    monto_nuevo = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de productos nuevos recibidos en el cambio")
-    monto_diferencia = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Diferencia: positivo = cliente debe pagar, negativo = saldo a favor del cliente")
+    monto_nuevo = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Monto de productos nuevos recibidos en el cambio (precio de catálogo, sin descuento/recargo)")
+    monto_diferencia = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Diferencia bruta (sin descuento/recargo): positivo = cliente debe pagar, negativo = saldo a favor del cliente")
+
+    # Descuento/recargo cargado por el cajero sobre la diferencia de este cambio (no
+    # sobre la venta original). Se usan para decidir si corresponde generar nota de
+    # crédito o diferencia pendiente a pagar -- sin esto, un recargo que debería
+    # convertir un saldo a favor en una diferencia a cobrar se ignoraba y se emitía
+    # una nota de crédito igual.
+    descuento_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    descuento_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    recargo_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    recargo_monto = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     
     # Saldo a favor del cliente (si monto_diferencia es negativo)
     saldo_a_favor = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Saldo a favor del cliente que queda pendiente")

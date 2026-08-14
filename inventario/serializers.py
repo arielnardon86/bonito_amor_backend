@@ -1548,14 +1548,16 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
                 'id', 'venta_original', 'venta_original_id', 'tienda', 'tienda_nombre',
                 'usuario', 'usuario_nombre', 'tipo', 'estado', 'motivo',
                 'monto_devolucion', 'monto_nuevo', 'monto_diferencia',
+                'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto',
                 'saldo_a_favor', 'saldo_utilizado',
                 'nota_credito_generada', 'venta_nota_credito', 'venta_nota_credito_id',
                 'diferencia_pendiente', 'venta_diferencia_pendiente', 'venta_diferencia_pendiente_id',
                 'detalles', 'fecha_creacion', 'fecha_actualizacion'
             ]
             read_only_fields = [
-                'monto_devolucion', 'monto_nuevo', 'monto_diferencia', 
-                'saldo_a_favor', 'saldo_utilizado', 
+                'monto_devolucion', 'monto_nuevo', 'monto_diferencia',
+                'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto',
+                'saldo_a_favor', 'saldo_utilizado',
                 'nota_credito_generada', 'diferencia_pendiente'
             ]
 
@@ -1567,11 +1569,16 @@ if CambioDevolucion is not None and DetalleCambioDevolucion is not None:
         )
         tipo = serializers.CharField(required=False, allow_blank=True, default='CAMBIO')
         motivo = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
-        
+        descuento_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
+        descuento_monto = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal('0.00'))
+        recargo_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal('0.00'))
+        recargo_monto = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal('0.00'))
+
         class Meta:
             model = CambioDevolucion
             fields = [
-                'venta_original', 'tipo', 'motivo', 'detalles'
+                'venta_original', 'tipo', 'motivo', 'detalles',
+                'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto',
             ]
         
         def validate(self, data):

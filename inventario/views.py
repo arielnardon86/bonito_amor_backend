@@ -6258,6 +6258,10 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             detalles_data = validated_data['detalles']
             tipo = validated_data.get('tipo', 'CAMBIO')
             motivo = validated_data.get('motivo', '')
+            descuento_porcentaje = validated_data.get('descuento_porcentaje') or Decimal('0.00')
+            descuento_monto = validated_data.get('descuento_monto') or Decimal('0.00')
+            recargo_porcentaje = validated_data.get('recargo_porcentaje') or Decimal('0.00')
+            recargo_monto = validated_data.get('recargo_monto') or Decimal('0.00')
 
             # Verificar permisos
             user = self.request.user
@@ -6279,7 +6283,11 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                     usuario=user,
                     tipo=tipo,
                     motivo=motivo,
-                    estado='PROCESADO'
+                    estado='PROCESADO',
+                    descuento_porcentaje=descuento_porcentaje,
+                    descuento_monto=descuento_monto,
+                    recargo_porcentaje=recargo_porcentaje,
+                    recargo_monto=recargo_monto,
                 )
             
             # Procesar cada detalle
@@ -6424,8 +6432,28 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             
             # Después de procesar todos los detalles: calcular montos totales y generar nota de crédito/venta pendiente
             monto_diferencia = monto_nuevo - monto_devolucion
-            saldo_a_favor = abs(monto_diferencia) if monto_diferencia < 0 else Decimal('0.00')
-            
+
+            # El descuento/recargo cargado en este cambio se usa para decidir si
+            # corresponde nota de crédito o diferencia a pagar -- mismo criterio
+            # (% sobre el total de productos nuevos, $ sobre la diferencia) que usa
+            # VentaCreateSerializer al crear la venta por la diferencia. Sin esto, un
+            # recargo que debería convertir un saldo a favor en una diferencia a
+            # cobrar se ignoraba acá y se emitía una nota de crédito igual.
+            # monto_nuevo/monto_diferencia quedan sin ajustar porque esa venta los
+            # vuelve a usar como base (evita aplicar el recargo dos veces).
+            if descuento_porcentaje > 0:
+                monto_diferencia_ajustada = monto_nuevo * (Decimal('1') - descuento_porcentaje / Decimal('100')) - monto_devolucion
+            elif descuento_monto > 0:
+                monto_diferencia_ajustada = monto_diferencia - descuento_monto
+            elif recargo_monto > 0:
+                monto_diferencia_ajustada = monto_diferencia + recargo_monto
+            elif recargo_porcentaje > 0:
+                monto_diferencia_ajustada = monto_diferencia * (Decimal('1') + recargo_porcentaje / Decimal('100'))
+            else:
+                monto_diferencia_ajustada = monto_diferencia
+
+            saldo_a_favor = abs(monto_diferencia_ajustada) if monto_diferencia_ajustada < 0 else Decimal('0.00')
+
             cambio_devolucion.monto_devolucion = monto_devolucion
             cambio_devolucion.monto_nuevo = monto_nuevo
             cambio_devolucion.monto_diferencia = monto_diferencia
@@ -6468,10 +6496,10 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
             # Si hay diferencia a pagar, marcar el cambio/devolución como pendiente.
             # La venta se crea desde el frontend con el método de pago real y cambio_devolucion_id,
             # y el serializer de Venta la vincula automáticamente al asignar venta_diferencia_pendiente.
-            if monto_diferencia > 0:
+            if monto_diferencia_ajustada > 0:
                 cambio_devolucion.diferencia_pendiente = True
                 cambio_devolucion.save()
-                logger.info(f"✅ Diferencia pendiente marcada: ${monto_diferencia} para cambio/devolución {cambio_devolucion.id}")
+                logger.info(f"✅ Diferencia pendiente marcada: ${monto_diferencia_ajustada} (bruta ${monto_diferencia}) para cambio/devolución {cambio_devolucion.id}")
             
             tipo_label = 'Cambio' if tipo == 'CAMBIO' else 'Devolución'
             try:
