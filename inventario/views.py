@@ -1026,6 +1026,93 @@ class ProductoViewSet(viewsets.ModelViewSet):
         producto.save(update_fields=['producto_padre'])
         return Response({'mensaje': f'"{producto.nombre}" ahora es un producto independiente.'})
 
+    @action(detail=True, methods=['post'], url_path='vincular-tienda-nube')
+    def vincular_tienda_nube(self, request, pk=None):
+        """
+        Vincula este producto a un producto YA EXISTENTE en Tienda Nube (creado ahí
+        manualmente por el cliente), en vez de crearlo desde Total Stock. Pensado para
+        clientes que prefieren armar la ficha del producto directamente en Tienda Nube
+        (fotos, descripción, SEO) y solo necesitan que el stock se sincronice.
+
+        Body: { "tn_product_id": "...", "tn_variant_id": "..." (opcional) }
+        Si el producto de TN tiene una sola variante, se resuelve sola. Si tiene varias
+        y no se especificó tn_variant_id, devuelve la lista para que el cliente elija.
+        """
+        from .services.tiendanube_service import TiendaNubeService, sincronizar_stock_producto
+
+        producto = self.get_object()
+        tienda = producto.tienda
+
+        if not tienda.tn_access_token or not tienda.tn_store_id:
+            return Response({'error': 'Esta tienda no tiene Tienda Nube conectado.'}, status=400)
+
+        tn_product_id = str(request.data.get('tn_product_id') or '').strip()
+        if not tn_product_id:
+            return Response({'error': 'Falta el ID del producto de Tienda Nube.'}, status=400)
+        tn_variant_id = str(request.data.get('tn_variant_id') or '').strip() or None
+
+        tn = TiendaNubeService(tienda)
+        try:
+            tn_producto = tn.get_product(tn_product_id)
+        except Exception as e:
+            logger.warning("vincular_tienda_nube: no se pudo obtener producto TN %s: %s", tn_product_id, e)
+            return Response(
+                {'error': f'No se encontró el producto {tn_product_id} en Tienda Nube. Verificá el ID.'},
+                status=400,
+            )
+
+        variantes = tn_producto.get('variants', [])
+        if not variantes:
+            return Response({'error': 'Ese producto de Tienda Nube no tiene variantes.'}, status=400)
+
+        variante_elegida = None
+        if tn_variant_id:
+            variante_elegida = next((v for v in variantes if str(v.get('id')) == tn_variant_id), None)
+            if not variante_elegida:
+                return Response({'error': f'La variante {tn_variant_id} no pertenece a ese producto de Tienda Nube.'}, status=400)
+        elif len(variantes) == 1:
+            variante_elegida = variantes[0]
+        else:
+            return Response({
+                'requiere_variante': True,
+                'mensaje': 'Ese producto tiene varias variantes en Tienda Nube. Elegí cuál corresponde.',
+                'variantes': [
+                    {
+                        'id': str(v.get('id')),
+                        'sku': v.get('sku') or '',
+                        'valores': ', '.join(
+                            (val.get('es') or '') for val in v.get('values', []) if val
+                        ),
+                    }
+                    for v in variantes
+                ],
+            }, status=409)
+
+        producto.tn_product_id = tn_product_id
+        producto.tn_variant_id = str(variante_elegida.get('id'))
+        producto.tn_sincronizado = True
+        producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+
+        # Empuja el stock local a TN de una para que ambos lados arranquen alineados.
+        sincronizar_stock_producto(producto)
+
+        nombre_tn = (tn_producto.get('name') or {}).get('es', producto.nombre)
+        return Response({
+            'mensaje': f'"{producto.nombre}" vinculado a "{nombre_tn}" en Tienda Nube.',
+            'tn_product_id': producto.tn_product_id,
+            'tn_variant_id': producto.tn_variant_id,
+        })
+
+    @action(detail=True, methods=['post'], url_path='desvincular-tienda-nube')
+    def desvincular_tienda_nube(self, request, pk=None):
+        """Quita la vinculación de este producto con Tienda Nube (no borra nada en TN)."""
+        producto = self.get_object()
+        producto.tn_product_id = None
+        producto.tn_variant_id = None
+        producto.tn_sincronizado = False
+        producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+        return Response({'mensaje': f'"{producto.nombre}" ya no está vinculado a Tienda Nube.'})
+
     @action(detail=True, methods=['post'], url_path='transferir-stock')
     def transferir_stock(self, request, pk=None):
         """Transfiere stock de este producto (o variante) hacia el mismo producto en otra
