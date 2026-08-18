@@ -1065,6 +1065,55 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if not variantes:
             return Response({'error': 'Ese producto de Tienda Nube no tiene variantes.'}, status=400)
 
+        nombre_tn = (tn_producto.get('name') or {}).get('es', producto.nombre)
+        es_parte_de_familia_local = bool(producto.producto_padre_id) or producto.variantes.exists()
+
+        # Caso: el producto local es suelto (no tiene ni es parte de una familia de
+        # variantes) y en Tienda Nube el producto SÍ tiene varias variantes → en vez de
+        # forzar a elegir una sola, se convierte en padre y se crea acá una variante local
+        # por cada variante de TN (con stock en 0: no hay forma de saber cómo se repartía
+        # el número agregado que tenía el producto suelto entre los distintos talles).
+        if len(variantes) > 1 and not tn_variant_id and not es_parte_de_familia_local:
+            with transaction.atomic():
+                producto.tn_product_id = tn_product_id
+                producto.tn_variant_id = None
+                producto.tn_sincronizado = False
+                producto.stock = 0
+                producto.talle = None
+                producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'stock', 'talle'])
+
+                nuevas = []
+                for v in variantes:
+                    talle_variante = ', '.join(
+                        (val.get('es') or '') for val in v.get('values', []) if val
+                    ) or None
+                    nuevas.append(Producto.objects.create(
+                        tienda=tienda,
+                        nombre=producto.nombre,
+                        producto_padre=producto,
+                        talle=talle_variante,
+                        precio=producto.precio,
+                        costo=producto.costo,
+                        iva_porcentaje=producto.iva_porcentaje,
+                        rubro=producto.rubro,
+                        codigo_barras=_generar_codigo_barras_unico(tienda),
+                        stock=0,
+                        tn_product_id=tn_product_id,
+                        tn_variant_id=str(v.get('id')),
+                        tn_sincronizado=True,
+                    ))
+
+            return Response({
+                'mensaje': (
+                    f'"{producto.nombre}" se convirtió en una familia de {len(nuevas)} variante(s) '
+                    f'vinculada(s) a "{nombre_tn}" en Tienda Nube. El stock de cada variante quedó '
+                    f'en 0 — hace falta cargarlo a mano según lo que tengas físicamente de cada una.'
+                ),
+                'familia_creada': True,
+                'padre_id': str(producto.id),
+                'variantes_creadas': len(nuevas),
+            })
+
         variante_elegida = None
         if tn_variant_id:
             variante_elegida = next((v for v in variantes if str(v.get('id')) == tn_variant_id), None)
@@ -1096,7 +1145,6 @@ class ProductoViewSet(viewsets.ModelViewSet):
         # Empuja el stock local a TN de una para que ambos lados arranquen alineados.
         sincronizar_stock_producto(producto)
 
-        nombre_tn = (tn_producto.get('name') or {}).get('es', producto.nombre)
         return Response({
             'mensaje': f'"{producto.nombre}" vinculado a "{nombre_tn}" en Tienda Nube.',
             'tn_product_id': producto.tn_product_id,
@@ -3633,18 +3681,38 @@ class TiendaViewSet(viewsets.ModelViewSet):
         Publica en Tienda Nube los productos de Total Stock que aún no tienen
         tn_variant_id. Agrupa variantes bajo un mismo producto TN.
         Corre en background para evitar timeout en Render.
+
+        Body opcional: { "producto_ids": ["...", ...] } — si viene, solo publica esos
+        productos puntuales (más los productos padre de cualquier variante seleccionada,
+        junto con el resto de las variantes pendientes de esa misma familia, ya que TN
+        no permite publicar una familia de variantes de forma parcial). Sin este campo,
+        se comporta como siempre: publica todos los pendientes de la tienda.
         """
         tienda = self.get_object()
         if not tienda.tn_access_token or not tienda.tn_store_id:
             return Response({'error': 'Tienda Nube no conectada.'}, status=400)
 
+        producto_ids = request.data.get('producto_ids') or None
+        if producto_ids:
+            producto_ids = [str(pid) for pid in producto_ids]
+
         # Contar pendientes: variantes sin tn_variant_id + standalone sin tn_variant_id
-        total_pendientes = Producto.objects.filter(tienda=tienda).filter(
+        base_pendientes = Producto.objects.filter(tienda=tienda).filter(
             Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
-        ).count()
+        )
+        if producto_ids:
+            padre_ids = set(
+                Producto.objects.filter(id__in=producto_ids).exclude(producto_padre_id__isnull=True)
+                .values_list('producto_padre_id', flat=True)
+            )
+            ids_incluir = set(producto_ids) | padre_ids
+            base_pendientes = base_pendientes.filter(Q(id__in=ids_incluir) | Q(producto_padre_id__in=padre_ids))
+        total_pendientes = base_pendientes.count()
 
         if total_pendientes == 0:
-            return Response({'mensaje': 'Todos los productos ya están publicados en Tienda Nube.'}, status=200)
+            mensaje = ('No hay nada pendiente entre los productos seleccionados.' if producto_ids
+                       else 'Todos los productos ya están publicados en Tienda Nube.')
+            return Response({'mensaje': mensaje}, status=200)
 
         tienda_id = tienda.id
 
@@ -3656,7 +3724,15 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 tn = TiendaNubeService(t)
                 pendientes = Producto.objects.filter(tienda=t).filter(
                     Q(tn_variant_id__isnull=True) | Q(tn_variant_id='')
-                ).select_related('producto_padre').prefetch_related('variantes')
+                )
+                if producto_ids:
+                    padre_ids = set(
+                        Producto.objects.filter(id__in=producto_ids).exclude(producto_padre_id__isnull=True)
+                        .values_list('producto_padre_id', flat=True)
+                    )
+                    ids_incluir = set(producto_ids) | padre_ids
+                    pendientes = pendientes.filter(Q(id__in=ids_incluir) | Q(producto_padre_id__in=padre_ids))
+                pendientes = pendientes.select_related('producto_padre').prefetch_related('variantes')
                 publicados = 0
                 errores = 0
 
