@@ -170,12 +170,11 @@ class NotificacionesService:
         return os.environ.get('FIREBASE_SERVER_KEY', None)
 
     @staticmethod
-    def enviar_notificacion_venta(venta):
-        """
-        Envía notificaciones push a todos los usuarios de la tienda cuando se crea una venta.
-        Usa FCM HTTP v1 si está configurada la cuenta de servicio (recomendado para Safari PWA).
-        """
-        usuarios_tienda = User.objects.filter(tienda=venta.tienda, is_active=True)
+    def _tokens_de_tienda(tienda):
+        """Tokens FCM activos de los usuarios de una tienda, deduplicados por
+        usuario+categoría de dispositivo (evita notificaciones dobles por
+        tokens de sesiones anteriores que no se limpiaron)."""
+        usuarios_tienda = User.objects.filter(tienda=tienda, is_active=True)
         tokens_qs = (
             FCMToken.objects.filter(
                 user__in=usuarios_tienda,
@@ -184,36 +183,19 @@ class NotificacionesService:
             .select_related('user')
             .order_by('user_id', '-fecha_actualizacion')
         )
-        # Deduplicar: un token por usuario por categoría de dispositivo.
-        # Esto evita notificaciones dobles cuando el usuario acumuló tokens
-        # de sesiones anteriores que no se limpiaron correctamente.
         seen = {}
         for t in tokens_qs:
             key = (t.user_id, t.device_info.split()[0] if t.device_info else None)
             if key not in seen:
                 seen[key] = t
-        tokens = list(seen.values())
-        logger.info("Enviando notificación de venta a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
+        return list(seen.values())
 
+    @staticmethod
+    def _despachar(venta, tokens, titulo, mensaje, data, etiqueta='notificación'):
+        """Envía a los tokens ya resueltos vía FCM v1 (o loguea si no está configurado)."""
         if not tokens:
-            logger.info(
-                "No hay tokens FCM registrados para usuarios de la tienda %s",
-                venta.tienda.nombre,
-            )
+            logger.info("No hay tokens FCM registrados para usuarios de la tienda %s", venta.tienda.nombre)
             return {'exitosos': 0, 'fallidos': 0, 'tokens_invalidos': []}
-
-        titulo = f"Nueva Venta - {venta.tienda.nombre}"
-        mensaje = f"Venta de ${venta.total:.2f} - {venta.metodo_pago or 'Sin método de pago'}"
-
-        data = {
-            'type': 'nueva_venta',
-            'venta_id': str(venta.id),
-            'tienda_id': str(venta.tienda.id),
-            'tienda_nombre': venta.tienda.nombre,
-            'total': str(venta.total),
-            'metodo_pago': venta.metodo_pago or '',
-            'fecha_venta': venta.fecha_venta.isoformat(),
-        }
 
         firebase_app = _get_firebase_app()
         if firebase_app is not None:
@@ -226,12 +208,53 @@ class NotificacionesService:
             resultados = {'exitosos': 0, 'fallidos': len(tokens), 'tokens_invalidos': []}
 
         logger.info(
-            "Notificaciones de venta: %s exitosas, %s fallidas, %s tokens inválidos",
-            resultados['exitosos'],
-            resultados['fallidos'],
-            len(resultados['tokens_invalidos']),
+            "Notificaciones de %s: %s exitosas, %s fallidas, %s tokens inválidos",
+            etiqueta, resultados['exitosos'], resultados['fallidos'], len(resultados['tokens_invalidos']),
         )
         return resultados
+
+    @staticmethod
+    def enviar_notificacion_venta(venta):
+        """
+        Envía notificaciones push a todos los usuarios de la tienda cuando se crea una venta.
+        Usa FCM HTTP v1 si está configurada la cuenta de servicio (recomendado para Safari PWA).
+        """
+        tokens = NotificacionesService._tokens_de_tienda(venta.tienda)
+        logger.info("Enviando notificación de venta a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
+
+        titulo = f"Nueva Venta - {venta.tienda.nombre}"
+        mensaje = f"Venta de ${venta.total:.2f} - {venta.metodo_pago or 'Sin método de pago'}"
+        data = {
+            'type': 'nueva_venta',
+            'venta_id': str(venta.id),
+            'tienda_id': str(venta.tienda.id),
+            'tienda_nombre': venta.tienda.nombre,
+            'total': str(venta.total),
+            'metodo_pago': venta.metodo_pago or '',
+            'fecha_venta': venta.fecha_venta.isoformat(),
+        }
+        return NotificacionesService._despachar(venta, tokens, titulo, mensaje, data, etiqueta='venta')
+
+    @staticmethod
+    def enviar_notificacion_venta_anulada_ml(venta):
+        """
+        Envía notificaciones push cuando una venta de Mercado Libre se anula
+        automáticamente porque la orden se canceló en ML después de procesada.
+        """
+        tokens = NotificacionesService._tokens_de_tienda(venta.tienda)
+        logger.info("Enviando notificación de venta ML anulada a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
+
+        titulo = f"Venta de Mercado Libre cancelada - {venta.tienda.nombre}"
+        mensaje = f"Se canceló una orden de ML por ${venta.total:.2f}. Stock repuesto automáticamente."
+        data = {
+            'type': 'venta_anulada_ml',
+            'venta_id': str(venta.id),
+            'tienda_id': str(venta.tienda.id),
+            'tienda_nombre': venta.tienda.nombre,
+            'total': str(venta.total),
+            'ml_order_id': venta.ml_order_id or '',
+        }
+        return NotificacionesService._despachar(venta, tokens, titulo, mensaje, data, etiqueta='venta ML anulada')
 
     @staticmethod
     def registrar_token(user, token, device_info=None):

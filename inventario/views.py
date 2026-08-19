@@ -2874,6 +2874,28 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     # Evitar procesar la misma orden dos veces (p. ej. doble notificación por pago + entrega)
                     venta_existente_ml = Venta.objects.filter(tienda=tienda, origen_mercadolibre=True, ml_order_id=order_id).first()
                     if venta_existente_ml:
+                        # Siempre se pide la orden acá (antes solo se pedía si faltaban fees), porque
+                        # es la única forma de enterarnos de que ML canceló una orden ya procesada --
+                        # sin esto, la notificación de cancelación se ignoraba por completo.
+                        order_para_fees = None
+                        try:
+                            order_para_fees = ml_service.get_order(order_id)
+                        except Exception as order_err:
+                            logger.warning(f"No se pudo obtener orden {order_id} de ML para revisar estado/fees: {order_err}")
+
+                        order_status_actual = (order_para_fees or {}).get('status', '')
+
+                        if order_status_actual == 'cancelled' and not venta_existente_ml.anulada:
+                            try:
+                                _procesar_cancelacion_orden_ml(venta_existente_ml, order_id)
+                            except Exception as cancel_err:
+                                logger.error(f"Error al procesar cancelación de orden ML {order_id}: {cancel_err}", exc_info=True)
+                            return Response({
+                                'status': 'success',
+                                'message': 'Orden cancelada: venta anulada y stock repuesto',
+                                'order_id': order_id
+                            }, status=status.HTTP_200_OK)
+
                         # Intentar actualizar fees que aún están en cero (ML los calcula con demora)
                         fees_incompletos = (
                             (venta_existente_ml.ml_sale_fee or Decimal('0.00')) == Decimal('0.00') or
@@ -2882,7 +2904,6 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         )
                         if fees_incompletos:
                             try:
-                                order_para_fees = ml_service.get_order(order_id)
                                 if order_para_fees:
                                     _sale_fee = Decimal('0.00')
                                     _ship = Decimal('0.00')
@@ -4102,6 +4123,91 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
 
     logger.info("Venta TN creada — id=%s total=%s tienda=%s", venta.id, total, tienda.nombre)
     return venta
+
+
+def _procesar_cancelacion_orden_ml(venta, order_id):
+    """
+    Revierte una venta de Mercado Libre cuya orden fue cancelada después de haber
+    sido procesada: repone el stock, la marca como anulada, emite la Nota de
+    Crédito fiscal si ya tenía factura, y avisa por notificación push.
+
+    No reutiliza la acción 'anular' de VentaViewSet porque esa requiere un
+    usuario autenticado (supervisor/admin) -- acá el disparador es el propio
+    webhook de ML, sin request de un humano.
+    """
+    if venta.anulada:
+        return
+
+    usuario_ml, created = User.objects.get_or_create(
+        username='mercadolibre',
+        defaults={'first_name': 'Mercado Libre', 'is_staff': False, 'is_active': True},
+    )
+    if created:
+        usuario_ml.set_unusable_password()
+        usuario_ml.save()
+
+    # Si ya tenía factura electrónica emitida, cancelarla fiscalmente antes de
+    # tocar la venta. Si esto falla, se loguea pero no bloquea el resto (reponer
+    # stock y anular la venta es más urgente que la parte fiscal).
+    try:
+        factura = getattr(venta, 'factura', None)
+        if factura and factura.estado == 'EMITIDA' and factura.tienda.tipo_facturacion != 'NINGUNA':
+            motivo_nc = 'Orden de Mercado Libre cancelada'
+            facturacion_service = FacturacionService(factura.tienda)
+            exito, datos_nc, error = facturacion_service.emitir_nota_credito(factura, factura.total, motivo_nc)
+
+            campos_base = dict(
+                factura_origen=factura, tienda=factura.tienda, punto_venta=factura.tienda.punto_venta,
+                tipo_comprobante=factura.tipo_comprobante, motivo=motivo_nc,
+                monto=factura.total, impuesto_iva=Decimal('0.00'),
+                cliente_nombre=factura.cliente_nombre, cliente_cuit=factura.cliente_cuit,
+                sistema_facturacion=factura.tienda.tipo_facturacion,
+            )
+            if exito:
+                campos_base['punto_venta'] = datos_nc.get('punto_venta', factura.tienda.punto_venta)
+                campos_base['tipo_comprobante'] = datos_nc.get('tipo_comprobante', factura.tipo_comprobante)
+                campos_base['monto'] = datos_nc.get('monto', factura.total)
+                campos_base['impuesto_iva'] = datos_nc.get('impuesto_iva', Decimal('0.00'))
+                NotaCredito.objects.create(
+                    **campos_base, numero_comprobante=datos_nc.get('numero_comprobante'),
+                    estado='EMITIDA', cae=datos_nc.get('cae'),
+                    fecha_vencimiento_cae=datos_nc.get('fecha_vencimiento_cae'),
+                    numero_comprobante_afip=datos_nc.get('numero_comprobante_afip'),
+                    respuesta_bruta=datos_nc.get('respuesta_bruta'),
+                )
+                logger.info(f"✅ Nota de crédito fiscal automática emitida para venta ML {venta.id} (orden {order_id} cancelada)")
+            else:
+                NotaCredito.objects.create(**campos_base, estado='ERROR', error_mensaje=error)
+                logger.error(f"❌ No se pudo emitir NC automática para venta ML {venta.id}: {error}")
+    except Exception as e:
+        logger.error(f"Error al generar NC automática por cancelación ML (venta {venta.id}): {e}", exc_info=True)
+
+    # Reponer stock de cada detalle (mismo criterio que 'anular' para ventas normales)
+    for detalle in venta.detalles.all():
+        if detalle.producto and not detalle.anulado_individualmente:
+            producto = detalle.producto
+            producto.stock += detalle.cantidad
+            producto.save(update_fields=['stock'])
+            from .services.tiendanube_service import sincronizar_stock_producto
+            sincronizar_stock_producto(producto)
+            logger.info(f"✅ Stock repuesto por cancelación ML: {producto.nombre} (+{detalle.cantidad})")
+
+    venta.anulada = True
+    venta.save(update_fields=['anulada'])
+
+    _registrar_accion(
+        tienda=venta.tienda, usuario=usuario_ml, accion='anulacion_venta',
+        detalle=f'Anulación automática (orden Mercado Libre {order_id} cancelada) · venta #{str(venta.id)[:8]} · ${venta.total}',
+        objeto_id=venta.id,
+    )
+
+    try:
+        from .services.notificaciones_service import NotificacionesService
+        NotificacionesService.enviar_notificacion_venta_anulada_ml(venta)
+    except Exception as notif_err:
+        logger.warning(f"Error al enviar notificación push por cancelación ML (venta {venta.id}): {notif_err}")
+
+    logger.info(f"✅ Venta ML {venta.id} anulada por cancelación de orden {order_id}")
 
 
 class UserViewSet(viewsets.ModelViewSet):
