@@ -7437,6 +7437,7 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
         tienda = presupuesto.tienda
         cliente = presupuesto.cliente
 
+        tiene_logo = False
         if tienda.logo:
             try:
                 match_logo = re.match(r'^data:image/\w+;base64,(.+)$', tienda.logo)
@@ -7445,10 +7446,19 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
                 logo_image.hAlign = 'CENTER'
                 story.append(logo_image)
                 story.append(Spacer(1, 8))
+                tiene_logo = True
             except Exception:
                 pass
 
-        story.append(Paragraph(f"<b>{tienda.nombre}</b>", title_style))
+        # Con logo, el nombre de la tienda pasa a un segundo plano (el logo ya la identifica)
+        if tiene_logo:
+            nombre_tienda_style = ParagraphStyle(
+                'PresupuestoNombreTiendaChico', parent=styles['Normal'], fontSize=10,
+                textColor=colors.HexColor('#555555'), spaceAfter=12, alignment=1
+            )
+            story.append(Paragraph(tienda.nombre, nombre_tienda_style))
+        else:
+            story.append(Paragraph(f"<b>{tienda.nombre}</b>", title_style))
         story.append(Paragraph("PRESUPUESTO", subtitle_style))
         story.append(Spacer(1, 12))
 
