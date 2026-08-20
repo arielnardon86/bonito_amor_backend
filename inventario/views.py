@@ -7437,6 +7437,17 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
         tienda = presupuesto.tienda
         cliente = presupuesto.cliente
 
+        if tienda.logo:
+            try:
+                match_logo = re.match(r'^data:image/\w+;base64,(.+)$', tienda.logo)
+                logo_b64 = match_logo.group(1) if match_logo else tienda.logo
+                logo_image = Image(BytesIO(base64.b64decode(logo_b64)), width=30 * mm, height=20 * mm, kind='proportional')
+                logo_image.hAlign = 'CENTER'
+                story.append(logo_image)
+                story.append(Spacer(1, 8))
+            except Exception:
+                pass
+
         story.append(Paragraph(f"<b>{tienda.nombre}</b>", title_style))
         story.append(Paragraph("PRESUPUESTO", subtitle_style))
         story.append(Spacer(1, 12))
