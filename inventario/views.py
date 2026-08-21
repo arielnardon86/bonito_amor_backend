@@ -8874,7 +8874,18 @@ def update_email(request):
     request.user.save(update_fields=['email'])
     logger.info("update_email: usuario %s actualizó su email a %s", request.user.username, email)
 
-    return Response({'ok': True, 'email': email})
+    # El frontend arma `user` decodificando el JWT, no lo vuelve a leer de la DB
+    # entre logins (el refresh token silencioso solo copia los claims del token
+    # viejo). Sin reemitir el par de tokens acá, el email quedaba "congelado" en
+    # el valor vacío del login original y el modal de "registrá tu email"
+    # volvía a aparecer en la siguiente sesión aunque ya estuviera guardado.
+    refresh = CustomTokenObtainPairSerializer.get_token(request.user)
+    return Response({
+        'ok': True,
+        'email': email,
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+    })
 
 
 @api_view(['POST'])
