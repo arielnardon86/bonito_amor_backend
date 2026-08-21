@@ -5965,6 +5965,7 @@ class WidgetVentasHoyAPIView(APIView):
 
         return Response({
             'tienda_nombre': tienda.nombre,
+            'tienda_logo': tienda.logo,
             'total_ventas_hoy': str(total),
             'cantidad_ventas': cantidad_ventas,
             'unidades_vendidas': unidades_vendidas,
