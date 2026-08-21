@@ -339,8 +339,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = ProductoPagination
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    search_fields = ['nombre', 'talle', 'codigo_barras', 'codigo_interno', 'variantes__codigo_barras']
+    filter_backends = [DjangoFilterBackend]
 
     def _resolver_tienda(self, tienda_slug=None):
         """Devuelve el objeto Tienda autorizado para el usuario actual.
@@ -380,6 +379,21 @@ class ProductoViewSet(viewsets.ModelViewSet):
         rubro_id = self.request.query_params.get('rubro_id', None)
         if rubro_id:
             queryset = queryset.filter(rubro_id=rubro_id)
+
+        # Nombre/talle: coincidencia parcial (para buscar escribiendo el nombre).
+        # Códigos: coincidencia exacta — un código parcial (ej. escanear "ALB125" cuando
+        # existen "ALB1250", "ALB1251", etc.) no debe traer todos los que empiezan igual,
+        # solo el producto/variante cuyo código sea idéntico al buscado.
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                Q(nombre__icontains=search) |
+                Q(talle__icontains=search) |
+                Q(codigo_barras__iexact=search) |
+                Q(codigo_interno__iexact=search) |
+                Q(variantes__codigo_barras__iexact=search) |
+                Q(variantes__codigo_interno__iexact=search)
+            ).distinct()
 
         if user.is_superuser:
             if tienda_slug:
