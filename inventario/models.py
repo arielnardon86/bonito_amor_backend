@@ -53,6 +53,10 @@ class Tienda(models.Model):
         max_length=10, choices=DESCUENTO_EFECTIVO_REDONDEO_CHOICES, blank=True, default='',
         help_text="Cómo redondear el precio con descuento en efectivo calculado para las etiquetas (igual que el redondeo de Punto de Venta)."
     )
+    widget_token = models.CharField(
+        max_length=64, blank=True, null=True, unique=True,
+        help_text="Token de solo lectura para el widget de iPhone (ventas del día). Separado del login: se puede regenerar sin afectar la cuenta."
+    )
 
     # Campos fiscales para facturación
     cuit = models.CharField(max_length=13, blank=True, null=True, help_text="CUIT de la tienda (formato: XX-XXXXXXXX-X)")

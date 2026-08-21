@@ -5,7 +5,7 @@ from rest_framework.routers import DefaultRouter
 from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
-    CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView,
+    CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView, WidgetVentasHoyAPIView,
     ArancelMetodoTiendaViewSet, FacturaViewSet, NotaCreditoViewSet,
     CierreCajaViewSet, EgresoCajaViewSet, HistorialAccionViewSet,
     ClienteViewSet,
@@ -37,7 +37,7 @@ from inventario.views import (
     verificar_database_config, registrar_token_fcm, eliminar_token_fcm,
     planes_publicos, registro_publico, verificar_cuit_disponible, mp_webhook_suscripcion, cambiar_plan,
     mi_suscripcion, verificar_suscripcion_mp, cancelar_suscripcion_view,
-    verificar_pago_pendiente, actualizar_datos_tienda,
+    verificar_pago_pendiente, actualizar_datos_tienda, regenerar_widget_token,
     tn_instalar_iniciar, tn_instalar_completar_registro, tn_instalar_vincular_cuenta_existente,
     password_reset_request, password_reset_confirm, update_email,
     enviar_comunicado,
@@ -121,6 +121,8 @@ urlpatterns += [
     path('api/suscripcion/cancelar/', cancelar_suscripcion_view, name='cancelar-suscripcion'),
     path('api/suscripcion/verificar-pago/', verificar_pago_pendiente, name='verificar-pago-pendiente'),
     path('api/tienda/actualizar-datos/', actualizar_datos_tienda, name='actualizar-datos-tienda'),
+    path('api/tienda/widget-token/regenerar/', regenerar_widget_token, name='regenerar-widget-token'),
+    path('api/widget/ventas-hoy/', WidgetVentasHoyAPIView.as_view(), name='widget-ventas-hoy'),
     # Instalación de Total Stock desde la App Store de Tienda Nube (sin cuenta previa)
     path('api/tiendanube/instalar/iniciar/', tn_instalar_iniciar, name='tn-instalar-iniciar'),
     path('api/tiendanube/instalar/completar-registro/', tn_instalar_completar_registro, name='tn-instalar-completar-registro'),

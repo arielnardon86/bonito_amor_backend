@@ -5913,6 +5913,66 @@ class MetricasAPIView(APIView):
         return Response(data)
 
 
+class WidgetVentasHoyAPIView(APIView):
+    """
+    Datos de ventas del día para el widget de iPhone (Scriptable). Se autentica
+    con un token de solo lectura por tienda (Tienda.widget_token), no con el
+    login normal, para que el widget siga funcionando sin depender de un JWT
+    que expira y se pueda revocar sin afectar la cuenta.
+    """
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request, *args, **kwargs):
+        token = request.query_params.get('token')
+        if not token:
+            return Response({'error': "Falta el parámetro 'token'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        tienda = Tienda.objects.filter(widget_token=token).first()
+        if not tienda:
+            return Response({'error': 'Token inválido.'}, status=status.HTTP_404_NOT_FOUND)
+
+        hoy = timezone.localdate()
+        ventas_qs = Venta.objects.filter(
+            tienda=tienda, anulada=False, fecha_venta__date=hoy
+        ).exclude(metodo_pago__in=['Nota de Crédito', 'Pendiente'])
+
+        if CambioDevolucion is not None:
+            ventas_list = list(ventas_qs.prefetch_related('cambio_devolucion_diferencia', 'nota_credito_origen'))
+        else:
+            ventas_list = list(ventas_qs)
+
+        total = Decimal('0.00')
+        cantidad_ventas = 0
+        ventas_incluidas_ids = []
+        for venta in ventas_list:
+            if CambioDevolucion is not None and list(venta.nota_credito_origen.all()):
+                continue
+            monto = venta.total
+            if CambioDevolucion is not None:
+                dif = list(venta.cambio_devolucion_diferencia.all())
+                if dif:
+                    monto = dif[0].monto_diferencia
+            total += monto or Decimal('0.00')
+            cantidad_ventas += 1
+            ventas_incluidas_ids.append(venta.id)
+
+        unidades_vendidas = DetalleVenta.objects.filter(
+            venta_id__in=ventas_incluidas_ids, anulado_individualmente=False
+        ).aggregate(total=Sum('cantidad'))['total'] or 0
+
+        ticket_promedio = (total / cantidad_ventas) if cantidad_ventas > 0 else Decimal('0.00')
+
+        return Response({
+            'tienda_nombre': tienda.nombre,
+            'total_ventas_hoy': str(total),
+            'cantidad_ventas': cantidad_ventas,
+            'unidades_vendidas': unidades_vendidas,
+            'ticket_promedio': str(ticket_promedio),
+            'actualizado': timezone.now().isoformat(),
+        })
+
+
 class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet para consultar facturas emitidas"""
     serializer_class = FacturaSerializer
@@ -8216,6 +8276,25 @@ def actualizar_datos_tienda(request):
         'descuento_efectivo_porcentaje': tienda.descuento_efectivo_porcentaje,
         'descuento_efectivo_redondeo': tienda.descuento_efectivo_redondeo,
     })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def regenerar_widget_token(request):
+    """
+    Genera (o regenera) el token de solo lectura para el widget de ventas del
+    día (iPhone / Scriptable). Regenerar invalida cualquier token anterior: el
+    widget ya instalado con el token viejo deja de funcionar hasta que se
+    actualice con el nuevo. Body: { tienda_slug }.
+    """
+    tienda = _resolver_tienda_por_slug(request)
+    if not tienda:
+        return Response({'error': 'No se encontró la tienda.'}, status=400)
+
+    tienda.widget_token = secrets.token_urlsafe(32)
+    tienda.save(update_fields=['widget_token'])
+
+    return Response({'widget_token': tienda.widget_token})
 
 
 @api_view(['GET'])
