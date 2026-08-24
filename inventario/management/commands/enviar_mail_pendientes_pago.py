@@ -195,7 +195,21 @@ class Command(BaseCommand):
         confirmar = options.get('confirmar')
 
         if test_email:
-            subject, texto, html = _armar_email('tu tienda', 'Starter', Decimal('19999'))
+            from inventario.models import Plan
+
+            # Usar el precio real de una tienda pendiente existente (si hay), o el del
+            # plan Starter en la base, para que la prueba muestre el valor verdadero
+            # y no un número inventado.
+            sus_ejemplo = Suscripcion.objects.filter(estado='pending').select_related('plan').exclude(plan__isnull=True).first()
+            if sus_ejemplo:
+                plan_nombre = sus_ejemplo.plan.get_nombre_display()
+                precio_ejemplo = sus_ejemplo.plan.precio_mensual
+            else:
+                plan_ejemplo = Plan.objects.filter(nombre='starter').first()
+                plan_nombre = plan_ejemplo.get_nombre_display() if plan_ejemplo else 'Starter'
+                precio_ejemplo = plan_ejemplo.precio_mensual if plan_ejemplo else None
+
+            subject, texto, html = _armar_email('tu tienda', plan_nombre, precio_ejemplo)
             try:
                 self._enviar(test_email, subject, texto, html)
                 self.stdout.write(self.style.SUCCESS(f"Mail de prueba enviado a {test_email}"))
