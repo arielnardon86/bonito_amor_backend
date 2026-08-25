@@ -320,6 +320,10 @@ class Producto(models.Model):
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
     codigo_barras = models.CharField(max_length=100, blank=True, null=True)
+    imagen = models.TextField(
+        blank=True, null=True,
+        help_text="Foto del producto como data URI en base64 (ya redimensionada a un tamaño chico desde el frontend antes de subir). Se muestra en el listado y en el carrito de Punto de Venta."
+    )
 
     # Carga masiva desde Excel/CSV: identificador propio de la tienda (distinto del
     # código de barras) para detectar reposición de stock vs. producto nuevo.

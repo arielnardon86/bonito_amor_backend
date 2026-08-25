@@ -23,8 +23,8 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 class VarianteSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'talle', 'precio', 'stock', 'codigo_barras', 'codigo_interno',
-                  'tn_product_id', 'tn_variant_id', 'tn_sincronizado',
+        fields = ['id', 'nombre', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'codigo_interno',
+                  'imagen', 'tn_product_id', 'tn_variant_id', 'tn_sincronizado',
                   'stock_ultimo_ingreso', 'fecha_ultimo_ingreso']
 
 
@@ -84,6 +84,11 @@ class ProductoSerializer(serializers.ModelSerializer):
         if attrs.get('producto_padre') and not attrs.get('talle'):
             raise serializers.ValidationError(
                 {'talle': 'Las variantes deben tener un valor de talle/color/variante.'}
+            )
+        imagen = attrs.get('imagen')
+        if imagen and len(imagen) > 700_000:  # ~500KB decodificado, de sobra para una foto ya redimensionada chica
+            raise serializers.ValidationError(
+                {'imagen': 'La imagen es demasiado pesada. Probá con otra foto.'}
             )
         return attrs
 
