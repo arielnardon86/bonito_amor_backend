@@ -379,6 +379,10 @@ class Producto(models.Model):
         ordering = ['nombre']
         indexes = [
             models.Index(fields=['tienda'], name='producto_tienda_idx'),
+            # Acelera el listado paginado de Punto de Venta / Productos, que siempre
+            # filtra por tienda y ordena por nombre (Meta.ordering) — sin este índice,
+            # en tiendas con catálogos grandes cada página fuerza un sort completo.
+            models.Index(fields=['tienda', 'nombre'], name='producto_tienda_nombre_idx'),
         ]
 
     def __str__(self):
