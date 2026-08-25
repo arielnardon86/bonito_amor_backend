@@ -14,4 +14,4 @@ python manage.py collectstatic --no-input --verbosity=0
 
 # Iniciar el servidor Gunicorn
 echo "🚀 Iniciando servidor Gunicorn..."
-gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:"$PORT" --timeout 120
+gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:"$PORT" --timeout 120 --workers 2 --log-file -

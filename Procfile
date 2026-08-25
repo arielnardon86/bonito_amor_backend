@@ -1,1 +1,1 @@
-web: gunicorn mi_tienda_backend.wsgi --log-file - --timeout 120 --workers 2
+web: bash start.sh
