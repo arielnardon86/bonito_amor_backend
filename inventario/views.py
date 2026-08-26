@@ -4351,6 +4351,20 @@ class VentaViewSet(viewsets.ModelViewSet):
             return VentaCreateSerializer
         return VentaSerializer
 
+    def create(self, request, *args, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        try:
+            return super().create(request, *args, **kwargs)
+        except drf_serializers.ValidationError as exc:
+            # Registrar el payload completo: sin esto, un 400 de validación no deja
+            # rastro en los logs (Django no trata los 400 como error), y reproducir
+            # a ciegas un caso reportado por un cliente sin acceso a su PC es muy lento.
+            logger.warning(
+                "Venta rechazada por validación — tienda_slug=%s usuario=%s errores=%s payload=%s",
+                request.data.get('tienda_slug'), request.user, exc.detail, request.data,
+            )
+            raise
+
     # FIX DE CONEXIÓN + totales globales (sobre el queryset completo, no solo la página)
     def list(self, request, *args, **kwargs):
         close_old_connections()
