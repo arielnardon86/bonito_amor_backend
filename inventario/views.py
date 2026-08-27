@@ -965,6 +965,161 @@ class ProductoViewSet(viewsets.ModelViewSet):
             'resultados': resultados,
         })
 
+    @action(detail=False, methods=['post'], url_path='importacion_ia')
+    def importacion_ia(self, request):
+        """
+        Extrae con IA las líneas de productos de la foto/PDF de una factura o
+        proforma de compra a un proveedor, y las matchea contra el catálogo de la
+        tienda (por código de barras/interno exacto, o por similitud de nombre).
+
+        No escribe nada en la base -- es un paso de preview, análogo al modo
+        'preview' de carga_masiva. La confirmación real se hace armando 'filas' a
+        partir de esta respuesta y llamando a POST /productos/carga_masiva/ con
+        modo=confirmar (mismo motor de alta/reposición que la carga masiva por Excel).
+
+        Body: multipart con 'archivo' (imagen o PDF) y 'tienda_slug'.
+        """
+        import unicodedata
+        from difflib import SequenceMatcher
+        from .services.importacion_ia_service import extraer_lineas_factura, ExtraccionFacturaError
+
+        tienda_slug = request.data.get('tienda_slug')
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({'error': 'No se pudo determinar la tienda.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        archivo = request.FILES.get('archivo')
+        if not archivo:
+            return Response({'error': 'No se recibió ningún archivo.'}, status=status.HTTP_400_BAD_REQUEST)
+        if archivo.size > 15 * 1024 * 1024:
+            return Response({'error': 'El archivo no puede superar los 15MB.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            extraido = extraer_lineas_factura(archivo.read(), archivo.content_type)
+        except ExtraccionFacturaError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        def _normalizar_nombre(nombre):
+            nombre = unicodedata.normalize('NFD', str(nombre or ''))
+            nombre = ''.join(c for c in nombre if unicodedata.category(c) != 'Mn')
+            nombre = re.sub(r'[^a-z0-9 ]', '', nombre.lower())
+            return re.sub(r'\s+', ' ', nombre).strip()
+
+        # Igual que exportar() (línea ~634): los "padre" que solo agrupan variantes
+        # no son un producto vendible en sí (no tienen stock/código propio) -- se
+        # excluyen del matching y en su lugar se matchea contra cada variante.
+        productos_tienda = [
+            p for p in Producto.objects.filter(tienda=tienda).prefetch_related('variantes')
+            if p.producto_padre_id is not None or not p.variantes.exists()
+        ]
+        por_codigo_barras = {p.codigo_barras: p for p in productos_tienda if p.codigo_barras}
+        por_codigo_interno = {p.codigo_interno: p for p in productos_tienda if p.codigo_interno}
+        codigos_internos_existentes = set(por_codigo_interno.keys())
+
+        def _nombre_para_matching(p):
+            # Igual que exportar(): a una variante se le agrega el talle al nombre
+            # para no perder esa info al comparar contra el nombre de la factura.
+            if p.producto_padre_id is not None and p.talle:
+                return f"{p.nombre} - {p.talle}"
+            return p.nombre
+
+        nombres_normalizados = [(_normalizar_nombre(_nombre_para_matching(p)), p) for p in productos_tienda]
+
+        UMBRAL_SUGERENCIA = 0.55
+
+        def _generar_codigo_interno_propuesto():
+            for _ in range(30):
+                candidato = 'AUTO' + secrets.token_hex(5).upper()
+                if candidato not in codigos_internos_existentes:
+                    codigos_internos_existentes.add(candidato)
+                    return candidato
+            candidato = 'AUTO' + secrets.token_hex(8).upper()
+            codigos_internos_existentes.add(candidato)
+            return candidato
+
+        def _serializar_match(p):
+            # Se incluyen precio e IVA actuales para que el frontend pueda
+            # precargarlos en la fila de reposición: carga_masiva exige ambos
+            # campos en TODAS las filas (nuevas o de reposición) y, si se
+            # confirma en blanco, pisa el IVA del producto a 0% -- precargar el
+            # valor actual evita ese efecto secundario en una reposición común.
+            return {
+                'producto_id': str(p.id),
+                'nombre': _nombre_para_matching(p),
+                'codigo_interno': p.codigo_interno,
+                'codigo_barras': p.codigo_barras,
+                'precio': str(p.precio),
+                'iva_porcentaje': str(p.iva_porcentaje) if p.iva_porcentaje is not None else '0',
+            }
+
+        # Los productos cargados a mano (no por una carga masiva previa) suelen no
+        # tener codigo_interno -- pero es la clave que usa carga_masiva para
+        # encontrar el producto a reponer. Si el frontend confirma una reposición
+        # sobre un producto sin código, sin este backfill carga_masiva no lo
+        # encontraría (porque el código que viajaría solo existiría en memoria acá)
+        # y terminaría CREANDO un duplicado en vez de sumarle stock. Por eso, apenas
+        # un producto sin código aparece como candidato (match exacto o sugerencia),
+        # se le asigna y persiste uno ya en este paso.
+        productos_a_backfillear = {}
+
+        def _asegurar_codigo_interno(p):
+            if not p.codigo_interno:
+                p.codigo_interno = _generar_codigo_interno_propuesto()
+                productos_a_backfillear[p.id] = p
+            return p
+
+        lineas_resultado = []
+        for idx, linea in enumerate(extraido['lineas'], start=1):
+            codigo_barras_linea = str(linea.get('codigo_barras') or '').strip() or None
+
+            match_exacto = None
+            if codigo_barras_linea and codigo_barras_linea in por_codigo_barras:
+                match_exacto = por_codigo_barras[codigo_barras_linea]
+            elif codigo_barras_linea and codigo_barras_linea in por_codigo_interno:
+                match_exacto = por_codigo_interno[codigo_barras_linea]
+            if match_exacto:
+                _asegurar_codigo_interno(match_exacto)
+
+            sugerencias = []
+            if not match_exacto:
+                nombre_norm = _normalizar_nombre(linea.get('nombre'))
+                puntuadas = [
+                    (SequenceMatcher(None, nombre_norm, cand_norm).ratio(), p)
+                    for cand_norm, p in nombres_normalizados
+                    if cand_norm
+                ]
+                puntuadas.sort(key=lambda t: t[0], reverse=True)
+                sugerencias = [
+                    {**_serializar_match(_asegurar_codigo_interno(p)), 'score': round(score, 3)}
+                    for score, p in puntuadas[:3]
+                    if score >= UMBRAL_SUGERENCIA
+                ]
+
+            estado = 'match_exacto' if match_exacto else ('sugerido' if sugerencias else 'nuevo')
+
+            lineas_resultado.append({
+                'fila': idx,
+                'nombre': linea.get('nombre'),
+                'cantidad': linea.get('cantidad'),
+                'costo_unitario': linea.get('costo_unitario'),
+                'codigo_barras': codigo_barras_linea,
+                'talle': linea.get('talle'),
+                'estado': estado,
+                'match_exacto': _serializar_match(match_exacto) if match_exacto else None,
+                'sugerencias': sugerencias,
+                'codigo_interno_propuesto': None if match_exacto else _generar_codigo_interno_propuesto(),
+            })
+
+        if productos_a_backfillear:
+            Producto.objects.bulk_update(list(productos_a_backfillear.values()), ['codigo_interno'])
+
+        return Response({
+            'proveedor': extraido.get('proveedor'),
+            'numero_documento': extraido.get('numero_documento'),
+            'fecha': extraido.get('fecha'),
+            'lineas': lineas_resultado,
+        })
+
     @action(detail=False, methods=['post'], url_path='eliminar_todos')
     def eliminar_todos(self, request):
         """
@@ -1065,18 +1220,59 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Falta el ID del producto de Tienda Nube.'}, status=400)
         tn_variant_id = str(request.data.get('tn_variant_id') or '').strip() or None
 
+        log_ctx = f"tienda={tienda.id} ({tienda.nombre}) producto_local={producto.id} tn_product_id={tn_product_id} tn_variant_id={tn_variant_id}"
+        logger.info("vincular_tienda_nube: inicio — %s", log_ctx)
+
         tn = TiendaNubeService(tienda)
+        id_corregido_desde_variante = False
         try:
             tn_producto = tn.get_product(tn_product_id)
         except Exception as e:
-            logger.warning("vincular_tienda_nube: no se pudo obtener producto TN %s: %s", tn_product_id, e)
-            return Response(
-                {'error': f'No se encontró el producto {tn_product_id} en Tienda Nube. Verificá el ID.'},
-                status=400,
+            status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+            is_404 = status_code == 404
+            tn_producto = None
+            logger.warning(
+                "vincular_tienda_nube: get_product(%s) falló (status=%s): %s — %s",
+                tn_product_id, status_code, e, log_ctx,
             )
+            if is_404:
+                # El ID pegado puede ser el de una variante (visible por SKU en el
+                # panel de TN) en vez del ID de producto. Antes de rendirse, buscamos
+                # si existe como variante en algún producto del catálogo.
+                logger.info(
+                    "vincular_tienda_nube: %s no existe como producto, probando como ID de variante — %s",
+                    tn_product_id, log_ctx,
+                )
+                try:
+                    tn_producto = tn.find_product_containing_variant(tn_product_id)
+                except Exception as e2:
+                    logger.error(
+                        "vincular_tienda_nube: find_product_containing_variant(%s) falló: %s — %s",
+                        tn_product_id, e2, log_ctx,
+                    )
+                    tn_producto = None
+                if tn_producto:
+                    id_corregido_desde_variante = True
+                    tn_variant_id = tn_variant_id or tn_product_id
+                    logger.info(
+                        "vincular_tienda_nube: %s era una variante del producto TN %s — se corrige automáticamente — %s",
+                        tn_product_id, tn_producto.get('id'), log_ctx,
+                    )
+                    tn_product_id = str(tn_producto.get('id'))
+                else:
+                    logger.warning(
+                        "vincular_tienda_nube: %s tampoco es el ID de ninguna variante del catálogo — %s",
+                        tn_product_id, log_ctx,
+                    )
+            if tn_producto is None:
+                return Response(
+                    {'error': f'No se encontró el producto {tn_product_id} en Tienda Nube. Verificá el ID.'},
+                    status=400,
+                )
 
         variantes = tn_producto.get('variants', [])
         if not variantes:
+            logger.warning("vincular_tienda_nube: producto TN %s no tiene variantes — %s", tn_product_id, log_ctx)
             return Response({'error': 'Ese producto de Tienda Nube no tiene variantes.'}, status=400)
 
         nombre_tn = (tn_producto.get('name') or {}).get('es', producto.nombre)
@@ -1088,6 +1284,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
         # por cada variante de TN (con stock en 0: no hay forma de saber cómo se repartía
         # el número agregado que tenía el producto suelto entre los distintos talles).
         if len(variantes) > 1 and not tn_variant_id and not es_parte_de_familia_local:
+            logger.info(
+                "vincular_tienda_nube: producto TN %s tiene %s variantes y el local es suelto — se crea familia local — %s",
+                tn_product_id, len(variantes), log_ctx,
+            )
             with transaction.atomic():
                 producto.tn_product_id = tn_product_id
                 producto.tn_variant_id = None
@@ -1117,6 +1317,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         tn_sincronizado=True,
                     ))
 
+            logger.info(
+                "vincular_tienda_nube: familia local creada (padre=%s, %s variantes) — %s",
+                producto.id, len(nuevas), log_ctx,
+            )
             return Response({
                 'mensaje': (
                     f'"{producto.nombre}" se convirtió en una familia de {len(nuevas)} variante(s) '
@@ -1132,10 +1336,19 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if tn_variant_id:
             variante_elegida = next((v for v in variantes if str(v.get('id')) == tn_variant_id), None)
             if not variante_elegida:
+                ids_disponibles = [str(v.get('id')) for v in variantes]
+                logger.warning(
+                    "vincular_tienda_nube: tn_variant_id=%s no está entre las variantes del producto TN %s (disponibles=%s) — %s",
+                    tn_variant_id, tn_product_id, ids_disponibles, log_ctx,
+                )
                 return Response({'error': f'La variante {tn_variant_id} no pertenece a ese producto de Tienda Nube.'}, status=400)
         elif len(variantes) == 1:
             variante_elegida = variantes[0]
         else:
+            logger.info(
+                "vincular_tienda_nube: producto TN %s tiene %s variantes, sin tn_variant_id y el local ya es parte de una familia — se pide elegir — %s",
+                tn_product_id, len(variantes), log_ctx,
+            )
             return Response({
                 'requiere_variante': True,
                 'mensaje': 'Ese producto tiene varias variantes en Tienda Nube. Elegí cuál corresponde.',
@@ -1159,10 +1372,22 @@ class ProductoViewSet(viewsets.ModelViewSet):
         # Empuja el stock local a TN de una para que ambos lados arranquen alineados.
         sincronizar_stock_producto(producto)
 
+        mensaje = f'"{producto.nombre}" vinculado a "{nombre_tn}" en Tienda Nube.'
+        if id_corregido_desde_variante:
+            mensaje += (
+                ' (El ID que pegaste era el de una variante puntual, no el del producto — '
+                'lo detectamos y vinculamos igual, sin problema.)'
+            )
+
+        logger.info(
+            "vincular_tienda_nube: OK — tn_product_id=%s tn_variant_id=%s corregido_desde_variante=%s — %s",
+            producto.tn_product_id, producto.tn_variant_id, id_corregido_desde_variante, log_ctx,
+        )
         return Response({
-            'mensaje': f'"{producto.nombre}" vinculado a "{nombre_tn}" en Tienda Nube.',
+            'mensaje': mensaje,
             'tn_product_id': producto.tn_product_id,
             'tn_variant_id': producto.tn_variant_id,
+            'id_corregido_desde_variante': id_corregido_desde_variante,
         })
 
     @action(detail=True, methods=['post'], url_path='desvincular-tienda-nube')

@@ -20,4 +20,5 @@ requests==2.31.0
 cryptography==41.0.7
 setuptools>=80.0.0
 reportlab==4.0.9
+anthropic>=0.40.0  # Extracción de líneas de factura por IA (importación por foto/PDF)
 # pyafipws se omite (instalación desde git)

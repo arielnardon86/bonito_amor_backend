@@ -127,6 +127,36 @@ class TiendaNubeService:
         """Obtiene un producto con sus variantes por ID."""
         return self._get(f"products/{product_id}")
 
+    def find_product_containing_variant(self, variant_id):
+        """
+        Recorre el catálogo buscando el producto padre de una variante.
+
+        Fallback para cuando el ID pegado no es de producto sino de variante:
+        en el panel de Tienda Nube el ID visible por SKU/fila suele ser el de
+        la variante, distinto por cada talle/color, y no hay endpoint para
+        pedirlo directo — hay que recorrer los productos y mirar adentro.
+        Devuelve el dict del producto o None si no se encontró.
+        """
+        page = 1
+        per_page = 50
+        while True:
+            try:
+                batch = self.get_products(page=page, per_page=per_page)
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 404:
+                    break
+                raise
+            if not batch:
+                break
+            for producto in batch:
+                for v in producto.get("variants", []):
+                    if str(v.get("id")) == str(variant_id):
+                        return producto
+            if len(batch) < per_page:
+                break
+            page += 1
+        return None
+
     # ── Órdenes ──────────────────────────────────────────────────────────────
 
     def get_order(self, order_id):
