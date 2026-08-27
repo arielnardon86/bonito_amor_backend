@@ -567,6 +567,17 @@ class VentaCreateSerializer(serializers.ModelSerializer):
         help_text="Cliente asociado a la venta. Obligatorio si metodo_pago='Cuenta Corriente'."
     )
 
+    # Campos monetarios que el frontend calcula a veces restando/sumando floats de JS
+    # (ej. el ajuste de "Redondear total"): esa aritmética puede devolver algo como
+    # 23.61999999999989 en vez de 23.62. Ese valor "sucio" tiene más de 10 dígitos
+    # totales para un Decimal(max_digits=10) y DRF lo rechaza con "no haya más de 10
+    # dígitos en total" aunque el monto real sea chico — se ve como un número gigante
+    # pero no lo es. Se redondea acá, antes de que el campo lo valide.
+    _CAMPOS_MONETARIOS_A_REDONDEAR = [
+        'descuento_monto', 'recargo_monto', 'monto_efectivo',
+        'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado',
+    ]
+
     def to_internal_value(self, data):
         """Normalizar arancel_aplicado_id/cliente_id antes de la validación: convertir cadena vacía a None"""
         if isinstance(data, dict):
@@ -574,6 +585,13 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 data['arancel_aplicado_id'] = None
             if data.get('cliente_id') == '':
                 data['cliente_id'] = None
+            for campo in self._CAMPOS_MONETARIOS_A_REDONDEAR:
+                valor = data.get(campo)
+                if valor not in (None, ''):
+                    try:
+                        data[campo] = round(float(valor), 2)
+                    except (TypeError, ValueError):
+                        pass
         return super().to_internal_value(data)
     
     class Meta:
