@@ -103,6 +103,23 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
                 padre_destino = _clonar_producto_a_tienda(padre_origen, tienda_destino, None, 0)
             padre_destino_cache[padre_origen.id] = padre_destino
 
+        # Si en destino faltan hermanas de esta variante (familia recién creada, o
+        # ya existía pero incompleta), se completan con stock 0: transferir "el talle
+        # M" no debe dejar a "M" solo/suelto en destino, sino a toda la familia
+        # (S, M, L, ...) agrupada bajo el mismo padre, salvo la que se transfiere acá.
+        for hermana in padre_origen.variantes.exclude(id=producto_origen.id):
+            ya_existe = False
+            if hermana.codigo_barras:
+                ya_existe = Producto.objects.filter(
+                    tienda=tienda_destino, producto_padre=padre_destino, codigo_barras=hermana.codigo_barras,
+                ).exists()
+            if not ya_existe:
+                ya_existe = Producto.objects.filter(
+                    tienda=tienda_destino, producto_padre=padre_destino, talle=hermana.talle,
+                ).exists()
+            if not ya_existe:
+                _clonar_producto_a_tienda(hermana, tienda_destino, padre_destino, 0)
+
         variante_destino = None
         if producto_origen.codigo_barras:
             variante_destino = Producto.objects.filter(
