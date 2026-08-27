@@ -10,21 +10,38 @@ Uso:
     # Dry-run: lista a quién le llegaría, sin mandar nada.
     python manage.py enviar_mail_pendientes_pago
 
-    # Envío real a todas las tiendas con suscripción pendiente de pago.
+    # Envío real a TODAS las tiendas con suscripción pendiente de pago (sin
+    # importar cuándo se registraron) — para una campaña puntual.
     python manage.py enviar_mail_pendientes_pago --confirmar
+
+    # Solo a las que se registraron exactamente hace N días (por defecto de
+    # fecha_creacion de la Suscripcion). Pensado para correr como cron diario
+    # con --dias-atras 1: cada tienda cae en el filtro una sola vez, el día
+    # después de registrarse, sin repetir envíos si el cron corre a diario.
+    python manage.py enviar_mail_pendientes_pago --dias-atras 1 --confirmar
+
+    # Una tienda puntual, por nombre (coincidencia parcial, sin distinguir
+    # mayúsculas) — para un caso concreto sin tocar el resto.
+    python manage.py enviar_mail_pendientes_pago --tienda "Grandeza" --confirmar
 
 Destinatario: un solo mail por Tienda (a su email de contacto, o al de su
 usuario administrador si la tienda no tiene uno cargado) — evita mandarle
 varias copias a una tienda con múltiples usuarios cargados.
+
+Nota sobre --dias-atras: al depender de la fecha de creación (fija), correr
+el comando dos veces el mismo día con el mismo --dias-atras reenvía a los
+mismos destinatarios — no hay protección contra reintentos manuales, solo
+contra que el cron diario duplique envíos día tras día.
 """
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +192,15 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--confirmar', action='store_true',
-            help='Requerido para el envío real a todas las tiendas. Sin esto, solo lista los destinatarios (dry-run).',
+            help='Requerido para el envío real. Sin esto, solo lista los destinatarios (dry-run).',
+        )
+        parser.add_argument(
+            '--dias-atras', type=int, default=None,
+            help='Solo tiendas cuya suscripción se creó hace exactamente N días. Usar con 1 para el cron diario.',
+        )
+        parser.add_argument(
+            '--tienda', type=str, default=None,
+            help='Solo la(s) tienda(s) cuyo nombre contenga este texto (sin distinguir mayúsculas).',
         )
 
     def _enviar(self, to_email, subject, texto, html):
@@ -219,9 +244,18 @@ class Command(BaseCommand):
 
         from inventario.models import User
 
+        dias_atras = options.get('dias_atras')
+        filtro_tienda = options.get('tienda')
+
         tiendas = Tienda.objects.select_related('suscripcion', 'suscripcion__plan').filter(
             suscripcion__estado=Suscripcion.ESTADO_CHOICES[0][0]  # 'pending'
         )
+        if dias_atras is not None:
+            fecha_objetivo = (timezone.now() - timedelta(days=dias_atras)).date()
+            tiendas = tiendas.filter(suscripcion__fecha_creacion__date=fecha_objetivo)
+        if filtro_tienda:
+            tiendas = tiendas.filter(nombre__icontains=filtro_tienda)
+
         destinatarios = []  # lista de (tienda, email, origen)
         sin_email = []
         for t in tiendas:
@@ -236,7 +270,13 @@ class Command(BaseCommand):
             else:
                 sin_email.append(t)
 
-        self.stdout.write(f"Tiendas con suscripción pendiente de pago: {len(destinatarios)}")
+        filtros_desc = []
+        if dias_atras is not None:
+            filtros_desc.append(f"creadas hace {dias_atras} día(s) ({fecha_objetivo.isoformat()})")
+        if filtro_tienda:
+            filtros_desc.append(f"nombre contiene '{filtro_tienda}'")
+        sufijo_filtros = f" [{', '.join(filtros_desc)}]" if filtros_desc else ""
+        self.stdout.write(f"Tiendas con suscripción pendiente de pago{sufijo_filtros}: {len(destinatarios)}")
         if sin_email:
             self.stdout.write(self.style.WARNING(
                 f"{len(sin_email)} tienda(s) sin ningún email disponible (ni tienda ni administrador), se omiten: "
