@@ -199,8 +199,8 @@ class CategoriaAdmin(admin.ModelAdmin):
 # Configuración para el modelo de Producto
 @admin.register(Producto)
 class ProductoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'talle', 'precio', 'stock', 'tienda', 'codigo_barras', 'fecha_creacion')
-    list_filter = ('tienda', 'talle') 
+    list_display = ('nombre', 'talle', 'variante2', 'precio', 'stock', 'tienda', 'codigo_barras', 'fecha_creacion')
+    list_filter = ('tienda', 'talle', 'variante2')
     search_fields = ('nombre', 'codigo_barras', 'tienda__nombre') 
     readonly_fields = ('id', 'codigo_barras', 'fecha_creacion', 'fecha_actualizacion') 
 

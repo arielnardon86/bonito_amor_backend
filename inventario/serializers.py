@@ -23,7 +23,7 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 class VarianteSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = ['id', 'nombre', 'talle', 'precio', 'costo', 'stock', 'codigo_barras', 'codigo_interno',
+        fields = ['id', 'nombre', 'talle', 'variante2', 'precio', 'costo', 'stock', 'codigo_barras', 'codigo_interno',
                   'imagen', 'tn_product_id', 'tn_variant_id', 'tn_sincronizado',
                   'stock_ultimo_ingreso', 'fecha_ultimo_ingreso']
 
@@ -44,6 +44,12 @@ class ProductoSerializer(serializers.ModelSerializer):
     # default=None asegura que siempre esté presente aunque no se envíe (solo se
     # completa desde la carga masiva; la creación manual no lo pide).
     codigo_interno = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+    # Mismo motivo que codigo_interno: talle y variante2 forman parte del
+    # unique_together ('nombre', 'tienda', 'talle', 'variante2') — sin esto, cualquier
+    # POST/PATCH que no incluya alguno de los dos explícitamente (aunque sea null)
+    # falla con "Este campo es requerido.", pese a que el modelo los permite en blanco.
+    talle = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+    variante2 = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
 
     def get_rubro_nombre(self, obj):
         return obj.rubro.nombre if obj.rubro_id else None

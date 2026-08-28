@@ -307,7 +307,11 @@ class Producto(models.Model):
     precio = models.DecimalField(max_digits=10, decimal_places=2) # Precio de venta
     costo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True) # NUEVO CAMPO
     stock = models.IntegerField(default=0)
-    talle = models.CharField(max_length=50, blank=True, null=True) 
+    talle = models.CharField(max_length=50, blank=True, null=True)
+    # Segundo eje de variante, opcional (ej. color, material) — talle es el
+    # primer eje genérico, este es un segundo eje igual de genérico para
+    # tiendas que distinguen sus variantes por más de un valor a la vez.
+    variante2 = models.CharField(max_length=50, blank=True, null=True)
 
     producto_padre = models.ForeignKey(
         'self',
@@ -379,7 +383,7 @@ class Producto(models.Model):
     class Meta:
         verbose_name = "Producto"
         verbose_name_plural = "Productos"
-        unique_together = [('nombre', 'tienda', 'talle'), ('codigo_barras', 'tienda'), ('codigo_interno', 'tienda')]
+        unique_together = [('nombre', 'tienda', 'talle', 'variante2'), ('codigo_barras', 'tienda'), ('codigo_interno', 'tienda')]
         ordering = ['nombre']
         indexes = [
             models.Index(fields=['tienda'], name='producto_tienda_idx'),
@@ -390,7 +394,9 @@ class Producto(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.nombre} ({self.talle}) - {self.tienda.nombre}"
+        ejes = ', '.join(filter(None, [self.talle, self.variante2]))
+        sufijo = f" ({ejes})" if ejes else ""
+        return f"{self.nombre}{sufijo} - {self.tienda.nombre}"
 
 
 class Rubro(models.Model):

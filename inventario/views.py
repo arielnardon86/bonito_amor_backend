@@ -58,6 +58,12 @@ def _generar_codigo_barras_unico(tienda):
     return '779' + str(_uuid.uuid4().int)[:10]
 
 
+def _detalle_variante(producto):
+    """Texto legible de los ejes de variante de un producto (talle, variante2), o '' si no tiene."""
+    partes = [p for p in (producto.talle, producto.variante2) if p]
+    return f' ({", ".join(partes)})' if partes else ''
+
+
 def _clonar_producto_a_tienda(producto, tienda, producto_padre, stock):
     """Crea en `tienda` un producto equivalente a `producto` (mismo nombre/talle/precio/etc),
     usado cuando una transferencia de stock no encuentra un producto ya existente en destino."""
@@ -75,6 +81,7 @@ def _clonar_producto_a_tienda(producto, tienda, producto_padre, stock):
         precio=producto.precio,
         costo=producto.costo,
         talle=producto.talle,
+        variante2=producto.variante2,
         stock=stock,
         iva_porcentaje=producto.iva_porcentaje,
         codigo_barras=codigo_barras,
@@ -114,8 +121,12 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
                     tienda=tienda_destino, producto_padre=padre_destino, codigo_barras=hermana.codigo_barras,
                 ).exists()
             if not ya_existe:
+                # talle + variante2 juntos en el mismo filtro: dos hermanas con el mismo
+                # talle pero distinto variante2 (ej. "S-Rojo" y "S-Azul") no deben
+                # confundirse entre sí.
                 ya_existe = Producto.objects.filter(
-                    tienda=tienda_destino, producto_padre=padre_destino, talle=hermana.talle,
+                    tienda=tienda_destino, producto_padre=padre_destino,
+                    talle=hermana.talle, variante2=hermana.variante2,
                 ).exists()
             if not ya_existe:
                 _clonar_producto_a_tienda(hermana, tienda_destino, padre_destino, 0)
@@ -127,7 +138,8 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
             ).first()
         if variante_destino is None:
             variante_destino = Producto.objects.filter(
-                tienda=tienda_destino, producto_padre=padre_destino, talle=producto_origen.talle,
+                tienda=tienda_destino, producto_padre=padre_destino,
+                talle=producto_origen.talle, variante2=producto_origen.variante2,
             ).first()
 
         if variante_destino:
@@ -145,7 +157,8 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
         if match is None:
             match = Producto.objects.filter(
                 tienda=tienda_destino, producto_padre__isnull=True,
-                nombre__iexact=producto_origen.nombre, talle=producto_origen.talle,
+                nombre__iexact=producto_origen.nombre,
+                talle=producto_origen.talle, variante2=producto_origen.variante2,
             ).first()
         if match:
             match.stock = (match.stock or 0) + cantidad
@@ -449,7 +462,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
         nuevo_stock = serializer.validated_data.get('stock')
         instancia = serializer.instance
         if nuevo_stock is not None and nuevo_stock != (instancia.stock or 0):
-            talle_str = f' (T: {instancia.talle})' if instancia.talle else ''
+            talle_str = _detalle_variante(instancia)
             stock_anterior = instancia.stock or 0
             if nuevo_stock > stock_anterior:
                 serializer.save(
@@ -656,8 +669,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 continue
 
             nombre = producto.nombre
-            if producto.producto_padre_id is not None and producto.talle:
-                nombre = f"{nombre} - {producto.talle}"
+            if producto.producto_padre_id is not None:
+                sufijo = ' - '.join(filter(None, [producto.talle, producto.variante2]))
+                if sufijo:
+                    nombre = f"{nombre} - {sufijo}"
 
             codigo_interno = producto.codigo_interno or _generar_codigo_interno_unico(producto)
 
@@ -1034,10 +1049,12 @@ class ProductoViewSet(viewsets.ModelViewSet):
         codigos_internos_existentes = set(por_codigo_interno.keys())
 
         def _nombre_para_matching(p):
-            # Igual que exportar(): a una variante se le agrega el talle al nombre
+            # Igual que exportar(): a una variante se le agregan sus ejes al nombre
             # para no perder esa info al comparar contra el nombre de la factura.
-            if p.producto_padre_id is not None and p.talle:
-                return f"{p.nombre} - {p.talle}"
+            if p.producto_padre_id is not None:
+                sufijo = ' - '.join(filter(None, [p.talle, p.variante2]))
+                if sufijo:
+                    return f"{p.nombre} - {sufijo}"
             return p.nombre
 
         nombres_normalizados = [(_normalizar_nombre(_nombre_para_matching(p)), p) for p in productos_tienda]
@@ -1311,18 +1328,25 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 producto.tn_sincronizado = False
                 producto.stock = 0
                 producto.talle = None
-                producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'stock', 'talle'])
+                producto.variante2 = None
+                producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'stock', 'talle', 'variante2'])
 
                 nuevas = []
                 for v in variantes:
-                    talle_variante = ', '.join(
-                        (val.get('es') or '') for val in v.get('values', []) if val
-                    ) or None
+                    valores = [(val.get('es') or '') for val in v.get('values', []) if val]
+                    if len(valores) > 2:
+                        logger.warning(
+                            "vincular_tienda_nube: producto TN %s tiene %s ejes de variante, solo se importan los primeros 2 — %s",
+                            tn_product_id, len(valores), log_ctx,
+                        )
+                    talle_variante = valores[0] if len(valores) > 0 and valores[0] else None
+                    variante2_variante = valores[1] if len(valores) > 1 and valores[1] else None
                     nuevas.append(Producto.objects.create(
                         tienda=tienda,
                         nombre=producto.nombre,
                         producto_padre=producto,
                         talle=talle_variante,
+                        variante2=variante2_variante,
                         precio=producto.precio,
                         costo=producto.costo,
                         iva_porcentaje=producto.iva_porcentaje,
@@ -1444,7 +1468,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             producto_destino, creado = _transferir_unidad(producto_origen, tienda_destino, cantidad)
-            talle_str = f' (T: {producto_origen.talle})' if producto_origen.talle else ''
+            talle_str = _detalle_variante(producto_origen)
             _registrar_accion(
                 tienda=producto_origen.tienda, usuario=user, accion='transferencia_stock',
                 detalle=f'Transferencia -{cantidad} · {producto_origen.nombre}{talle_str} → {tienda_destino.nombre}',
@@ -1503,7 +1527,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 return Response({'error': f'La cantidad debe ser mayor a cero (variante {vid}).'}, status=400)
             variante = variantes_por_id[vid]
             if cantidad > (variante.stock or 0):
-                return Response({'error': f'Stock insuficiente para "{variante.talle or variante.nombre}".'}, status=400)
+                etiqueta_variante = _detalle_variante(variante).strip(' ()') or variante.nombre
+                return Response({'error': f'Stock insuficiente para "{etiqueta_variante}".'}, status=400)
             cantidades[vid] = cantidad
             total += cantidad
 
@@ -4034,6 +4059,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     'stock': v.stock,
                                     'sku': v.codigo_barras or None,
                                     'talle': v.talle or None,
+                                    'variante2': v.variante2 or None,
                                 }
                                 for v in variantes_pendientes
                             ]
@@ -4151,12 +4177,22 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 precio        = Decimal(str(precio_raw)).quantize(Decimal('0.01'))
                 stock_tn      = variant.get('stock') if variant.get('stock') is not None else 0
                 talle_val     = None
+                variante2_val = None
                 nombre_var    = nombre_tn
                 if variant.get('values'):
-                    vals = ' / '.join(v.get('es', '') or str(v) for v in variant['values'] if v)
+                    vals_lista = [v.get('es', '') or str(v) for v in variant['values'] if v]
+                    if len(vals_lista) > 2:
+                        logger.warning(
+                            "tn_import_products: variante TN %s tiene %s ejes de variante, solo se importan los primeros 2",
+                            tn_variant_id, len(vals_lista),
+                        )
+                    vals = ' / '.join(vals_lista)
                     if vals:
                         nombre_var = f"{nombre_tn} - {vals}"
-                        talle_val  = vals
+                    if len(vals_lista) > 0 and vals_lista[0]:
+                        talle_val = vals_lista[0]
+                    if len(vals_lista) > 1 and vals_lista[1]:
+                        variante2_val = vals_lista[1]
 
                 try:
                     # 1) Buscar por tn_variant_id
@@ -4196,6 +4232,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             producto.producto_padre = padre
                             if talle_val and not producto.talle:
                                 producto.talle = talle_val
+                            if variante2_val and not producto.variante2:
+                                producto.variante2 = variante2_val
                         producto.save()
                         vinculados += 1
                     else:
@@ -4206,6 +4244,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             precio          = precio,
                             stock           = stock_tn,
                             talle           = talle_val,
+                            variante2       = variante2_val,
                             tn_product_id   = tn_product_id,
                             tn_variant_id   = tn_variant_id,
                             tn_sincronizado = True,
@@ -5078,7 +5117,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                     )
 
             nombre_prod = detalle.producto.nombre if detalle.producto else 'producto eliminado'
-            talle_str = f' T:{detalle.producto.talle}' if detalle.producto and detalle.producto.talle else ''
+            talle_str = _detalle_variante(detalle.producto) if detalle.producto else ''
             _registrar_accion(
                 tienda=venta.tienda,
                 usuario=request.user,
@@ -5097,7 +5136,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 venta.save()
 
             nombre_prod = detalle.producto.nombre if detalle.producto else 'producto eliminado'
-            talle_str = f' T:{detalle.producto.talle}' if detalle.producto and detalle.producto.talle else ''
+            talle_str = _detalle_variante(detalle.producto) if detalle.producto else ''
             _registrar_accion(
                 tienda=venta.tienda,
                 usuario=request.user,
