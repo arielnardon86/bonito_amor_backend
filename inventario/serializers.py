@@ -86,6 +86,18 @@ class ProductoSerializer(serializers.ModelSerializer):
         model = Producto
         fields = '__all__'
 
+    def to_internal_value(self, data):
+        ret = super().to_internal_value(data)
+        # NULL nunca colisiona consigo mismo en una constraint UNIQUE (a diferencia de
+        # '') — si se dejara en None, el unique_together ('nombre','tienda','talle',
+        # 'variante2') dejaría de proteger contra variantes duplicadas (mismo talle) en
+        # tiendas que no usan este segundo eje. Se normaliza a '' ACÁ (antes de que
+        # corran los validators, incluido el UniqueTogetherValidator automático) para
+        # que la validación de duplicados los detecte correctamente.
+        if 'variante2' in ret and not ret['variante2']:
+            ret['variante2'] = ''
+        return ret
+
     def validate(self, attrs):
         if attrs.get('producto_padre') and not attrs.get('talle'):
             raise serializers.ValidationError(

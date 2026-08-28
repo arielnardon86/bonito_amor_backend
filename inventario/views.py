@@ -1340,7 +1340,10 @@ class ProductoViewSet(viewsets.ModelViewSet):
                             tn_product_id, len(valores), log_ctx,
                         )
                     talle_variante = valores[0] if len(valores) > 0 and valores[0] else None
-                    variante2_variante = valores[1] if len(valores) > 1 and valores[1] else None
+                    # '' y no None: NULL no colisiona consigo mismo en el unique_together
+                    # (nombre, tienda, talle, variante2) y dejaría de proteger contra
+                    # variantes duplicadas cuando esta familia no usa el segundo eje.
+                    variante2_variante = valores[1] if len(valores) > 1 and valores[1] else ''
                     nuevas.append(Producto.objects.create(
                         tienda=tienda,
                         nombre=producto.nombre,
@@ -4177,7 +4180,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 precio        = Decimal(str(precio_raw)).quantize(Decimal('0.01'))
                 stock_tn      = variant.get('stock') if variant.get('stock') is not None else 0
                 talle_val     = None
-                variante2_val = None
+                # '' y no None: NULL no colisiona consigo mismo en el unique_together
+                # (nombre, tienda, talle, variante2) y dejaría de proteger contra
+                # variantes duplicadas cuando esta familia no usa el segundo eje.
+                variante2_val = ''
                 nombre_var    = nombre_tn
                 if variant.get('values'):
                     vals_lista = [v.get('es', '') or str(v) for v in variant['values'] if v]
