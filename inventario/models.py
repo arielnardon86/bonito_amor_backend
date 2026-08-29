@@ -359,6 +359,11 @@ class Producto(models.Model):
         blank=True, null=True,
         help_text="Fecha y hora de la última sincronización con Mercado Libre"
     )
+    ml_catalog_product_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de producto de Catálogo de Mercado Libre, compartido por todas las publicaciones "
+                   "(propias) del mismo producto -- se usa para agrupar/crear variantes."
+    )
 
     # Integración con Tienda Nube
     tn_product_id = models.CharField(

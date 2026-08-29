@@ -28,6 +28,40 @@ ML_USER_AGENT = (
 )
 ML_USER_AGENT_API = 'TotalStock/1.0 (https://github.com/arielnardon86/bonito_amor_backend)'
 
+# IDs de atributo de ML típicamente usados para diferenciar variantes reales
+# (talle/color) entre publicaciones que comparten un mismo catalog_product_id.
+# Orden = prioridad: el primero que difiera entre publicaciones del mismo grupo
+# se usa como `talle`, el segundo como `variante2`. Lista ampliable si aparecen
+# otros IDs relevantes en otras categorías.
+EJES_VARIANTE_ML = ['SIZE', 'CLOTHING_SIZE', 'SHOE_SIZE', 'COLOR']
+
+
+def valor_atributo_ml(attributes, attr_id):
+    """Busca el value_name de un atributo puntual en la lista 'attributes' de un item de ML."""
+    for a in (attributes or []):
+        if a.get('id') == attr_id and a.get('value_name'):
+            return a['value_name']
+    return None
+
+
+def ejes_candidatos_ml(attributes):
+    """
+    A partir de los 'attributes' de UN item de ML, arma su (talle, variante2)
+    candidato buscando los IDs de EJES_VARIANTE_ML en orden de prioridad.
+    No implica por sí solo que sea una variante real -- eso se decide comparando
+    estos candidatos contra los de otras publicaciones del mismo catalog_product_id.
+    """
+    valores = []
+    for attr_id in EJES_VARIANTE_ML:
+        v = valor_atributo_ml(attributes, attr_id)
+        if v and v not in valores:
+            valores.append(v)
+        if len(valores) == 2:
+            break
+    talle = valores[0] if len(valores) > 0 else None
+    variante2 = valores[1] if len(valores) > 1 else None
+    return talle, variante2
+
 
 def _get_oauth_headers():
     """Headers tipo navegador para OAuth. CloudFront WAF bloquea requests de datacenter/bot."""
@@ -849,6 +883,64 @@ class MercadoLibreService:
             defaults['descripcion'] = descripcion[:5000]
         if categoria_ml_id:
             defaults['ml_categoria_id'] = categoria_ml_id
+
+        # Publicaciones de Catálogo de ML: si el producto original tenía variantes, ML
+        # obliga a tener una publicación (un ml_item_id) por cada una -- todas comparten
+        # catalog_product_id. Acá se agrupan bajo un solo producto de Total Stock: si hay
+        # una variante real (talle/color distinto) se arma una familia padre+variantes;
+        # si no hay ninguna diferencia real, se ignora la publicación nueva (ya hay una
+        # vinculada representando el producto) en vez de crear otro Producto duplicado.
+        catalog_product_id = item_info.get('catalog_product_id') or None
+        if catalog_product_id:
+            defaults['ml_catalog_product_id'] = catalog_product_id
+            ya_conocido = Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).exists()
+            if not ya_conocido:
+                talle_candidato, variante2_candidato = ejes_candidatos_ml(item_info.get('attributes'))
+                hermanos = list(
+                    Producto.objects.filter(tienda=tienda, ml_catalog_product_id=catalog_product_id)
+                    .order_by('-stock', 'fecha_creacion')
+                )
+                if not hermanos:
+                    # Primera publicación que vemos de este catalog_product_id.
+                    defaults['talle'] = talle_candidato
+                    defaults['variante2'] = variante2_candidato
+                else:
+                    # Solo se compara contra miembros con un talle/variante2 "real": una
+                    # variante hija, o un hermano que todavía es un producto suelto. El
+                    # padre de una familia ya promovida queda con talle=None (reseteado)
+                    # y no representa ningún valor -- no debe compararse.
+                    comparables = [h for h in hermanos if h.producto_padre_id is not None or not h.variantes.exists()]
+                    coincidencia = next(
+                        (h for h in comparables if (h.talle, h.variante2) == (talle_candidato, variante2_candidato)),
+                        None,
+                    )
+                    if coincidencia is not None:
+                        # Mismo talle/variante2 que una publicación ya conocida (o ninguna
+                        # de las dos tiene atributo distinguible): no es una variante real.
+                        logger.info(
+                            f"create_producto_from_ml_item: {ml_item_id} comparte catalog_product_id "
+                            f"{catalog_product_id} sin diferencia real con \"{coincidencia.nombre}\" "
+                            f"({coincidencia.ml_item_id}) -- se ignora, ya está representado por esa publicación."
+                        )
+                        return coincidencia
+
+                    # No coincide con ninguna publicación ya conocida -> variante nueva.
+                    # Si el hermano de referencia todavía es un producto suelto, se
+                    # promueve a padre (mismo criterio que vincular_tienda_nube: resetea
+                    # su propio stock/talle porque no hay forma de saber cómo se repartía
+                    # entre las variantes).
+                    referencia = comparables[0] if comparables else hermanos[0]
+                    padre = referencia.producto_padre or referencia
+                    if padre.producto_padre_id is None and not padre.variantes.exists():
+                        padre.stock = 0
+                        padre.talle = None
+                        padre.variante2 = None
+                        padre.save(update_fields=['stock', 'talle', 'variante2'])
+
+                    defaults['nombre'] = padre.nombre
+                    defaults['producto_padre'] = padre
+                    defaults['talle'] = talle_candidato
+                    defaults['variante2'] = variante2_candidato
 
         try:
             producto, created = Producto.objects.update_or_create(
