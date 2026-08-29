@@ -50,6 +50,8 @@ class ProductoSerializer(serializers.ModelSerializer):
     # falla con "Este campo es requerido.", pese a que el modelo los permite en blanco.
     talle = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
     variante2 = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+    # Mismo motivo: codigo_barras está en unique_together ('codigo_barras', 'tienda').
+    codigo_barras = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
 
     def get_rubro_nombre(self, obj):
         return obj.rubro.nombre if obj.rubro_id else None
