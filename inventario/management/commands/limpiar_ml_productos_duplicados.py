@@ -112,12 +112,13 @@ class Command(BaseCommand):
     def _pasada_catalogo(self, qs_base):
         from inventario.services.mercadolibre_service import MercadoLibreService, ejes_candidatos_ml
 
-        # Solo productos que todavía no pasaron por esta clasificación -- re-consulta
-        # fresca de la BD para reflejar lo que la pasada 1 ya haya fusionado/borrado.
+        # Se re-consultan TODOS los productos con ml_item_id (no solo los que todavía no
+        # tienen ml_catalog_product_id): una publicación nueva del mismo grupo puede
+        # aparecer más tarde (import manual, nueva venta) sin que el resto del grupo
+        # quede marcado de nuevo -- filtrar por ml_catalog_product_id vacío haría que esa
+        # publicación nueva no se detecte contra sus hermanas ya clasificadas.
         candidatos = list(
-            qs_base.filter(ml_catalog_product_id__isnull=True)
-            .select_related('tienda')
-            .order_by('tienda_id', 'fecha_creacion')
+            qs_base.select_related('tienda').order_by('tienda_id', 'fecha_creacion')
         )
         if not candidatos:
             self.stdout.write("Sin publicaciones para clasificar por Catálogo.")
@@ -171,7 +172,7 @@ class Command(BaseCommand):
                 # Todas las publicaciones del grupo tienen el mismo talle/variante2
                 # candidato (o ninguna tiene atributo distinguible): no hay variante
                 # real, se fusionan en una sola.
-                self._fusionar_grupo(etiqueta, productos)
+                self._fusionar_grupo(etiqueta, productos, catalog_id=catalog_id)
                 fusionados += 1
             else:
                 self._promover_familia_catalogo(etiqueta, catalog_id, productos, candidatos_por_producto)
@@ -219,7 +220,7 @@ class Command(BaseCommand):
         familia de variantes previa (padre o hijo) ajena a esta limpieza."""
         return next((p for p in productos if p.producto_padre_id or p.variantes.exists()), None)
 
-    def _fusionar_grupo(self, etiqueta, productos):
+    def _fusionar_grupo(self, etiqueta, productos, catalog_id=None):
         from inventario.models import DetalleVenta, DetallePresupuesto, ArancelMercadoLibreProducto
         try:
             from inventario.models import DetalleCambioDevolucion
@@ -297,4 +298,12 @@ class Command(BaseCommand):
             if ganador.stock != stock_final:
                 ganador.stock = stock_final
             ganador.ml_sincronizado = True
-            ganador.save(update_fields=['stock', 'ml_sincronizado'])
+            update_fields = ['stock', 'ml_sincronizado']
+            # Clave para que una publicación nueva del mismo grupo, descubierta más
+            # adelante, se reconozca contra este ganador en vez de crearse suelta de
+            # nuevo (el bug que generó este mismo caso: el ganador de una fusión
+            # anterior se había quedado sin este campo).
+            if catalog_id and ganador.ml_catalog_product_id != catalog_id:
+                ganador.ml_catalog_product_id = catalog_id
+                update_fields.append('ml_catalog_product_id')
+            ganador.save(update_fields=update_fields)
