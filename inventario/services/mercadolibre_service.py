@@ -864,6 +864,10 @@ class MercadoLibreService:
             precio = float(item_info.get('price', 0))
         stock = max(0, int(item_info.get('available_quantity', 0)))
         categoria_ml_id = item_info.get('category_id')
+        # Full: el stock vive en los depósitos de ML (lo repone/despacha ML), a
+        # diferencia de una publicación normal (drop_off, etc.) que se despacha con
+        # el stock propio del vendedor.
+        stock_full = (item_info.get('shipping') or {}).get('logistic_type') == 'fulfillment'
         descripcion = None
         if isinstance(item_info.get('description'), dict):
             descripcion = item_info.get('description', {}).get('plain_text', '')
@@ -883,6 +887,7 @@ class MercadoLibreService:
             defaults['descripcion'] = descripcion[:5000]
         if categoria_ml_id:
             defaults['ml_categoria_id'] = categoria_ml_id
+        defaults['ml_stock_full'] = stock_full
 
         # Publicaciones de Catálogo de ML: si el producto original tenía variantes, ML
         # obliga a tener una publicación (un ml_item_id) por cada una -- todas comparten

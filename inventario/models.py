@@ -364,6 +364,11 @@ class Producto(models.Model):
         help_text="ID de producto de Catálogo de Mercado Libre, compartido por todas las publicaciones "
                    "(propias) del mismo producto -- se usa para agrupar/crear variantes."
     )
+    ml_stock_full = models.BooleanField(
+        default=False,
+        help_text="True si la publicación de Mercado Libre usa logística Full (el stock vive en los "
+                   "depósitos de ML, no en el del vendedor)."
+    )
 
     # Integración con Tienda Nube
     tn_product_id = models.CharField(
