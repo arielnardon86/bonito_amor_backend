@@ -11,6 +11,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.conf import settings
+from django.db import IntegrityError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -483,99 +484,7 @@ class MercadoLibreService:
             else:
                 logger.debug(f"Error al obtener sale_price para {item_id}: {e}")
             return None
-    
-    def create_producto_from_ml_item(self, tienda, item_data):
-        """
-        Crea o actualiza un Producto en la base de datos a partir de los datos de un item de Mercado Libre.
-        Se usa al importar productos desde ML o al registrar una venta de ML cuyo producto no existía localmente.
-        
-        Args:
-            tienda: Instancia del modelo Tienda
-            item_data: dict con la respuesta de get_item (id, title, price, available_quantity, etc.)
-            
-        Returns:
-            Instancia de Producto creada o actualizada, o None si falla
-        """
-        if not item_data or not isinstance(item_data, dict):
-            logger.warning("create_producto_from_ml_item: item_data inválido o vacío")
-            return None
-        
-        ml_item_id = item_data.get('id')
-        if not ml_item_id:
-            logger.warning("create_producto_from_ml_item: el item no tiene id")
-            return None
-        
-        title = (item_data.get('title') or '').strip()
-        if not title:
-            title = f"Producto ML {ml_item_id}"
-        
-        # Preferir precio con promoción (sale_price) si existe; si no, usar price del item
-        price = None
-        sale_data = self.get_sale_price(ml_item_id)
-        if sale_data is not None and sale_data.get('amount') is not None:
-            try:
-                price = float(sale_data['amount'])
-            except (TypeError, ValueError):
-                pass
-        if price is None:
-            try:
-                price = float(item_data.get('price', 0))
-            except (TypeError, ValueError):
-                price = 0
-        if price < 0:
-            price = 0
-        
-        try:
-            available_quantity = int(item_data.get('available_quantity', 0))
-        except (TypeError, ValueError):
-            available_quantity = 0
-        if available_quantity < 0:
-            available_quantity = 0
-        
-        # Descripción: ML puede devolver un objeto con plain_text
-        description = None
-        if item_data.get('descriptions') and isinstance(item_data['descriptions'], list) and len(item_data['descriptions']) > 0:
-            desc_id = item_data['descriptions'][0]
-            if isinstance(desc_id, dict) and desc_id.get('id'):
-                # Se podría hacer otra llamada para obtener el texto, por ahora dejamos None
-                pass
-        codigo_barras = f"ML-{ml_item_id}"  # Código único para productos importados de ML
-        # Usar ml_item_id como talle para cumplir unique_together (nombre, tienda, talle) sin colisiones
-        talle_ml = ml_item_id[:50] if len(ml_item_id) <= 50 else ml_item_id[:47] + "..."
-        
-        from django.db import IntegrityError
-        base_codigo = codigo_barras
-        intento = 0
-        while intento < 100:
-            try:
-                producto, created = Producto.objects.update_or_create(
-                    tienda=tienda,
-                    ml_item_id=ml_item_id,
-                    defaults={
-                        'nombre': title[:200],
-                        'precio': price,
-                        'stock': available_quantity,
-                        'talle': talle_ml,
-                        'descripcion': description,
-                        'codigo_barras': codigo_barras,
-                        'ml_sincronizado': True,
-                        'ml_ultima_sincronizacion': timezone.now(),
-                    }
-                )
-                if created:
-                    logger.info(f"Producto creado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
-                else:
-                    logger.info(f"Producto actualizado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
-                return producto
-            except IntegrityError as e:
-                if 'codigo_barras' in str(e) or 'unique' in str(e).lower():
-                    intento += 1
-                    codigo_barras = f"{base_codigo}-{intento}"
-                else:
-                    raise
-        logger.error(f"create_producto_from_ml_item: no se pudo asignar codigo_barras único para {ml_item_id}")
-        return None
-    
+
     def update_item(self, item_id, item_data):
         """
         Actualiza un producto/publicación existente en Mercado Libre
@@ -878,12 +787,22 @@ class MercadoLibreService:
     
     def create_producto_from_ml_item(self, tienda, ml_item_data):
         """
-        Crea o actualiza un producto en Total Stock a partir de los datos de un item de Mercado Libre.
-        
+        Crea o actualiza (atómicamente) el Producto vinculado a un item de Mercado Libre.
+
+        IMPORTANTE: este es el único método con este nombre en la clase. Hasta hace poco
+        había otra definición anterior en el archivo con el mismo nombre -- en Python la
+        segunda pisa a la primera en silencio, así que esa (la atómica, con update_or_create)
+        nunca se ejecutaba. La consecuencia real: create_producto_from_ml_item corría con un
+        patrón "leer y después escribir" (filter().first() + create() por separado) sin
+        ninguna traba, así que dos llamadas cercanas en el tiempo para el mismo ml_item_id
+        (doble notificación de un mismo pedido, reintento de webhook, doble click en
+        "Importar productos") podían pasar el chequeo antes de que la primera terminara de
+        crear, dejando varios Producto duplicados para un mismo ítem de ML.
+
         Args:
             tienda: Instancia del modelo Tienda
             ml_item_data: dict con los datos del item de ML (de get_item o de order_items)
-            
+
         Returns:
             Producto: La instancia del producto creada o actualizada, o None si falla
         """
@@ -891,13 +810,13 @@ class MercadoLibreService:
         if not ml_item_id:
             logger.error("No se pudo obtener ml_item_id de los datos del item")
             return None
-        
+
         # Obtener datos del item - puede venir de get_item (completo) o de order_items (parcial)
         if 'item' in ml_item_data and isinstance(ml_item_data.get('item'), dict):
             item_info = ml_item_data.get('item', {})
         else:
             item_info = ml_item_data
-        
+
         nombre = item_info.get('title') or item_info.get('name') or f"Producto ML {ml_item_id}"
         # Preferir sale_price (precio con descuento) sobre price (precio base)
         precio = None
@@ -909,48 +828,57 @@ class MercadoLibreService:
                 pass
         if precio is None or precio <= 0:
             precio = float(item_info.get('price', 0))
-        stock = int(item_info.get('available_quantity', 0))
+        stock = max(0, int(item_info.get('available_quantity', 0)))
         categoria_ml_id = item_info.get('category_id')
         descripcion = None
         if isinstance(item_info.get('description'), dict):
             descripcion = item_info.get('description', {}).get('plain_text', '')
         elif isinstance(item_info.get('description'), str):
             descripcion = item_info.get('description', '')
-        
-        # Buscar si ya existe el producto vinculado
-        producto_existente = Producto.objects.filter(tienda=tienda, ml_item_id=ml_item_id).first()
-        
-        if producto_existente:
-            # Actualizar producto existente
-            producto_existente.nombre = nombre[:200]
-            producto_existente.precio = precio if precio > 0 else producto_existente.precio
-            producto_existente.stock = stock
-            if descripcion:
-                producto_existente.descripcion = descripcion[:5000]
-            if categoria_ml_id:
-                producto_existente.ml_categoria_id = categoria_ml_id
-            producto_existente.ml_sincronizado = True
-            producto_existente.ml_ultima_sincronizacion = timezone.now()
-            producto_existente.save()
-            logger.info(f"Producto actualizado desde ML: {producto_existente.nombre} (ml_item_id: {ml_item_id})")
-            return producto_existente
-        
-        # Crear nuevo producto (nombre + sufijo ML para unicidad con unique_together)
+
         nombre_final = f"{nombre[:185]} (ML-{ml_item_id})" if len(nombre) > 185 else f"{nombre} (ML-{ml_item_id})"
-        producto = Producto.objects.create(
-            tienda=tienda,
-            nombre=nombre_final,
-            descripcion=descripcion[:5000] if descripcion else None,
-            precio=Decimal(str(precio)) if precio > 0 else Decimal('0.01'),
-            stock=max(0, stock),
-            ml_item_id=ml_item_id,
-            ml_sincronizado=True,
-            ml_ultima_sincronizacion=timezone.now(),
-            ml_categoria_id=categoria_ml_id or None
-        )
-        logger.info(f"Producto creado desde ML: {producto.nombre} (ml_item_id: {ml_item_id})")
+        defaults = {
+            'nombre': nombre_final[:200],
+            'stock': stock,
+            'ml_sincronizado': True,
+            'ml_ultima_sincronizacion': timezone.now(),
+        }
+        if precio > 0:
+            defaults['precio'] = Decimal(str(precio))
+        if descripcion:
+            defaults['descripcion'] = descripcion[:5000]
+        if categoria_ml_id:
+            defaults['ml_categoria_id'] = categoria_ml_id
+
+        try:
+            producto, created = Producto.objects.update_or_create(
+                tienda=tienda,
+                ml_item_id=ml_item_id,
+                defaults=defaults,
+                create_defaults={
+                    **defaults,
+                    'precio': defaults.get('precio') or Decimal('0.01'),
+                    'codigo_barras': f"ML-{ml_item_id}",
+                },
+            )
+        except IntegrityError as e:
+            # Colisión rarísima de codigo_barras con un producto cargado a mano con ese
+            # mismo texto -- se reintenta una vez sin setear codigo_barras.
+            logger.warning(f"create_producto_from_ml_item: colisión de codigo_barras para {ml_item_id} ({e}), reintentando sin código")
+            defaults_sin_barras = {**defaults, 'precio': defaults.get('precio') or Decimal('0.01')}
+            producto, created = Producto.objects.update_or_create(
+                tienda=tienda,
+                ml_item_id=ml_item_id,
+                defaults=defaults_sin_barras,
+            )
+
+        if created:
+            logger.info(f"Producto creado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
+        else:
+            logger.info(f"Producto actualizado desde ML: {producto.nombre} (ml_item_id={ml_item_id})")
         return producto
-    
+
+
     def get_order(self, order_id):
         """
         Obtiene información de una orden/pedido de Mercado Libre

@@ -3337,24 +3337,29 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     item_data = item.get('item', {})
                                     unit_price = Decimal(str(item_data.get('price', 0)))
                                 if unit_price <= 0:
-                                    try:
-                                        producto_temp = Producto.objects.get(tienda=tienda, ml_item_id=ml_item_id)
+                                    # .filter().first() y no .get(): si por algún motivo hay más de
+                                    # un Producto con este ml_item_id (duplicados aún no limpiados),
+                                    # no queremos que MultipleObjectsReturned tire abajo el pedido
+                                    # entero -- se elige el sincronizado más recientemente.
+                                    producto_temp = Producto.objects.filter(
+                                        tienda=tienda, ml_item_id=ml_item_id
+                                    ).order_by('-ml_ultima_sincronizacion', '-fecha_creacion').first()
+                                    if producto_temp:
                                         unit_price = producto_temp.precio
                                         logger.warning(f"Precio no en orden ML, usando sistema: ${unit_price} para {producto_temp.nombre}")
-                                    except Producto.DoesNotExist:
+                                    else:
                                         unit_price = Decimal('0.00')
                                         logger.error(f"No se pudo obtener precio para item {ml_item_id}")
-                                
+
                                 if ml_item_id and unit_price > 0:
-                                    # Buscar el producto en nuestro sistema por ml_item_id
+                                    # Buscar el producto en nuestro sistema por ml_item_id (mismo
+                                    # criterio que arriba: filter().first(), no get(), por si hay
+                                    # duplicados sin limpiar).
                                     # Si no existe, crearlo automáticamente desde los datos de ML (sincronización inversa)
-                                    producto = None
-                                    try:
-                                        producto = Producto.objects.get(
-                                            tienda=tienda,
-                                            ml_item_id=ml_item_id
-                                        )
-                                    except Producto.DoesNotExist:
+                                    producto = Producto.objects.filter(
+                                        tienda=tienda, ml_item_id=ml_item_id
+                                    ).order_by('-ml_ultima_sincronizacion', '-fecha_creacion').first()
+                                    if producto is None:
                                         # Producto no vinculado: importarlo desde ML para poder registrar la venta
                                         try:
                                             item_full = ml_service.get_item(ml_item_id)
