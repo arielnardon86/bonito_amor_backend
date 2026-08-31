@@ -114,8 +114,14 @@ class TiendaAdmin(admin.ModelAdmin):
                 ),
             }),
             ('Suscripción', {
-                'fields': ('requiere_eleccion_plan',),
-                'description': 'Si está tildado, esta tienda (aunque sea legacy) queda bloqueada hasta que elija y pague un plan. No afecta a otras tiendas legacy.',
+                'fields': ('requiere_eleccion_plan', 'hereda_suscripcion_de'),
+                'description': (
+                    'Si está tildado "requiere elección de plan", esta tienda (aunque sea legacy) queda '
+                    'bloqueada hasta que elija y pague un plan. No afecta a otras tiendas legacy. '
+                    'Si se completa "hereda suscripción de", el acceso de esta tienda sigue en vivo el '
+                    'estado de la suscripción de la tienda elegida (si esa se pausa/cancela, esta también '
+                    'queda bloqueada) -- pensado para una segunda tienda sin costo del mismo cliente.'
+                ),
             }),
             ('Configuración ARCA', {
                 'fields': (
