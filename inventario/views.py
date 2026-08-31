@@ -3682,6 +3682,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     origen_mercadolibre=True,
                                     ml_order_id=order_id_from_pay
                                 ).first()
+                                if not venta_pay:
+                                    logger.info(f"Payment {payment_id}: orden {order_id_from_pay} sin venta asociada todavía, omitiendo")
                                 if venta_pay:
                                     # /collections es la fuente autoritativa para shipping_cost y taxes_amount
                                     # (el order tiene shipping_cost sin impuestos sobre el envío).
@@ -3690,7 +3692,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                     _sale_fee  = abs(Decimal(str(payment.get('marketplace_fee') or 0)))
                                     _ship_cost = abs(Decimal(str(payment.get('shipping_cost') or 0)))
                                     _tax_fee   = abs(Decimal(str(payment.get('taxes_amount') or 0)))
-                                    logger.info(f"Payment {payment_id}: marketplace_fee={_sale_fee}, shipping_cost={_ship_cost}, taxes_amount={_tax_fee}")
+                                    logger.info(f"Payment {payment_id} (orden {order_id_from_pay}, venta {venta_pay.id}): marketplace_fee={_sale_fee}, shipping_cost={_ship_cost}, taxes_amount={_tax_fee}")
                                     if _sale_fee or _ship_cost or _tax_fee:
                                         update_fields = []
                                         if _ship_cost and _ship_cost != (venta_pay.ml_shipping_cost or Decimal('0.00')):
@@ -3709,9 +3711,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                             venta_pay.save(update_fields=update_fields)
                                             logger.info(f"Payment {payment_id}: actualizado {update_fields} para orden {order_id_from_pay}")
                                         else:
-                                            logger.info(f"Payment {payment_id}: sin cambios nuevos")
+                                            logger.info(f"Payment {payment_id} (orden {order_id_from_pay}, venta {venta_pay.id}): sin cambios nuevos")
                                     else:
-                                        logger.info(f"Payment {payment_id}: marketplace_fee=0, sin fees disponibles aún")
+                                        logger.info(f"Payment {payment_id} (orden {order_id_from_pay}, venta {venta_pay.id}): marketplace_fee=0, sin fees disponibles aún")
                     except Exception as pay_err:
                         logger.warning(f"Error procesando payments topic (payment {payment_id}): {pay_err}")
 
