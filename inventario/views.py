@@ -8073,6 +8073,13 @@ def _crear_tienda_usuario_suscripcion(data):
     if Tienda.objects.filter(nombre__iexact=nombre_tienda).exists():
         raise _RegistroError(Response({'error': 'Ya existe una tienda con ese nombre.'}, status=400))
 
+    if len(username) < 3 or not re.match(r'^[a-zA-Z0-9_.@+-]+$', username):
+        raise _RegistroError(Response(
+            {'error': 'El nombre de usuario no puede tener espacios ni acentos. '
+                      'Usá solo letras, números, punto, guion, guion bajo, @ o +.'},
+            status=400,
+        ))
+
     if User.objects.filter(username__iexact=username).exists():
         raise _RegistroError(Response({'error': 'Ese nombre de usuario ya está en uso.'}, status=400))
 
