@@ -9,6 +9,7 @@ from inventario.views import (
     ArancelMetodoTiendaViewSet, FacturaViewSet, NotaCreditoViewSet,
     CierreCajaViewSet, EgresoCajaViewSet, HistorialAccionViewSet,
     ClienteViewSet,
+    ProveedorViewSet,
     RubroViewSet,
     PresupuestoViewSet,
 )
@@ -74,6 +75,7 @@ router.register(r'facturas', FacturaViewSet, basename='facturas')
 router.register(r'notas-credito', NotaCreditoViewSet, basename='notas-credito')
 router.register(r'historial-acciones', HistorialAccionViewSet, basename='historial-acciones')
 router.register(r'clientes', ClienteViewSet, basename='clientes')
+router.register(r'proveedores', ProveedorViewSet, basename='proveedores')
 router.register(r'rubros', RubroViewSet, basename='rubros')
 router.register(r'presupuestos', PresupuestoViewSet, basename='presupuestos')
 # Registrar CambioDevolucionViewSet solo si existe (migración aplicada)

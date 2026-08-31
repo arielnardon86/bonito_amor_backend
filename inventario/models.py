@@ -345,6 +345,8 @@ class Producto(models.Model):
     # Rubro/categoría opcional (propio de cada tienda). Permite filtrar el listado y
     # editar precio/IVA/margen de forma masiva para todos los productos del rubro.
     rubro = models.ForeignKey('Rubro', on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
+    # Proveedor opcional (propio de cada tienda) del que se compra este producto.
+    proveedor = models.ForeignKey('Proveedor', on_delete=models.SET_NULL, null=True, blank=True, related_name='productos')
 
     # Integración con Mercado Libre
     ml_item_id = models.CharField(
@@ -590,6 +592,37 @@ class Cliente(models.Model):
 
     def __str__(self):
         return f"{self.nombre_razon_social} ({self.cuit_cuil}) - {self.tienda.nombre}"
+
+
+# ── Proveedores ──────────────────────────────────────────────────────────────
+
+class Proveedor(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='proveedores')
+    nombre_razon_social = models.CharField(max_length=255)
+    # A diferencia de Cliente, el CUIT es opcional: hay proveedores informales
+    # sin CUIT, así que no puede ser obligatorio ni tener unique_together
+    # (rompería con más de un proveedor sin CUIT por tienda).
+    cuit = models.CharField(max_length=13, blank=True, default='')
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    telefono = models.CharField(max_length=50, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    # Soft delete: un proveedor vinculado a productos no se borra nunca en duro.
+    activo = models.BooleanField(default=True)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Proveedor"
+        verbose_name_plural = "Proveedores"
+        ordering = ['nombre_razon_social']
+        indexes = [
+            models.Index(fields=['tienda', 'cuit']),
+        ]
+
+    def __str__(self):
+        return f"{self.nombre_razon_social} - {self.tienda.nombre}"
 
 
 class MovimientoCuentaCorriente(models.Model):

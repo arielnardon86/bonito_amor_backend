@@ -192,7 +192,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -267,7 +267,7 @@ from .serializers import (
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer,
     CierreCajaSerializer, EgresoCajaSerializer,
-    ClienteSerializer, MovimientoCuentaCorrienteSerializer,
+    ClienteSerializer, ProveedorSerializer, MovimientoCuentaCorrienteSerializer,
     calcular_saldo_pendiente, obtener_deuda_vencida_info,
     RubroSerializer,
     PresupuestoSerializer, PresupuestoCreateSerializer,
@@ -7739,6 +7739,45 @@ class ClienteViewSet(viewsets.ModelViewSet):
             'saldo_pendiente': str(saldo_final),
             'egreso_caja_creado': cierre_abierto is not None,
         })
+
+
+# ── Proveedores ────────────────────────────────────────────────────────────
+
+class ProveedorViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ProveedorSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Proveedor.objects.select_related('tienda')
+        tienda_slug = self.request.query_params.get('tienda_slug')
+
+        if user.is_superuser:
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+        else:
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return Proveedor.objects.none()
+            qs = qs.filter(tienda__pk__in=tiendas_ids)
+            if tienda_slug:
+                qs = qs.filter(tienda__nombre=tienda_slug)
+
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                models.Q(cuit__icontains=search) | models.Q(nombre_razon_social__icontains=search)
+            )
+
+        if self.request.query_params.get('incluir_inactivos') != 'true':
+            qs = qs.filter(activo=True)
+
+        return qs
+
+    def perform_destroy(self, instance):
+        # Soft delete: un proveedor vinculado a productos no se borra en duro.
+        instance.activo = False
+        instance.save(update_fields=['activo'])
 
 
 # ── Rubros (IVA por rubro para carga masiva de productos) ────────────────────

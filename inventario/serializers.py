@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -38,6 +38,8 @@ class ProductoSerializer(serializers.ModelSerializer):
     )
     variantes = VarianteSimpleSerializer(many=True, read_only=True)
     rubro_nombre = serializers.SerializerMethodField()
+    proveedor_nombre = serializers.SerializerMethodField()
+    proveedor_detalle = serializers.SerializerMethodField()
     # Declarado explícito: al estar en unique_together con tienda, el
     # UniqueTogetherValidator de DRF exige que la clave esté presente en el payload
     # (enforce_required_fields), sin importar required=False en el campo. El
@@ -55,6 +57,24 @@ class ProductoSerializer(serializers.ModelSerializer):
 
     def get_rubro_nombre(self, obj):
         return obj.rubro.nombre if obj.rubro_id else None
+
+    def get_proveedor_nombre(self, obj):
+        return obj.proveedor.nombre_razon_social if obj.proveedor_id else None
+
+    def get_proveedor_detalle(self, obj):
+        # Datos completos del proveedor embebidos acá (no solo el nombre) para que el
+        # buscador de "Proveedores" pueda mostrarlos sin depender de que ese proveedor
+        # esté en la página/filtro actual de la lista de proveedores cargada aparte.
+        if not obj.proveedor_id:
+            return None
+        p = obj.proveedor
+        return {
+            'id': str(p.id),
+            'nombre_razon_social': p.nombre_razon_social,
+            'cuit': p.cuit,
+            'telefono': p.telefono,
+            'email': p.email,
+        }
 
     def get_fields(self):
         """Genera fields dinámicamente verificando si los campos de ML existen"""
@@ -81,6 +101,10 @@ class ProductoSerializer(serializers.ModelSerializer):
             fields['variantes'] = VarianteSimpleSerializer(many=True, read_only=True)
         if 'rubro_nombre' not in fields:
             fields['rubro_nombre'] = serializers.SerializerMethodField()
+        if 'proveedor_nombre' not in fields:
+            fields['proveedor_nombre'] = serializers.SerializerMethodField()
+        if 'proveedor_detalle' not in fields:
+            fields['proveedor_detalle'] = serializers.SerializerMethodField()
 
         return fields
 
@@ -1322,6 +1346,31 @@ class ClienteSerializer(serializers.ModelSerializer):
 
     def get_fecha_vencimiento_mas_antigua(self, obj):
         return self._deuda_vencida_info(obj)[1]
+
+
+class ProveedorSerializer(serializers.ModelSerializer):
+    tienda_slug = serializers.SlugRelatedField(
+        source='tienda', slug_field='nombre', queryset=Tienda.objects.all(), write_only=True
+    )
+
+    class Meta:
+        model = Proveedor
+        fields = [
+            'id', 'tienda_slug', 'nombre_razon_social', 'cuit',
+            'direccion', 'telefono', 'email', 'activo', 'fecha_creacion',
+        ]
+        read_only_fields = ['id', 'fecha_creacion']
+
+    def validate(self, data):
+        cuit = (data.get('cuit') or '').strip()
+        if cuit:
+            tienda = data.get('tienda') or getattr(self.instance, 'tienda', None)
+            existe = Proveedor.objects.filter(tienda=tienda, cuit=cuit)
+            if self.instance:
+                existe = existe.exclude(pk=self.instance.pk)
+            if existe.exists():
+                raise serializers.ValidationError({'cuit': 'Ya existe un proveedor con ese CUIT en esta tienda.'})
+        return data
 
 
 class MovimientoCuentaCorrienteSerializer(serializers.ModelSerializer):
