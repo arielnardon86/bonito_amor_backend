@@ -211,6 +211,14 @@ class Tienda(models.Model):
         default=False,
         help_text="Fuerza a esta tienda (aunque sea legacy) a elegir y pagar un plan para poder seguir usando el sistema. No afecta a otras tiendas legacy."
     )
+    hereda_suscripcion_de = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='tiendas_dependientes',
+        help_text="Si se completa, el acceso de esta tienda (activa/pausada/cancelada) sigue al "
+                   "estado de la Suscripcion de la tienda referenciada en vez de tener una propia. "
+                   "Uso: una segunda tienda sin costo (ej. otra cuenta de Mercado Libre del mismo "
+                   "cliente) que debe bloquearse si se da de baja la tienda principal que sí paga."
+    )
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

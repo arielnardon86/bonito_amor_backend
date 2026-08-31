@@ -155,11 +155,43 @@ def info_suscripcion(tienda) -> dict:
     Devuelve un dict con el estado actual del plan de la tienda.
     Usado por el endpoint de perfil / panel de administración.
 
-    Una tienda legacy con `requiere_eleccion_plan=True` se reporta como no-legacy
-    y con estado 'requiere_plan', para que el frontend la bloquee con la pantalla
-    de elección de plan aunque nunca haya tenido (o ya no tenga) un plan real
-    asignado. El resto de las tiendas legacy no se ven afectadas por este flag.
+    Si `tienda.hereda_suscripcion_de` está seteado (una tienda sin costo propio
+    cuyo acceso depende de que otra tienda esté al día, ej. una segunda cuenta de
+    Mercado Libre del mismo cliente), se devuelve el estado de ESA tienda en vez
+    del propio -- así, si la tienda principal se pausa o cancela, esta queda
+    bloqueada en el mismo momento, sin ningún proceso aparte que las mantenga
+    sincronizadas. `legacy` se fuerza a False (si no, el frontend la trataría como
+    siempre-activa sin mirar el estado) y nombre/logo/cuit quedan los propios de
+    esta tienda, no los de la tienda de la que depende.
     """
+    # Una sola vuelta, nunca encadenada: _info_suscripcion_propia() nunca mira
+    # hereda_suscripcion_de, así que aunque la tienda referenciada también lo
+    # tuviera seteado (o se apuntara a sí misma), se usa su Suscripcion propia
+    # tal cual, sin seguir la cadena.
+    principal = tienda.hereda_suscripcion_de
+    if principal and principal.pk != tienda.pk:
+        info = _info_suscripcion_propia(principal)
+        info['legacy'] = False
+        info['nombre'] = tienda.nombre
+        info['logo'] = tienda.logo
+        info['cuit'] = tienda.cuit or ''
+        # Cantidad de productos/usuarios: los propios de ESTA tienda, no los de
+        # la principal (los límites de todos modos no se aplican -- ver docstring
+        # de verificar_limite_productos/usuarios -- pero mostrar el conteo de la
+        # tienda equivocada en el panel sería engañoso).
+        if 'cantidad_productos' in info:
+            info['cantidad_productos'] = Producto.objects.filter(tienda=tienda, producto_padre__isnull=True).count()
+        if 'cantidad_usuarios' in info:
+            info['cantidad_usuarios'] = User.objects.filter(tienda=tienda).count()
+        return info
+
+    return _info_suscripcion_propia(tienda)
+
+
+def _info_suscripcion_propia(tienda) -> dict:
+    """Calcula info_suscripcion mirando únicamente la Suscripcion propia de la
+    tienda (nunca hereda_suscripcion_de) -- separado para que info_suscripcion()
+    pueda usarlo sobre OTRA tienda sin arriesgarse a encadenar herencias."""
     sus = _get_suscripcion(tienda)
     legacy = _es_legacy(sus)
     forzar_eleccion = legacy and tienda.requiere_eleccion_plan
