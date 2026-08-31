@@ -409,7 +409,7 @@ class ArancelMercadoLibreCreateSerializer(serializers.ModelSerializer):
         return data
 # ------------------------------------------------
 
-# SERIALIZER: Arancel Mercado Libre por Producto (4 costos fijos opcionales)
+# SERIALIZER: Arancel Mercado Libre por Producto (costo de envío fijo + impuestos %)
 class ArancelMercadoLibreProductoSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
@@ -418,7 +418,7 @@ class ArancelMercadoLibreProductoSerializer(serializers.ModelSerializer):
         model = ArancelMercadoLibreProducto
         fields = [
             'id', 'tienda', 'tienda_nombre', 'producto', 'producto_nombre',
-            'cargo_por_vender', 'costo_por_unidad_vendida', 'costo_envio', 'impuestos_estimados',
+            'costo_envio', 'impuestos_porcentaje',
             'fecha_creacion', 'fecha_actualizacion',
         ]
         read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
@@ -429,24 +429,17 @@ class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ArancelMercadoLibreProducto
-        fields = ['id', 'tienda', 'producto', 'cargo_por_vender', 'costo_por_unidad_vendida', 'costo_envio', 'impuestos_estimados']
-
-    def _no_negativo(self, value, etiqueta):
-        if value is not None and value < 0:
-            raise serializers.ValidationError(f"{etiqueta} no puede ser negativo")
-        return value
-
-    def validate_cargo_por_vender(self, value):
-        return self._no_negativo(value, "El cargo por vender")
-
-    def validate_costo_por_unidad_vendida(self, value):
-        return self._no_negativo(value, "El costo por unidad vendida")
+        fields = ['id', 'tienda', 'producto', 'costo_envio', 'impuestos_porcentaje']
 
     def validate_costo_envio(self, value):
-        return self._no_negativo(value, "El costo de envío")
+        if value is not None and value < 0:
+            raise serializers.ValidationError("El costo de envío no puede ser negativo")
+        return value
 
-    def validate_impuestos_estimados(self, value):
-        return self._no_negativo(value, "Los impuestos estimados")
+    def validate_impuestos_porcentaje(self, value):
+        if value is not None and (value < 0 or value > 100):
+            raise serializers.ValidationError("Los impuestos deben estar entre 0 y 100%")
+        return value
 # ------------------------------------------------
 
 class DetalleVentaSerializer(serializers.ModelSerializer):

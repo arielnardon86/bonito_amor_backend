@@ -279,7 +279,7 @@ except ImportError:
     ArancelMercadoLibreSerializer = None
     ArancelMercadoLibreCreateSerializer = None
     logger.warning("⚠️ Serializers de ArancelMercadoLibre no están disponibles. Aplica la migración 0019_arancel_mercado_libre.")
-# Importación ArancelMercadoLibreProducto (por producto: 4 costos fijos opcionales)
+# Importación ArancelMercadoLibreProducto (por producto: costo de envío fijo + impuestos %)
 try:
     from .models import ArancelMercadoLibreProducto
     from .serializers import ArancelMercadoLibreProductoSerializer, ArancelMercadoLibreProductoCreateSerializer
@@ -3376,8 +3376,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         subtotal_item = unit_price * quantity
                                         total_venta += subtotal_item
                                         
-                                        # Calcular arancel y costo envío según ArancelMercadoLibreProducto
-                                        # (4 costos fijos opcionales por unidad, ninguno porcentual)
+                                        # Calcular envío e impuestos según ArancelMercadoLibreProducto
+                                        # (costo de envío fijo por unidad + impuestos % sobre el subtotal;
+                                        # el cargo por vender NO sale de acá -- ver ml_sale_fee más abajo,
+                                        # que llega directo del webhook real de ML)
                                         arancel_item = Decimal('0.00')
                                         costo_envio_item = Decimal('0.00')
                                         if ArancelMercadoLibreProducto is not None:
@@ -3387,16 +3389,12 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                                     producto=producto
                                                 ).first()
                                                 if arancel_ml:
-                                                    costo_fijo_unidad = (
-                                                        (arancel_ml.cargo_por_vender or Decimal('0'))
-                                                        + (arancel_ml.costo_por_unidad_vendida or Decimal('0'))
-                                                        + (arancel_ml.impuestos_estimados or Decimal('0'))
-                                                    )
-                                                    arancel_item = costo_fijo_unidad * quantity
+                                                    impuestos_pct = arancel_ml.impuestos_porcentaje or Decimal('0')
+                                                    arancel_item = subtotal_item * (impuestos_pct / Decimal('100'))
                                                     total_arancel += arancel_item
                                                     costo_envio_item = (arancel_ml.costo_envio or Decimal('0')) * quantity
                                                     total_costo_envio += costo_envio_item
-                                                    logger.info(f"Cargo/costo/impuestos ${costo_fijo_unidad}/u + envío ${costo_envio_item} para {producto.nombre}")
+                                                    logger.info(f"Impuestos {impuestos_pct}% (${arancel_item}) + envío ${costo_envio_item} para {producto.nombre}")
                                             except Exception as e:
                                                 logger.error(f"Error al calcular arancel/envío para producto {producto.nombre}: {e}")
                                         
