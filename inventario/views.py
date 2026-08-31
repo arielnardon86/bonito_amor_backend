@@ -6082,8 +6082,16 @@ class MetricasAPIView(APIView):
         # impuesto % manual de ArancelMercadoLibreProducto; para el resto, el arancel del
         # medio de pago (ArancelMetodoTienda). Se separan en dos totales para que la card
         # "Aranceles" solo refleje medios de pago, y lo de ML se sume a "Cargos ML".
+        #
+        # Para envío e impuestos de ML, se prioriza el dato REAL del webhook
+        # (ml_shipping_cost / ml_tax_fee) sobre el estimado manual configurado por
+        # producto: si ML ya informó el monto real de esa venta puntual, usar ese;
+        # si todavía no llegó (queda en $0 -- ver investigación del 2026-08-31, ML
+        # a veces no llega a calcularlo), usar el estimado manual como respaldo.
         total_arancel_ventas = Decimal('0.00')
         total_arancel_ml_manual = Decimal('0.00')
+        total_ml_envio_efectivo = Decimal('0.00')
+        total_ml_impuestos_efectivo = Decimal('0.00')
         for venta in ventas_list:
             # Excluir notas de crédito
             if venta.id in nota_credito_map:
@@ -6106,10 +6114,14 @@ class MetricasAPIView(APIView):
 
             if venta.origen_mercadolibre:
                 total_arancel_ml_manual += monto_arancel
+                envio_real = venta.ml_shipping_cost or Decimal('0.00')
+                total_ml_envio_efectivo += envio_real if envio_real > 0 else (venta.costo_envio_ml or Decimal('0.00'))
+                tax_real = venta.ml_tax_fee or Decimal('0.00')
+                total_ml_impuestos_efectivo += tax_real if tax_real > 0 else monto_arancel
             else:
                 total_arancel_ventas += monto_arancel
 
-        # Costo de envío ML: siempre de origen ML, se suma a "Cargos ML" (no a "Aranceles")
+        # Costo de envío ML manual: siempre de origen ML, se suma a "Cargos ML" (no a "Aranceles")
         total_costo_envio_ml = sum(
             (v.costo_envio_ml or Decimal('0.00'))
             for v in ventas_list
@@ -6125,8 +6137,8 @@ class MetricasAPIView(APIView):
         total_ml_descuentos = total_ml_sale_fee + total_ml_fixed_fee + total_ml_financing_fee + total_ml_shipping_cost
 
         # Cargos totales de Mercado Libre para la card "Cargos por ventas Mercado Libre":
-        # comisión real (siempre disponible) + envío e impuestos manuales configurados por producto.
-        total_ml_cargos = total_ml_sale_fee + total_costo_envio_ml + total_arancel_ml_manual
+        # comisión real (siempre disponible) + envío/impuestos efectivos (real si llegó, manual si no).
+        total_ml_cargos = total_ml_sale_fee + total_ml_envio_efectivo + total_ml_impuestos_efectivo
 
         # Impuestos ML reales (de fee_details del webhook)
         total_ml_impuestos = sum(
@@ -6152,9 +6164,12 @@ class MetricasAPIView(APIView):
             )
             ml_pct_cobradas = round((ml_cobradas / total_ml * 100), 1) if total_ml > 0 else 0
 
-        # La rentabilidad resta costo productos, egresos, aranceles (medios de pago + ML manual),
-        # costo envío ML, descuentos ML e impuestos ML
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_arancel_ml_manual - total_costo_envio_ml - total_ml_descuentos - total_ml_impuestos
+        # La rentabilidad resta costo productos, egresos, arancel de medios de pago,
+        # comisión/financiación ML (real) y envío/impuestos ML "efectivos" (real si
+        # llegó, manual si no) -- sin sumar el manual y el real de una misma venta dos
+        # veces, a diferencia de las cards que los desglosan por separado para mostrar.
+        total_ml_descuentos_sin_envio = total_ml_sale_fee + total_ml_fixed_fee + total_ml_financing_fee
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_ml_descuentos_sin_envio - total_ml_envio_efectivo - total_ml_impuestos_efectivo
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         # Filtrar detalles que tienen producto (excluir notas de crédito y detalles sin producto)
@@ -6233,6 +6248,8 @@ class MetricasAPIView(APIView):
             'total_arancel_ventas': total_arancel_ventas,
             'total_arancel_ml_manual': total_arancel_ml_manual,
             'total_costo_envio_ml': total_costo_envio_ml,
+            'total_ml_envio_efectivo': total_ml_envio_efectivo,
+            'total_ml_impuestos_efectivo': total_ml_impuestos_efectivo,
             'total_ml_cargos': total_ml_cargos,
             'total_ml_descuentos': total_ml_descuentos,
             'total_ml_sale_fee': total_ml_sale_fee,
