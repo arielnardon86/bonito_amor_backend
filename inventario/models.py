@@ -525,21 +525,31 @@ class ArancelMercadoLibre(models.Model):
         return f"{self.tienda.nombre} - {self.categoria_ml.nombre} ({self.categoria_ml.id}) - {self.arancel_porcentaje}%"
 # ------------------------------------------------
 
-# --- ARANCEL MERCADO LIBRE POR PRODUCTO (arancel % + costo envío por producto) ---
+# --- ARANCEL MERCADO LIBRE POR PRODUCTO (costos fijos configurables por producto) ---
 class ArancelMercadoLibreProducto(models.Model):
     """
-    Aranceles y costo de envío configurables por PRODUCTO para ventas de Mercado Libre.
+    Costos fijos (no porcentuales) configurables por PRODUCTO para estimar los
+    descuentos de Mercado Libre en modo manual. Los 4 campos son opcionales:
+    el que se deja en 0 simplemente no descuenta nada por ese concepto.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles_ml_producto')
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='aranceles_ml')
-    arancel_porcentaje = models.DecimalField(
-        max_digits=5, decimal_places=2, default=Decimal('0.00'),
-        help_text="Arancel en % que ML cobra por ventas de este producto"
+    cargo_por_vender = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00'), blank=True,
+        help_text="Cargo fijo por vender este producto (por unidad)"
+    )
+    costo_por_unidad_vendida = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00'), blank=True,
+        help_text="Costo fijo por unidad vendida"
     )
     costo_envio = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal('0.00'),
+        max_digits=10, decimal_places=2, default=Decimal('0.00'), blank=True,
         help_text="Costo de envío estimado por unidad de este producto"
+    )
+    impuestos_estimados = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00'), blank=True,
+        help_text="Impuestos estimados por unidad vendida"
     )
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
@@ -552,7 +562,11 @@ class ArancelMercadoLibreProducto(models.Model):
         indexes = [models.Index(fields=['tienda', 'producto'])]
 
     def __str__(self):
-        return f"{self.tienda.nombre} - {self.producto.nombre} - Arancel {self.arancel_porcentaje}% + Envío ${self.costo_envio}"
+        return (
+            f"{self.tienda.nombre} - {self.producto.nombre} - "
+            f"Cargo ${self.cargo_por_vender} + Costo/u ${self.costo_por_unidad_vendida} "
+            f"+ Envío ${self.costo_envio} + Impuestos ${self.impuestos_estimados}"
+        )
 # ------------------------------------------------
 
 # ── Clientes y Cuenta Corriente ────────────────────────────────────────────────
