@@ -6077,12 +6077,18 @@ class MetricasAPIView(APIView):
         # CAMBIO 10: NUEVO CÁLCULO: Arancel Total de Ventas con Comisión
         # Calcular arancel considerando solo la diferencia para ventas de cambio/devolución
         # Optimización: usar el mapa ya creado en lugar de hacer .first() en cada iteración
+        # NOTA: Venta.arancel_total tiene dos orígenes posibles según el método de pago
+        # (ver ArancelCreateSerializer.validate): para ventas de Mercado Libre es el
+        # impuesto % manual de ArancelMercadoLibreProducto; para el resto, el arancel del
+        # medio de pago (ArancelMetodoTienda). Se separan en dos totales para que la card
+        # "Aranceles" solo refleje medios de pago, y lo de ML se sume a "Cargos ML".
         total_arancel_ventas = Decimal('0.00')
+        total_arancel_ml_manual = Decimal('0.00')
         for venta in ventas_list:
             # Excluir notas de crédito
             if venta.id in nota_credito_map:
                 continue
-                
+
             if venta.id in cambio_diferencia_map:
                 cambio_diferencia = cambio_diferencia_map[venta.id]
                 if cambio_diferencia.monto_diferencia > 0:
@@ -6090,15 +6096,20 @@ class MetricasAPIView(APIView):
                     # (el arancel ya debería estar calculado sobre el total de la venta, pero lo ajustamos proporcionalmente)
                     if venta.arancel_total and venta.total > 0:
                         factor_proporcion = cambio_diferencia.monto_diferencia / venta.total
-                        total_arancel_ventas += venta.arancel_total * factor_proporcion
+                        monto_arancel = venta.arancel_total * factor_proporcion
                     else:
-                        total_arancel_ventas += venta.arancel_total or Decimal('0.00')
+                        monto_arancel = venta.arancel_total or Decimal('0.00')
                 else:
-                    total_arancel_ventas += venta.arancel_total or Decimal('0.00')
+                    monto_arancel = venta.arancel_total or Decimal('0.00')
             else:
-                total_arancel_ventas += venta.arancel_total or Decimal('0.00')
+                monto_arancel = venta.arancel_total or Decimal('0.00')
 
-        # Costo de envío ML: descontar de métricas (webhook + ventas manuales con pago ML)
+            if venta.origen_mercadolibre:
+                total_arancel_ml_manual += monto_arancel
+            else:
+                total_arancel_ventas += monto_arancel
+
+        # Costo de envío ML: siempre de origen ML, se suma a "Cargos ML" (no a "Aranceles")
         total_costo_envio_ml = sum(
             (v.costo_envio_ml or Decimal('0.00'))
             for v in ventas_list
@@ -6112,6 +6123,10 @@ class MetricasAPIView(APIView):
         total_ml_financing_fee = sum(v.ml_financing_fee or Decimal('0.00') for v in _ml_ventas)
         total_ml_shipping_cost = sum(v.ml_shipping_cost or Decimal('0.00') for v in _ml_ventas)
         total_ml_descuentos = total_ml_sale_fee + total_ml_fixed_fee + total_ml_financing_fee + total_ml_shipping_cost
+
+        # Cargos totales de Mercado Libre para la card "Cargos por ventas Mercado Libre":
+        # comisión real (siempre disponible) + envío e impuestos manuales configurados por producto.
+        total_ml_cargos = total_ml_sale_fee + total_costo_envio_ml + total_arancel_ml_manual
 
         # Impuestos ML reales (de fee_details del webhook)
         total_ml_impuestos = sum(
@@ -6137,8 +6152,9 @@ class MetricasAPIView(APIView):
             )
             ml_pct_cobradas = round((ml_cobradas / total_ml * 100), 1) if total_ml > 0 else 0
 
-        # La rentabilidad resta costo productos, egresos, aranceles, costo envío ML, descuentos ML e impuestos ML
-        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_costo_envio_ml - total_ml_descuentos - total_ml_impuestos
+        # La rentabilidad resta costo productos, egresos, aranceles (medios de pago + ML manual),
+        # costo envío ML, descuentos ML e impuestos ML
+        rentabilidad_bruta = total_ventas_periodo - total_costo_vendido - total_compras_periodo - total_arancel_ventas - total_arancel_ml_manual - total_costo_envio_ml - total_ml_descuentos - total_ml_impuestos
         margen_rentabilidad = (rentabilidad_bruta / total_ventas_periodo * 100) if total_ventas_periodo > 0 else 0
 
         # Filtrar detalles que tienen producto (excluir notas de crédito y detalles sin producto)
@@ -6215,7 +6231,9 @@ class MetricasAPIView(APIView):
             'total_costo_vendido_periodo': total_costo_vendido,
             'total_compras_periodo': total_compras_periodo,
             'total_arancel_ventas': total_arancel_ventas,
+            'total_arancel_ml_manual': total_arancel_ml_manual,
             'total_costo_envio_ml': total_costo_envio_ml,
+            'total_ml_cargos': total_ml_cargos,
             'total_ml_descuentos': total_ml_descuentos,
             'total_ml_sale_fee': total_ml_sale_fee,
             'total_ml_fixed_fee': total_ml_fixed_fee,
