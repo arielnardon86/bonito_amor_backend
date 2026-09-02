@@ -4348,8 +4348,17 @@ def _cliente_data_desde_orden_tn(order, venta):
     Sin CUIT informado por TN, se factura como Consumidor Final (comportamiento
     seguro por defecto, igual que en el resto de la app).
     """
-    customer = order.get('customer') or {}
-    billing_address = order.get('billing_address') or order.get('customer', {}).get('default_address') or {}
+    # TN no siempre manda 'customer'/'billing_address' como objeto -- en algunas
+    # órdenes (ej. compra sin cuenta) llegó como string y rompía con
+    # "'str' object has no attribute 'get'". Si no es un dict, se trata como vacío
+    # (mismo comportamiento seguro que ya tenía el resto de la función: sin datos
+    # de facturación de TN, se factura como Consumidor Final).
+    customer = order.get('customer')
+    if not isinstance(customer, dict):
+        customer = {}
+    billing_address = order.get('billing_address') or customer.get('default_address') or {}
+    if not isinstance(billing_address, dict):
+        billing_address = {}
     cuit = (
         order.get('billing_document') or
         customer.get('identification') or
