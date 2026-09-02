@@ -4381,56 +4381,62 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
 
     total = Decimal(str(order.get('total', '0'))).quantize(Decimal('0.01'))
 
-    venta = Venta.objects.create(
-        tienda=tienda,
-        usuario=user_tn,
-        total=total,
-        metodo_pago=gateway_name,
-        origen_tiendanube=True,
-        tn_order_id=order_id,
-        cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
-    )
+    # Atómico: si algo falla armando los detalles (ver bug de 'codigo_barras' que
+    # ya rompió una orden real -- la Venta quedaba creada y comprometida en la DB
+    # pero sin ningún DetalleVenta, y como tn_order_id ya existía, la orden nunca
+    # se podía reprocesar), que no quede ninguna Venta a medio crear: o se guarda
+    # completa, o no se guarda nada y la próxima notificación la vuelve a intentar.
+    with transaction.atomic():
+        venta = Venta.objects.create(
+            tienda=tienda,
+            usuario=user_tn,
+            total=total,
+            metodo_pago=gateway_name,
+            origen_tiendanube=True,
+            tn_order_id=order_id,
+            cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
+        )
 
-    productos_orden = order.get('products', [])
-    for item in productos_orden:
-        sku      = item.get('sku') or ''
-        nombre   = item.get('name') or 'Producto'
-        cantidad = int(item.get('quantity', 1))
-        precio   = Decimal(str(item.get('price', '0'))).quantize(Decimal('0.01'))
+        productos_orden = order.get('products', [])
+        for item in productos_orden:
+            sku      = item.get('sku') or ''
+            nombre   = item.get('name') or 'Producto'
+            cantidad = int(item.get('quantity', 1))
+            precio   = Decimal(str(item.get('price', '0'))).quantize(Decimal('0.01'))
 
-        tn_variant_id = str(item.get('variant_id', '') or '')
-        producto = None
-        if tn_variant_id:
-            producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
-        if not producto and sku:
-            producto = Producto.objects.filter(tienda=tienda, codigo=sku).first()
-        if not producto:
-            producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre).first()
+            tn_variant_id = str(item.get('variant_id', '') or '')
+            producto = None
+            if tn_variant_id:
+                producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
+            if not producto and sku:
+                producto = Producto.objects.filter(tienda=tienda, codigo_barras=sku).first()
+            if not producto:
+                producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre).first()
 
-        if producto:
-            DetalleVenta.objects.create(
-                venta=venta,
-                producto=producto,
-                cantidad=cantidad,
-                precio_unitario=precio,
-                subtotal=precio * cantidad,
-            )
-            # Descontar stock
-            if producto.stock >= cantidad:
-                producto.stock -= cantidad
-                producto.save(update_fields=['stock'])
+            if producto:
+                DetalleVenta.objects.create(
+                    venta=venta,
+                    producto=producto,
+                    cantidad=cantidad,
+                    precio_unitario=precio,
+                    subtotal=precio * cantidad,
+                )
+                # Descontar stock
+                if producto.stock >= cantidad:
+                    producto.stock -= cantidad
+                    producto.save(update_fields=['stock'])
+                else:
+                    logger.warning("Stock insuficiente para %s (pedido: %s, disponible: %s)",
+                                   producto.nombre, cantidad, producto.stock)
             else:
-                logger.warning("Stock insuficiente para %s (pedido: %s, disponible: %s)",
-                               producto.nombre, cantidad, producto.stock)
-        else:
-            logger.warning("Producto no encontrado para orden TN: sku=%s nombre=%s", sku, nombre)
-            DetalleVenta.objects.create(
-                venta=venta,
-                producto=None,
-                cantidad=cantidad,
-                precio_unitario=precio,
-                subtotal=precio * cantidad,
-            )
+                logger.warning("Producto no encontrado para orden TN: sku=%s nombre=%s", sku, nombre)
+                DetalleVenta.objects.create(
+                    venta=venta,
+                    producto=None,
+                    cantidad=cantidad,
+                    precio_unitario=precio,
+                    subtotal=precio * cantidad,
+                )
 
     logger.info("Venta TN creada — id=%s total=%s tienda=%s", venta.id, total, tienda.nombre)
     return venta
