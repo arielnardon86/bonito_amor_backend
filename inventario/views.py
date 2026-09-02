@@ -3963,6 +3963,17 @@ class TiendaViewSet(viewsets.ModelViewSet):
             logger.error("Error obteniendo orden TN %s: %s", order_id, e)
             return Response({'status': 'error', 'detail': str(e)}, status=200)
 
+        # Temporal: para diseñar "Aranceles Tienda Nube" necesitamos ver qué manda
+        # TN sobre el método de pago real usado -- gateway/gateway_name son los
+        # únicos campos que el código lee hoy, pero la API de TN documenta también
+        # payment_details (método + cuotas) que nunca se inspeccionó. Sacar este log
+        # una vez confirmada la estructura real (no dejarlo para siempre).
+        logger.info(
+            "TN orden %s — gateway=%s gateway_name=%s payment_details=%s status=%s payment_status=%s",
+            order_id, order.get('gateway'), order.get('gateway_name'),
+            order.get('payment_details'), order.get('status'), order.get('payment_status'),
+        )
+
         try:
             venta = _procesar_orden_tiendanube(tienda, order, order_id)
         except Exception as e:
