@@ -129,6 +129,10 @@ class ProductoSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'talle': 'Las variantes deben tener un valor de talle/color/variante.'}
             )
+        if attrs.get('se_vende_por_peso') and attrs.get('producto_padre'):
+            raise serializers.ValidationError(
+                {'se_vende_por_peso': 'Un producto por peso no puede ser variante de otro producto.'}
+            )
         imagen = attrs.get('imagen')
         if imagen and len(imagen) > 700_000:  # ~500KB decodificado, de sobra para una foto ya redimensionada chica
             raise serializers.ValidationError(
@@ -705,19 +709,31 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 producto_obj = Producto.objects.get(id=producto_id, tienda=tienda_obj)
             except Producto.DoesNotExist:
                 raise serializers.ValidationError({"detalles": f"Producto con ID {producto_id} no encontrado en la tienda {tienda_slug}."})
-            
-            # Si la venta viene de un cambio/devolución, el stock ya se validó y restó,
-            # así que no validamos stock aquí para evitar errores
-            cambio_devolucion_id = data.get('cambio_devolucion_id')
-            if not cambio_devolucion_id and producto_obj.stock < cantidad:
-                raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_obj.nombre}. Stock disponible: {producto_obj.stock}, solicitado: {cantidad}."})
-            
+
+            # Cobro por peso: no se lleva stock (se pesa lo que haya físicamente), y
+            # 'precio'/'costo' del producto son por KILOGRAMO -- acá 'cantidad' son
+            # los gramos cargados en el POS. Se recalcula precio_unitario/costo_unitario
+            # como precio/costo por GRAMO server-side (nunca se confía en lo que mande
+            # el frontend para esto, igual que ya pasaba con costo_unitario) para que
+            # subtotal = precio_unitario * cantidad seguido siendo válido en el resto
+            # del sistema (métricas, tickets, etc.) sin tener que tocar esas cuentas.
+            if producto_obj.se_vende_por_peso:
+                precio_unitario = (producto_obj.precio / Decimal('1000')).quantize(Decimal('0.01'))
+                detalle_data['precio_unitario'] = precio_unitario
+                costo_unitario = (producto_obj.costo / Decimal('1000')).quantize(Decimal('0.01')) if producto_obj.costo else None
+            else:
+                # Si la venta viene de un cambio/devolución, el stock ya se validó y restó,
+                # así que no validamos stock aquí para evitar errores
+                cambio_devolucion_id = data.get('cambio_devolucion_id')
+                if not cambio_devolucion_id and producto_obj.stock < cantidad:
+                    raise serializers.ValidationError({"detalles": f"Stock insuficiente para el producto {producto_obj.nombre}. Stock disponible: {producto_obj.stock}, solicitado: {cantidad}."})
+                costo_unitario = producto_obj.costo
+
             if precio_unitario < 0:
                 raise serializers.ValidationError({"detalles": "El precio unitario no puede ser negativo."})
 
             calculated_subtotal += precio_unitario * cantidad
-            # Agrega el costo al detalle de datos si existe
-            detalle_data['costo_unitario'] = producto_obj.costo
+            detalle_data['costo_unitario'] = costo_unitario
 
         descuento_porcentaje = data.get('descuento_porcentaje', Decimal('0.00'))
         descuento_monto = data.get('descuento_monto', Decimal('0.00'))
@@ -966,8 +982,9 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             )
 
             # NO restar stock si la venta viene de un cambio/devolución
-            # porque el stock ya se restó cuando se procesó el cambio/devolución
-            if not cambio_devolucion_id:
+            # porque el stock ya se restó cuando se procesó el cambio/devolución.
+            # Tampoco si el producto se vende por peso: no lleva stock.
+            if not cambio_devolucion_id and not producto_obj.se_vende_por_peso:
                 producto_obj.stock -= cantidad
                 producto_obj.save()
                 from .services.tiendanube_service import sincronizar_stock_producto

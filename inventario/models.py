@@ -315,6 +315,11 @@ class Producto(models.Model):
     precio = models.DecimalField(max_digits=10, decimal_places=2) # Precio de venta
     costo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True) # NUEVO CAMPO
     stock = models.IntegerField(default=0)
+    # Cobro por peso: si está activo, 'precio'/'costo' son por KILOGRAMO en vez de
+    # por unidad, no se lleva stock (no aplica: se pesa lo que haya físicamente) y
+    # en el Punto de Venta se carga el peso en gramos en vez de una cantidad de
+    # unidades. Ver VentaCreateSerializer para el cálculo de precio/costo por gramo.
+    se_vende_por_peso = models.BooleanField(default=False)
     talle = models.CharField(max_length=50, blank=True, null=True)
     # Segundo eje de variante, opcional (ej. color, material) — talle es el
     # primer eje genérico, este es un segundo eje igual de genérico para
