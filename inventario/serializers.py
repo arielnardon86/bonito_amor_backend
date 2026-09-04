@@ -472,13 +472,18 @@ class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True, allow_null=True)
+    # Talle/variante2 del producto vendido -- para mostrar la variante exacta (ej. "M",
+    # "Azul") en recibo, factura y detalle de venta, ya que el nombre del producto es
+    # el mismo para todas sus variantes (unique_together incluye talle/variante2).
+    producto_talle = serializers.CharField(source='producto.talle', read_only=True, allow_null=True)
+    producto_variante2 = serializers.CharField(source='producto.variante2', read_only=True, allow_null=True)
     # Precio de catálogo ACTUAL del producto (distinto de precio_unitario, que es el
     # precio al momento de esta venta) -- lo usa Cambio/Devolución para detectar
     # canjes de variante al mismo precio de catálogo.
     producto_precio_actual = serializers.DecimalField(source='producto.precio', max_digits=10, decimal_places=2, read_only=True, allow_null=True)
 
     class Meta:
-        fields = ['id', 'venta', 'producto', 'producto_nombre', 'producto_precio_actual', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
+        fields = ['id', 'venta', 'producto', 'producto_nombre', 'producto_talle', 'producto_variante2', 'producto_precio_actual', 'cantidad', 'precio_unitario', 'costo_unitario', 'subtotal', 'anulado_individualmente', 'fecha_creacion', 'fecha_actualizacion']
         model = DetalleVenta
         read_only_fields = ['subtotal']
 
@@ -1019,6 +1024,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
     cliente_nombre = serializers.CharField(source='cliente.nombre_razon_social', read_only=True)
     cliente_cuit = serializers.CharField(source='cliente.cuit_cuil', read_only=True)
     cliente_email = serializers.CharField(source='cliente.email', read_only=True)
+    cliente_telefono = serializers.CharField(source='cliente.telefono', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
     usuario_nombre = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
@@ -1027,6 +1033,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
         model = Presupuesto
         fields = [
             'id', 'tienda', 'tienda_nombre', 'cliente', 'cliente_nombre', 'cliente_cuit', 'cliente_email',
+            'cliente_telefono',
             'usuario', 'usuario_nombre', 'estado', 'estado_display', 'metodo_pago_sugerido',
             'descuento_porcentaje', 'descuento_monto', 'recargo_porcentaje', 'recargo_monto', 'total',
             'venta_generada', 'notas', 'fecha_vigencia', 'fecha_creacion', 'fecha_actualizacion', 'detalles',

@@ -5406,6 +5406,8 @@ class VentaViewSet(viewsets.ModelViewSet):
             producto_nombre = detalle.producto.nombre if detalle.producto else (
                 'Nota de Crédito' if es_nota_credito else 'Producto eliminado'
             )
+            if detalle.producto:
+                producto_nombre += _detalle_variante(detalle.producto)
             precio_unitario = Decimal(str(detalle.precio_unitario))
             subtotal_bruto += precio_unitario * Decimal(str(detalle.cantidad))
             data.append([
@@ -6771,6 +6773,8 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         for detalle in detalles:
             if not detalle.anulado_individualmente:
                 producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
+                if detalle.producto:
+                    producto_nombre += _detalle_variante(detalle.producto)
                 # El precio_unitario ya tiene IVA incluido
                 precio_con_iva = Decimal(str(detalle.precio_unitario))
                 # Calcular precio sin IVA: precio_con_iva / 1.21
