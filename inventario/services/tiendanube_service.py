@@ -107,7 +107,11 @@ class TiendaNubeService:
         """Itera todas las páginas y devuelve la lista completa de productos."""
         all_products = []
         page = 1
-        per_page = 25
+        # 200 es el máximo de per_page que admite la API de Tienda Nube -- con
+        # catálogos grandes (~400 productos) usar el default de 25 significaba ~16
+        # llamadas de red solo para traer el catálogo, antes de siquiera empezar a
+        # procesar variantes.
+        per_page = 200
         while True:
             try:
                 batch = self.get_products(page=page, per_page=per_page)

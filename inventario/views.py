@@ -5,6 +5,7 @@ import logging
 import secrets
 import re
 import threading
+from collections import defaultdict
 from django.conf import settings
 from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status, pagination as rest_framework_pagination
@@ -4166,6 +4167,50 @@ class TiendaViewSet(viewsets.ModelViewSet):
         vinculados = 0
         errores = []
 
+        # Con catálogos grandes (~400 productos, varios cientos de variantes), buscar
+        # cada variante contra la base por separado (varios SELECT por variante) llegó a
+        # tardar más de los 120s de timeout de gunicorn y tiró un WORKER TIMEOUT en
+        # producción sin terminar el import. Se precarga UNA sola vez todo el catálogo
+        # local de la tienda a memoria y se matchea ahí -- se actualiza en el momento
+        # (mismos objetos, mutados in-place) a medida que se van "reclamando" productos
+        # en esta misma corrida, para no perder la exclusión de productos ya vinculados
+        # a otra variante que ya resolvía el fallback por nombre.
+        productos_locales = list(Producto.objects.filter(tienda=tienda))
+        por_tn_variant_id = {p.tn_variant_id: p for p in productos_locales if p.tn_variant_id}
+        por_codigo_barras = {p.codigo_barras: p for p in productos_locales if p.codigo_barras}
+        por_nombre = defaultdict(list)
+        for p in productos_locales:
+            por_nombre[p.nombre.lower()].append(p)
+        # Igual que antes: NULL no colisiona consigo mismo en la constraint única, así
+        # que un talle sin asignar (None) nunca puede generar un conflicto real.
+        claves_variante_en_uso = {
+            (p.nombre.lower(), p.talle, p.variante2) for p in productos_locales if p.talle is not None
+        }
+        padres_por_tn_product_id = {
+            p.tn_product_id: p for p in productos_locales
+            if p.tn_product_id and p.producto_padre_id is None and not p.tn_variant_id
+        }
+
+        def _primero_disponible(candidatos, tn_variant_id_actual, talle_val=None, variante2_val=''):
+            for c in candidatos:
+                if c.tn_variant_id and c.tn_variant_id != tn_variant_id_actual:
+                    continue
+                # Si el candidato ya tiene su propio talle/variante2 y NO coincide con el
+                # de esta variante, no es el mismo producto -- es un hermano de otra talla
+                # dentro de la misma familia que casualmente comparte el nombre base.
+                if talle_val and c.talle and c.talle != talle_val:
+                    continue
+                if variante2_val and c.variante2 and c.variante2 != variante2_val:
+                    continue
+                return c
+            return None
+
+        def _primer_padre_por_nombre(nombre):
+            for c in por_nombre.get(nombre.lower(), []):
+                if c.producto_padre_id is None and not c.tn_variant_id:
+                    return c
+            return None
+
         for prod_tn in productos_tn:
             tn_product_id = str(prod_tn.get('id', ''))
             nombre_tn     = (prod_tn.get('name') or {}).get('es') or str(prod_tn.get('name', ''))
@@ -4175,9 +4220,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
             # Para productos multi-variante, resolver/crear el producto padre
             padre = None
             if es_multivar:
-                padre = Producto.objects.filter(tienda=tienda, tn_product_id=tn_product_id, producto_padre__isnull=True, tn_variant_id__isnull=True).first()
+                padre = padres_por_tn_product_id.get(tn_product_id)
                 if not padre:
-                    padre = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_tn, producto_padre__isnull=True, tn_variant_id__isnull=True).first()
+                    padre = _primer_padre_por_nombre(nombre_tn)
                 if not padre:
                     precio_ref = Decimal(str(variantes_tn[0].get('price') or '0')).quantize(Decimal('0.01'))
                     padre = Producto.objects.create(
@@ -4189,10 +4234,13 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         tn_sincronizado = True,
                     )
                     creados += 1
+                    por_nombre[nombre_tn.lower()].append(padre)
+                    padres_por_tn_product_id[tn_product_id] = padre
                 elif not padre.tn_product_id:
                     padre.tn_product_id   = tn_product_id
                     padre.tn_sincronizado = True
                     padre.save(update_fields=['tn_product_id', 'tn_sincronizado'])
+                    padres_por_tn_product_id[tn_product_id] = padre
 
             for variant in variantes_tn:
                 tn_variant_id = str(variant.get('id', ''))
@@ -4223,7 +4271,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
                 try:
                     # 1) Buscar por tn_variant_id
-                    producto = Producto.objects.filter(tienda=tienda, tn_variant_id=tn_variant_id).first()
+                    producto = por_tn_variant_id.get(tn_variant_id)
 
                     if producto:
                         campos_actualizados = ['stock', 'tn_product_id', 'tn_sincronizado']
@@ -4249,24 +4297,25 @@ class TiendaViewSet(viewsets.ModelViewSet):
                     # producto que ya tenía este mismo tn_variant_id -- eso ya lo resuelve el
                     # paso 1 de arriba, así que acá nunca debería pasar, pero por las dudas no
                     # se excluye ese caso puntual.
-                    no_vinculado_a_otra_variante = Q(tn_variant_id__isnull=True) | Q(tn_variant_id='') | Q(tn_variant_id=tn_variant_id)
                     if sku:
-                        producto = Producto.objects.filter(tienda=tienda, codigo_barras=sku).first()
+                        producto = por_codigo_barras.get(sku)
                     if not producto:
-                        producto = Producto.objects.filter(no_vinculado_a_otra_variante, tienda=tienda, nombre__iexact=nombre_var).first()
+                        producto = _primero_disponible(por_nombre.get(nombre_var.lower(), []), tn_variant_id, talle_val, variante2_val)
                     if not producto and nombre_tn != nombre_var:
-                        producto = Producto.objects.filter(no_vinculado_a_otra_variante, tienda=tienda, nombre__iexact=nombre_tn).first()
+                        producto = _primero_disponible(por_nombre.get(nombre_tn.lower(), []), tn_variant_id, talle_val, variante2_val)
 
+                    # OJO: no tocar ningún campo de `producto` todavía -- es un objeto
+                    # cacheado en memoria (no una instancia recién leída de la base) que
+                    # sigue vivo en los índices de arriba para las próximas variantes. Si
+                    # se lo muta acá y después se descarta el match sin guardar, el objeto
+                    # queda con datos que nunca se persistieron (ej. tn_variant_id de ESTA
+                    # variante) pero que las próximas variantes verían como si ya estuviera
+                    # vinculado -- hay que decidir primero si el match es válido.
                     match_descartado = False
+                    asigna_talle = False
+                    asigna_variante2 = False
                     if producto:
-                        producto.tn_product_id   = tn_product_id
-                        producto.tn_variant_id   = tn_variant_id
-                        producto.tn_sincronizado = True
-                        if importar_precio:
-                            producto.precio = precio
-                        producto.stock           = stock_tn
                         if es_multivar and padre:
-                            producto.producto_padre = padre
                             asigna_talle = bool(talle_val) and not producto.talle
                             asigna_variante2 = bool(variante2_val) and not producto.variante2
                             if asigna_talle or asigna_variante2:
@@ -4279,10 +4328,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                 # de romper con un IntegrityError.
                                 talle_final = talle_val if asigna_talle else producto.talle
                                 variante2_final = variante2_val if asigna_variante2 else producto.variante2
-                                hay_conflicto = Producto.objects.filter(
-                                    tienda=tienda, nombre__iexact=producto.nombre,
-                                    talle=talle_final, variante2=variante2_final,
-                                ).exclude(pk=producto.pk).exists()
+                                hay_conflicto = talle_final is not None and (
+                                    (producto.nombre.lower(), talle_final, variante2_final) in claves_variante_en_uso
+                                )
                                 if hay_conflicto:
                                     logger.warning(
                                         "tn_import_products: variante TN %s matcheó producto local %s (%s) por nombre, "
@@ -4291,18 +4339,29 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         tn_variant_id, producto.id, producto.nombre, talle_final, variante2_final,
                                     )
                                     match_descartado = True
-                                else:
-                                    if asigna_talle:
-                                        producto.talle = talle_val
-                                    if asigna_variante2:
-                                        producto.variante2 = variante2_val
+
                         if not match_descartado:
+                            producto.tn_product_id   = tn_product_id
+                            producto.tn_variant_id   = tn_variant_id
+                            producto.tn_sincronizado = True
+                            if importar_precio:
+                                producto.precio = precio
+                            producto.stock = stock_tn
+                            if es_multivar and padre:
+                                producto.producto_padre = padre
+                                if asigna_talle:
+                                    producto.talle = talle_val
+                                if asigna_variante2:
+                                    producto.variante2 = variante2_val
                             producto.save()
                             vinculados += 1
+                            por_tn_variant_id[tn_variant_id] = producto
+                            if producto.talle is not None:
+                                claves_variante_en_uso.add((producto.nombre.lower(), producto.talle, producto.variante2))
 
                     if not producto or match_descartado:
                         # 3) Crear nuevo producto
-                        Producto.objects.create(
+                        nuevo = Producto.objects.create(
                             tienda          = tienda,
                             nombre          = nombre_var,
                             precio          = precio,
@@ -4315,6 +4374,10 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             producto_padre  = padre if es_multivar else None,
                         )
                         creados += 1
+                        por_tn_variant_id[tn_variant_id] = nuevo
+                        por_nombre[nombre_var.lower()].append(nuevo)
+                        if nuevo.talle is not None:
+                            claves_variante_en_uso.add((nuevo.nombre.lower(), nuevo.talle, nuevo.variante2))
 
                 except Exception as e:
                     logger.error("Error importando variante TN %s: %s", tn_variant_id, e, exc_info=True)
