@@ -5334,6 +5334,205 @@ class VentaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    def _construir_pdf_recibo(self, venta):
+        """
+        Genera el PDF del recibo (comprobante no fiscal) de una venta, en A4 --
+        pensado para adjuntar por mail, a diferencia del ticket de cambio (térmico
+        angosto) que ya existe más abajo. Devuelve un BytesIO listo para leer.
+        """
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'ReciboTitle', parent=styles['Heading1'], fontSize=16,
+            textColor=colors.HexColor('#000000'), spaceAfter=12, alignment=1
+        )
+        subtitle_style = ParagraphStyle(
+            'ReciboSubtitle', parent=styles['Heading2'], fontSize=14,
+            textColor=colors.HexColor('#000000'), spaceAfter=8, alignment=1
+        )
+        normal_style = styles['Normal']
+        normal_style.fontSize = 10
+        normal_style.textColor = colors.HexColor('#000000')
+
+        story = []
+        tienda = venta.tienda
+
+        tiene_logo = False
+        if tienda and tienda.logo:
+            try:
+                match_logo = re.match(r'^data:image/\w+;base64,(.+)$', tienda.logo)
+                logo_b64 = match_logo.group(1) if match_logo else tienda.logo
+                logo_image = Image(BytesIO(base64.b64decode(logo_b64)), width=30 * mm, height=20 * mm, kind='proportional')
+                logo_image.hAlign = 'CENTER'
+                story.append(logo_image)
+                story.append(Spacer(1, 8))
+                tiene_logo = True
+            except Exception:
+                pass
+
+        nombre_tienda = tienda.nombre if tienda else 'N/A'
+        if tiene_logo:
+            nombre_tienda_style = ParagraphStyle(
+                'ReciboNombreTiendaChico', parent=styles['Normal'], fontSize=10,
+                textColor=colors.HexColor('#555555'), spaceAfter=12, alignment=1
+            )
+            story.append(Paragraph(nombre_tienda, nombre_tienda_style))
+        else:
+            story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
+
+        es_nota_credito = venta.metodo_pago == 'Nota de Crédito'
+        story.append(Paragraph('NOTA DE CRÉDITO' if es_nota_credito else 'COMPROBANTE DE COMPRA', subtitle_style))
+        story.append(Paragraph("<i>Documento no válido como comprobante fiscal</i>", normal_style))
+        story.append(Spacer(1, 12))
+
+        if tienda and tienda.direccion:
+            story.append(Paragraph(f"<b>Domicilio:</b> {tienda.direccion}", normal_style))
+        story.append(Paragraph(f"<b>Fecha:</b> {venta.fecha_venta.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        story.append(Paragraph(f"<b>Nº de Venta:</b> {venta.id}", normal_style))
+        if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
+            story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
+        story.append(Spacer(1, 12))
+
+        if venta.cliente_id:
+            story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
+            story.append(Paragraph(f"<b>Nombre:</b> {venta.cliente.nombre_razon_social}", normal_style))
+            story.append(Spacer(1, 12))
+
+        detalles = venta.detalles.filter(anulado_individualmente=False)
+        data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
+        subtotal_bruto = Decimal('0.00')
+        for detalle in detalles:
+            producto_nombre = detalle.producto.nombre if detalle.producto else (
+                'Nota de Crédito' if es_nota_credito else 'Producto eliminado'
+            )
+            precio_unitario = Decimal(str(detalle.precio_unitario))
+            subtotal_bruto += precio_unitario * Decimal(str(detalle.cantidad))
+            data.append([
+                str(detalle.cantidad),
+                producto_nombre,
+                f"${precio_unitario:.2f}",
+                f"${detalle.subtotal:.2f}",
+            ])
+
+        cantidad_items = len(data) - 1
+
+        data.append(['', '', '', ''])
+        inicio_totales = len(data)
+        data.append(['', '', 'Subtotal:', f"${subtotal_bruto:.2f}"])
+
+        if venta.descuento_monto and venta.descuento_monto > 0:
+            label = 'Descuento'
+            if venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
+                label += f' ({venta.descuento_porcentaje}%)'
+            data.append(['', '', label + ':', f"-${venta.descuento_monto:.2f}"])
+        elif venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
+            monto = subtotal_bruto * (venta.descuento_porcentaje / Decimal('100'))
+            data.append(['', '', f'Descuento ({venta.descuento_porcentaje}%):', f"-${monto:.2f}"])
+
+        if venta.recargo_monto and venta.recargo_monto > 0:
+            label = 'Recargo'
+            if venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
+                label += f' ({venta.recargo_porcentaje}%)'
+            data.append(['', '', label + ':', f"+${venta.recargo_monto:.2f}"])
+        elif venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
+            monto = subtotal_bruto * (venta.recargo_porcentaje / Decimal('100'))
+            data.append(['', '', f'Recargo ({venta.recargo_porcentaje}%):', f"+${monto:.2f}"])
+
+        data.append(['', '', 'TOTAL:', f"${Decimal(str(venta.total)):.2f}"])
+
+        table = Table(data, colWidths=[20 * mm, 100 * mm, 30 * mm, 30 * mm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (2, inicio_totales), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (2, inicio_totales), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (2, inicio_totales), (-1, -1), 10),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 20))
+
+        story.append(Paragraph(f"<b>Método de pago:</b> {venta.metodo_pago or 'N/A'}", normal_style))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("<i>¡Gracias por su compra!</i>", normal_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+
+    @action(detail=True, methods=['post'], url_path='enviar-recibo-email', url_name='enviar-recibo-email')
+    def enviar_recibo_email(self, request, pk=None):
+        """Genera el PDF del recibo (no fiscal) y lo manda por mail (a la dirección
+        indicada, o al email del cliente registrado en la venta si no se manda ninguna)."""
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_501_NOT_IMPLEMENTED
+            )
+
+        venta = self.get_object()
+
+        user = request.user
+        if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
+            return Response(
+                {"error": "No tenés permiso para enviar el recibo de esta venta"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cliente_email = venta.cliente.email if venta.cliente_id else ''
+        email = (request.data.get('email') or cliente_email or '').strip()
+        if not email:
+            return Response(
+                {"error": "No hay un email de destino. Indicá uno o cargalo en la ficha del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        buffer = self._construir_pdf_recibo(venta)
+        filename = f"recibo_{venta.id}.pdf"
+
+        from django.core.mail import EmailMultiAlternatives
+        from django.conf import settings as dj_settings
+
+        nombre_tienda = venta.tienda.nombre if venta.tienda else 'la tienda'
+        nombre_cliente = venta.cliente.nombre_razon_social if venta.cliente_id else ''
+        saludo = f"Hola {nombre_cliente}," if nombre_cliente else "Hola,"
+
+        subject = f"[{nombre_tienda}] Comprobante de tu compra"
+        texto = (
+            f"{saludo}\n\n"
+            f"Te enviamos el comprobante de tu compra en {nombre_tienda}.\n"
+            f"Total: ${venta.total}\n\n"
+            "Adjuntamos el detalle en PDF."
+        )
+        html = f"""<!DOCTYPE html><html lang="es"><body>
+<p>{saludo}</p>
+<p>Te enviamos el comprobante de tu compra en <b>{nombre_tienda}</b>.</p>
+<p>Total: <b>${venta.total}</b></p>
+<p>Adjuntamos el detalle en PDF.</p>
+</body></html>"""
+
+        try:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=texto,
+                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+                to=[email],
+            )
+            msg.attach_alternative(html, 'text/html')
+            msg.attach(filename, buffer.getvalue(), 'application/pdf')
+            msg.send(fail_silently=False)
+        except Exception as e:
+            logger.error("Venta.enviar_recibo_email: error enviando a %s: %s", email, e)
+            return Response({"error": f"No se pudo enviar el email: {e}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'ok': True, 'mensaje': f'Recibo enviado a {email}.'})
+
     @action(detail=True, methods=['get'])
     def ticket_cambio(self, request, pk=None):
         """
@@ -6411,27 +6610,11 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
     
-    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
-    def generar_pdf(self, request, pk=None):
+    def _construir_pdf_factura(self, factura):
         """
-        Genera y retorna el PDF de la factura
+        Genera el PDF de una factura ya emitida. Devuelve un BytesIO listo para leer
+        (compartido entre la descarga directa y el envío por mail).
         """
-        if not REPORTLAB_AVAILABLE:
-            return Response(
-                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        factura = self.get_object()
-        
-        # Verificar permisos
-        user = request.user
-        if not user.is_superuser and user.tienda != factura.tienda:
-            return Response(
-                {"error": "No tienes permiso para ver esta factura"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
         # Asegurar que la relación tienda esté cargada correctamente
         # Recargar desde la base de datos si es necesario
         try:
@@ -6696,12 +6879,100 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # Construir PDF
         doc.build(story)
         buffer.seek(0)
-        
+        return buffer
+
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def generar_pdf(self, request, pk=None):
+        """
+        Genera y retorna el PDF de la factura
+        """
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        factura = self.get_object()
+
+        # Verificar permisos
+        user = request.user
+        if not user.is_superuser and user.tienda != factura.tienda:
+            return Response(
+                {"error": "No tienes permiso para ver esta factura"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        buffer = self._construir_pdf_factura(factura)
+
         # Crear respuesta HTTP con el PDF
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="factura_{factura.punto_venta:04d}-{factura.numero_comprobante:08d}.pdf"'
-        
+
         return response
+
+    @action(detail=True, methods=['post'], url_path='enviar-email', url_name='enviar-email')
+    def enviar_email(self, request, pk=None):
+        """Genera el PDF de la factura y lo manda por mail (a la dirección indicada,
+        o al email del cliente registrado en la venta si no se manda ninguna)."""
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_501_NOT_IMPLEMENTED
+            )
+
+        factura = self.get_object()
+
+        user = request.user
+        if not user.is_superuser and user.tienda != factura.tienda:
+            return Response(
+                {"error": "No tienes permiso para enviar esta factura"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cliente_email = factura.venta.cliente.email if factura.venta.cliente_id else ''
+        email = (request.data.get('email') or cliente_email or '').strip()
+        if not email:
+            return Response(
+                {"error": "No hay un email de destino. Indicá uno o cargalo en la ficha del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        buffer = self._construir_pdf_factura(factura)
+        numero_str = f"{factura.punto_venta:04d}-{factura.numero_comprobante:08d}"
+        filename = f"factura_{numero_str}.pdf"
+
+        from django.core.mail import EmailMultiAlternatives
+        from django.conf import settings as dj_settings
+
+        subject = f"[{factura.tienda.nombre}] Factura {factura.tipo_comprobante} {numero_str}"
+        texto = (
+            f"Hola {factura.cliente_nombre},\n\n"
+            f"Te enviamos la Factura {factura.tipo_comprobante} {numero_str} de {factura.tienda.nombre}.\n"
+            f"Total: ${factura.total}\n\n"
+            "Adjuntamos el comprobante en PDF."
+        )
+        html = f"""<!DOCTYPE html><html lang="es"><body>
+<p>Hola {factura.cliente_nombre},</p>
+<p>Te enviamos la Factura {factura.tipo_comprobante} <b>{numero_str}</b> de <b>{factura.tienda.nombre}</b>.</p>
+<p>Total: <b>${factura.total}</b></p>
+<p>Adjuntamos el comprobante en PDF.</p>
+</body></html>"""
+
+        try:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=texto,
+                from_email=getattr(dj_settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
+                to=[email],
+            )
+            msg.attach_alternative(html, 'text/html')
+            msg.attach(filename, buffer.getvalue(), 'application/pdf')
+            msg.send(fail_silently=False)
+        except Exception as e:
+            logger.error("Factura.enviar_email: error enviando a %s: %s", email, e)
+            return Response({"error": f"No se pudo enviar el email: {e}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'ok': True, 'mensaje': f'Factura enviada a {email}.'})
 
     @action(detail=True, methods=['post'], url_path='emitir_nota_credito')
     def emitir_nota_credito(self, request, pk=None):
