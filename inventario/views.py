@@ -5466,6 +5466,28 @@ class VentaViewSet(viewsets.ModelViewSet):
         buffer.seek(0)
         return buffer
 
+    @action(detail=True, methods=['get'], url_path='pdf-recibo', url_name='pdf-recibo')
+    def pdf_recibo(self, request, pk=None):
+        """Descarga el PDF del recibo (no fiscal) -- lo usa el botón de compartir
+        por WhatsApp del frontend para adjuntar el archivo real, además de servir
+        como descarga directa."""
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        venta = self.get_object()
+        user = request.user
+        if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
+            return Response(
+                {"error": "No tenés permiso para ver el recibo de esta venta"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        buffer = self._construir_pdf_recibo(venta)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="recibo_{venta.id}.pdf"'
+        return response
+
     @action(detail=True, methods=['post'], url_path='enviar-recibo-email', url_name='enviar-recibo-email')
     def enviar_recibo_email(self, request, pk=None):
         """Genera el PDF del recibo (no fiscal) y lo manda por mail (a la dirección
