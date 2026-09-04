@@ -4241,13 +4241,23 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         continue
 
                     # 2) Buscar por SKU / nombre
+                    # El match por nombre (sobre todo el fallback por nombre base, sin sufijo
+                    # de variante) es ambiguo cuando hay varios productos locales con el mismo
+                    # nombre -- si el candidato ya está vinculado a OTRA variante de TN, no lo
+                    # "robamos" (si no, la variante que se procesó antes en este mismo import
+                    # se queda sin tn_variant_id, silenciosamente). Sí se permite re-vincular un
+                    # producto que ya tenía este mismo tn_variant_id -- eso ya lo resuelve el
+                    # paso 1 de arriba, así que acá nunca debería pasar, pero por las dudas no
+                    # se excluye ese caso puntual.
+                    no_vinculado_a_otra_variante = Q(tn_variant_id__isnull=True) | Q(tn_variant_id='') | Q(tn_variant_id=tn_variant_id)
                     if sku:
                         producto = Producto.objects.filter(tienda=tienda, codigo_barras=sku).first()
                     if not producto:
-                        producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_var).first()
+                        producto = Producto.objects.filter(no_vinculado_a_otra_variante, tienda=tienda, nombre__iexact=nombre_var).first()
                     if not producto and nombre_tn != nombre_var:
-                        producto = Producto.objects.filter(tienda=tienda, nombre__iexact=nombre_tn).first()
+                        producto = Producto.objects.filter(no_vinculado_a_otra_variante, tienda=tienda, nombre__iexact=nombre_tn).first()
 
+                    match_descartado = False
                     if producto:
                         producto.tn_product_id   = tn_product_id
                         producto.tn_variant_id   = tn_variant_id
@@ -4257,13 +4267,40 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         producto.stock           = stock_tn
                         if es_multivar and padre:
                             producto.producto_padre = padre
-                            if talle_val and not producto.talle:
-                                producto.talle = talle_val
-                            if variante2_val and not producto.variante2:
-                                producto.variante2 = variante2_val
-                        producto.save()
-                        vinculados += 1
-                    else:
+                            asigna_talle = bool(talle_val) and not producto.talle
+                            asigna_variante2 = bool(variante2_val) and not producto.variante2
+                            if asigna_talle or asigna_variante2:
+                                # El match por nombre base (sin sufijo de variante) puede haber
+                                # agarrado un producto local equivocado dentro de una familia de
+                                # variantes (ej. uno sin talle asignado todavía). Antes de forzarle
+                                # el talle/variante2 de esta variante de TN, verificar que no choque
+                                # con OTRO producto local que ya tenga esa combinación -- si choca,
+                                # descartamos el match y creamos un producto nuevo más abajo en vez
+                                # de romper con un IntegrityError.
+                                talle_final = talle_val if asigna_talle else producto.talle
+                                variante2_final = variante2_val if asigna_variante2 else producto.variante2
+                                hay_conflicto = Producto.objects.filter(
+                                    tienda=tienda, nombre__iexact=producto.nombre,
+                                    talle=talle_final, variante2=variante2_final,
+                                ).exclude(pk=producto.pk).exists()
+                                if hay_conflicto:
+                                    logger.warning(
+                                        "tn_import_products: variante TN %s matcheó producto local %s (%s) por nombre, "
+                                        "pero asignarle talle=%r/variante2=%r chocaría con otro producto local ya "
+                                        "existente -- se descarta el match y se crea uno nuevo",
+                                        tn_variant_id, producto.id, producto.nombre, talle_final, variante2_final,
+                                    )
+                                    match_descartado = True
+                                else:
+                                    if asigna_talle:
+                                        producto.talle = talle_val
+                                    if asigna_variante2:
+                                        producto.variante2 = variante2_val
+                        if not match_descartado:
+                            producto.save()
+                            vinculados += 1
+
+                    if not producto or match_descartado:
                         # 3) Crear nuevo producto
                         Producto.objects.create(
                             tienda          = tienda,
