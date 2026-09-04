@@ -4193,14 +4193,24 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
         def _primero_disponible(candidatos, tn_variant_id_actual, talle_val=None, variante2_val=''):
             for c in candidatos:
-                if c.tn_variant_id and c.tn_variant_id != tn_variant_id_actual:
-                    continue
                 # Si el candidato ya tiene su propio talle/variante2 y NO coincide con el
                 # de esta variante, no es el mismo producto -- es un hermano de otra talla
                 # dentro de la misma familia que casualmente comparte el nombre base.
                 if talle_val and c.talle and c.talle != talle_val:
                     continue
                 if variante2_val and c.variante2 and c.variante2 != variante2_val:
+                    continue
+                # "Ya vinculado a otra variante" solo descarta al candidato cuando todavía
+                # hace falta asignarle talle/variante2 (es un candidato "en blanco" que puede
+                # haberse llevado ya otro hermano en esta misma corrida). Si el candidato YA
+                # tiene su propio talle/variante2 coincidiendo con esta variante, es un match
+                # legítimo aunque su tn_variant_id actual sea otro -- puede ser una variante
+                # que se borró y se recreó del lado de Tienda Nube con un ID nuevo, y lo que
+                # corresponde es re-vincularla, no rechazarla y terminar creando un duplicado.
+                necesita_talle = bool(talle_val) and not c.talle
+                necesita_variante2 = bool(variante2_val) and not c.variante2
+                ya_reclamado = bool(c.tn_variant_id) and c.tn_variant_id != tn_variant_id_actual
+                if (necesita_talle or necesita_variante2) and ya_reclamado:
                     continue
                 return c
             return None
