@@ -193,7 +193,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelTiendaNube, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -272,6 +272,7 @@ from .serializers import (
     calcular_saldo_pendiente, obtener_deuda_vencida_info,
     RubroSerializer,
     PresupuestoSerializer, PresupuestoCreateSerializer,
+    ArancelTiendaNubeSerializer, ArancelTiendaNubeCreateSerializer,
 )
 # Importación condicional de serializers de ArancelMercadoLibre
 try:
@@ -4511,6 +4512,35 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
 
     total = Decimal(str(order.get('total', '0'))).quantize(Decimal('0.01'))
 
+    # Arancel estimado según el gateway de pago -- a diferencia de Mercado Libre,
+    # Tienda Nube no informa el cargo real cobrado en el webhook, así que se
+    # calcula con la tasa/IVA/CPT que haya configurado la tienda para este
+    # gateway (ver ArancelTiendaNube). 'criterio' permite distinguir débito de
+    # crédito para gateways que cobran distinto según el medio (ej. MODO).
+    gateway_slug = str(order.get('gateway') or '').strip().lower()
+    payment_method = str((order.get('payment_details') or {}).get('method') or '').lower()
+    if 'debit' in payment_method:
+        criterio_pago = 'DEBITO'
+    elif 'credit' in payment_method:
+        criterio_pago = 'CREDITO'
+    else:
+        criterio_pago = ''
+
+    arancel_tn_total = Decimal('0.00')
+    if gateway_slug:
+        arancel_tn = ArancelTiendaNube.objects.filter(tienda=tienda, gateway__iexact=gateway_slug, criterio=criterio_pago).first()
+        if not arancel_tn and criterio_pago:
+            arancel_tn = ArancelTiendaNube.objects.filter(tienda=tienda, gateway__iexact=gateway_slug, criterio='').first()
+        if arancel_tn:
+            tasa_con_iva = arancel_tn.tasa_porcentaje * (Decimal('1') + arancel_tn.iva_porcentaje / Decimal('100'))
+            tasa_total_pct = tasa_con_iva + arancel_tn.cpt_porcentaje
+            arancel_tn_total = (total * tasa_total_pct / Decimal('100')).quantize(Decimal('0.01'))
+        else:
+            logger.info(
+                "_procesar_orden_tiendanube: sin arancel configurado para gateway=%s criterio=%s tienda=%s orden=%s",
+                gateway_slug, criterio_pago or '(todos)', tienda.nombre, order_id,
+            )
+
     # Atómico: si algo falla armando los detalles (ver bug de 'codigo_barras' que
     # ya rompió una orden real -- la Venta quedaba creada y comprometida en la DB
     # pero sin ningún DetalleVenta, y como tn_order_id ya existía, la orden nunca
@@ -4522,6 +4552,7 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
             usuario=user_tn,
             total=total,
             metodo_pago=gateway_name,
+            arancel_total=arancel_tn_total,
             origen_tiendanube=True,
             tn_order_id=order_id,
             cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
@@ -6054,6 +6085,42 @@ if ArancelMercadoLibreProducto is not None and ArancelMercadoLibreProductoSerial
             return super().list(request, *args, **kwargs)
 else:
     ArancelMercadoLibreProductoViewSet = None
+
+# VIEWSET: Aranceles Tienda Nube por gateway (tasa + IVA + CPT)
+class ArancelTiendaNubeViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return ArancelTiendaNubeCreateSerializer
+        return ArancelTiendaNubeSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = ArancelTiendaNube.objects.all().select_related('tienda')
+
+        if user.is_superuser:
+            tienda_slug = self.request.query_params.get('tienda_slug', None)
+            if tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+            return queryset.order_by('tienda__nombre', 'gateway', 'criterio')
+
+        elif user.tienda:
+            queryset = queryset.filter(tienda=user.tienda)
+            return queryset.order_by('gateway', 'criterio')
+
+        return ArancelTiendaNube.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not user.is_superuser and user.tienda:
+            serializer.save(tienda=user.tienda)
+        else:
+            serializer.save()
+
+    def list(self, request, *args, **kwargs):
+        close_old_connections()
+        return super().list(request, *args, **kwargs)
 
 # VIEWSET: Aranceles Mercado Libre por Categoría (legacy - se mantiene por compatibilidad)
 if ArancelMercadoLibre is not None and ArancelMercadoLibreSerializer is not None:

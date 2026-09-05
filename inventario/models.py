@@ -570,6 +570,65 @@ class ArancelMercadoLibreProducto(models.Model):
         )
 # ------------------------------------------------
 
+class ArancelTiendaNube(models.Model):
+    """
+    Arancel configurable por medio de pago ("gateway") de Tienda Nube, para
+    estimar el costo real de cada venta -- a diferencia de Mercado Libre, el
+    webhook de TN no informa el cargo real cobrado, así que acá siempre es
+    manual (no existe un modo "automático" como con ML).
+
+    `gateway` es el slug tal cual lo manda TN en cada orden (ej. 'gocuotas',
+    'mercadopago', 'modo') -- se ve en el log al procesar cada orden. `criterio`
+    permite tener una tasa distinta según sea débito o crédito dentro del MISMO
+    gateway (ej. MODO cobra 1.80% en débito y 7.11% en crédito); se deja vacío
+    cuando el gateway cobra lo mismo para todos los medios (la mayoría).
+    """
+    CRITERIO_CHOICES = [
+        ('', 'Todos los medios'),
+        ('DEBITO', 'Tarjeta de débito'),
+        ('CREDITO', 'Tarjeta de crédito'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='aranceles_tn')
+    gateway = models.CharField(
+        max_length=50,
+        help_text="Slug del medio de pago tal cual lo manda Tienda Nube (ej: 'gocuotas', 'mercadopago', 'modo')."
+    )
+    gateway_nombre = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text="Nombre para mostrar (ej: 'GOcuotas'). Solo informativo."
+    )
+    criterio = models.CharField(
+        max_length=10, choices=CRITERIO_CHOICES, blank=True, default='',
+        help_text="Dejar en 'Todos los medios' salvo que este gateway cobre distinto según débito/crédito."
+    )
+    tasa_porcentaje = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.00'),
+        help_text="Tasa (%) que cobra el medio de pago, antes de IVA."
+    )
+    iva_porcentaje = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('21.00'),
+        help_text="IVA (%) que se suma sobre la tasa."
+    )
+    cpt_porcentaje = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.00'),
+        help_text="CPT: costo (%) por cobrar el dinero de forma anticipada, si el plan elegido lo tiene."
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Arancel Tienda Nube"
+        verbose_name_plural = "Aranceles Tienda Nube"
+        unique_together = ('tienda', 'gateway', 'criterio')
+        ordering = ['tienda', 'gateway', 'criterio']
+
+    def __str__(self):
+        sufijo = f" ({self.get_criterio_display()})" if self.criterio else ''
+        return f"{self.tienda.nombre} - {self.gateway}{sufijo} - {self.tasa_porcentaje}% +IVA +CPT {self.cpt_porcentaje}%"
+# ------------------------------------------------
+
 # ── Clientes y Cuenta Corriente ────────────────────────────────────────────────
 
 class Cliente(models.Model):
@@ -1415,7 +1474,7 @@ class Suscripcion(models.Model):
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
-    'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'CategoriaMercadoLibre',
+    'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'ArancelTiendaNube', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
     'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',

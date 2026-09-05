@@ -1,7 +1,7 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, ArancelTiendaNube, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -468,6 +468,45 @@ class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
         if value is not None and (value < 0 or value > 100):
             raise serializers.ValidationError("Los impuestos deben estar entre 0 y 100%")
         return value
+# ------------------------------------------------
+
+# SERIALIZER: Arancel Tienda Nube por gateway (tasa + IVA + CPT)
+class ArancelTiendaNubeSerializer(serializers.ModelSerializer):
+    tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
+    criterio_display = serializers.CharField(source='get_criterio_display', read_only=True)
+
+    class Meta:
+        model = ArancelTiendaNube
+        fields = [
+            'id', 'tienda', 'tienda_nombre', 'gateway', 'gateway_nombre', 'criterio', 'criterio_display',
+            'tasa_porcentaje', 'iva_porcentaje', 'cpt_porcentaje',
+            'fecha_creacion', 'fecha_actualizacion',
+        ]
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+class ArancelTiendaNubeCreateSerializer(serializers.ModelSerializer):
+    tienda = serializers.SlugRelatedField(slug_field='nombre', queryset=Tienda.objects.all(), required=True, write_only=True)
+
+    class Meta:
+        model = ArancelTiendaNube
+        fields = ['id', 'tienda', 'gateway', 'gateway_nombre', 'criterio', 'tasa_porcentaje', 'iva_porcentaje', 'cpt_porcentaje']
+
+    def validate_gateway(self, value):
+        return (value or '').strip().lower()
+
+    def _validar_porcentaje(self, value, campo):
+        if value is not None and (value < 0 or value > 100):
+            raise serializers.ValidationError(f"{campo} debe estar entre 0 y 100%")
+        return value
+
+    def validate_tasa_porcentaje(self, value):
+        return self._validar_porcentaje(value, 'La tasa')
+
+    def validate_iva_porcentaje(self, value):
+        return self._validar_porcentaje(value, 'El IVA')
+
+    def validate_cpt_porcentaje(self, value):
+        return self._validar_porcentaje(value, 'El CPT')
 # ------------------------------------------------
 
 class DetalleVentaSerializer(serializers.ModelSerializer):

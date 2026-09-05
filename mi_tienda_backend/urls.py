@@ -6,7 +6,7 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView, WidgetVentasHoyAPIView,
-    ArancelMetodoTiendaViewSet, FacturaViewSet, NotaCreditoViewSet,
+    ArancelMetodoTiendaViewSet, ArancelTiendaNubeViewSet, FacturaViewSet, NotaCreditoViewSet,
     CierreCajaViewSet, EgresoCajaViewSet, HistorialAccionViewSet,
     ClienteViewSet,
     ProveedorViewSet,
@@ -69,6 +69,7 @@ elif ArancelMercadoLibreViewSet is not None:
     router.register(r'aranceles-ml', ArancelMercadoLibreViewSet, basename='aranceles-ml')
 else:
     print("⚠️ Warning: ViewSets ML no disponibles. Aplica la migración 0022_arancel_ml_producto.")
+router.register(r'aranceles-tn', ArancelTiendaNubeViewSet, basename='aranceles-tn')
 router.register(r'cierre-caja', CierreCajaViewSet, basename='cierre-caja')
 router.register(r'egresos-caja', EgresoCajaViewSet, basename='egresos-caja')
 router.register(r'facturas', FacturaViewSet, basename='facturas')
