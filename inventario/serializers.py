@@ -1511,6 +1511,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         raw = attrs.get('username') or ''
         username = str(raw).strip()
+        # Permitir loguearse con el email además del username -- es una confusión
+        # habitual, sobre todo justo después de recuperar la contraseña (ese flujo
+        # sí busca por email). Solo se resuelve si hay un único usuario con ese
+        # email exacto -- si hay más de uno (dos cuentas compartiendo casilla, algo
+        # que pasa en comercios chicos) no se adivina cuál, se deja que falle normal.
+        if username and '@' in username and not User.objects.filter(username__iexact=username).exists():
+            candidatos = list(User.objects.filter(email__iexact=username)[:2])
+            if len(candidatos) == 1:
+                username = candidatos[0].username
         attrs = {**attrs, 'username': username}
         try:
             data = super().validate(attrs)
