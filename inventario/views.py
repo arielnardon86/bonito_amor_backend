@@ -4534,14 +4534,19 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
     # Arancel estimado según el gateway de pago -- a diferencia de Mercado Libre,
     # Tienda Nube no informa el cargo real cobrado en el webhook, así que se
     # calcula con la tasa/IVA/CPT que haya configurado la tienda para este
-    # gateway (ver ArancelTiendaNube). 'criterio' permite distinguir débito de
-    # crédito para gateways que cobran distinto según el medio (ej. MODO).
+    # gateway (ver ArancelTiendaNube). 'criterio' permite distinguir débito,
+    # crédito, transferencia o billetera virtual para gateways que cobran
+    # distinto según el medio (ej. MODO).
     gateway_slug = _normalizar_gateway_tn(order.get('gateway'))
     payment_method = str((order.get('payment_details') or {}).get('method') or '').lower()
     if 'debit' in payment_method:
         criterio_pago = 'DEBITO'
     elif 'credit' in payment_method:
         criterio_pago = 'CREDITO'
+    elif 'transfer' in payment_method:
+        criterio_pago = 'TRANSFERENCIA'
+    elif 'wallet' in payment_method or 'account_money' in payment_method or 'money' in payment_method:
+        criterio_pago = 'BILLETERA'
     else:
         criterio_pago = ''
 

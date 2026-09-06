@@ -587,6 +587,8 @@ class ArancelTiendaNube(models.Model):
         ('', 'Todos los medios'),
         ('DEBITO', 'Tarjeta de débito'),
         ('CREDITO', 'Tarjeta de crédito'),
+        ('TRANSFERENCIA', 'Transferencia bancaria'),
+        ('BILLETERA', 'Billetera virtual'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -600,8 +602,8 @@ class ArancelTiendaNube(models.Model):
         help_text="Nombre para mostrar (ej: 'GOcuotas'). Solo informativo."
     )
     criterio = models.CharField(
-        max_length=10, choices=CRITERIO_CHOICES, blank=True, default='',
-        help_text="Dejar en 'Todos los medios' salvo que este gateway cobre distinto según débito/crédito."
+        max_length=13, choices=CRITERIO_CHOICES, blank=True, default='',
+        help_text="Dejar en 'Todos los medios' salvo que este gateway cobre distinto según el medio de pago."
     )
     tasa_porcentaje = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal('0.00'),
