@@ -4538,6 +4538,15 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
     # crédito, transferencia o billetera virtual para gateways que cobran
     # distinto según el medio (ej. MODO).
     gateway_slug = _normalizar_gateway_tn(order.get('gateway'))
+    if gateway_slug == 'offline':
+        # Los medios de pago "manuales" (transferencia, efectivo, depósito, etc.)
+        # los crea y nombra cada tienda en su propio panel de Tienda Nube -- TN no
+        # les da un slug fijo, todos comparten gateway='offline' y llegan con
+        # payment_details.method='custom', así que lo único que los distingue es
+        # el nombre que el comerciante le puso (gateway_name, ej. "TRANSFERENCIA").
+        nombre_offline = str(order.get('gateway_name') or '').strip().lower()
+        if nombre_offline:
+            gateway_slug = nombre_offline
     payment_method = str((order.get('payment_details') or {}).get('method') or '').lower()
     if 'debit' in payment_method:
         criterio_pago = 'DEBITO'
