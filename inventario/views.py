@@ -4486,6 +4486,25 @@ def _cliente_data_desde_orden_tn(order, venta):
     }
 
 
+# Algunos procesadores de pago de Tienda Nube mandan más de un slug distinto en
+# el campo 'gateway' de la orden según la integración/versión (ej. Mercado Pago
+# a veces manda 'mercadopago', otras 'mercado_pago'). Se normalizan acá a un
+# único valor canónico -- el mismo que ofrece el desplegable del frontend al
+# configurar un arancel -- para que no haga falta cargar una fila por cada
+# variante posible del mismo medio de pago.
+GATEWAY_TN_ALIASES = {
+    'pago_nube': 'pagonube',
+    'mercado_pago': 'mercadopago',
+    'payway': 'decidir',
+    'uala_bis': 'ualabis',
+}
+
+
+def _normalizar_gateway_tn(gateway_raw):
+    slug = str(gateway_raw or '').strip().lower()
+    return GATEWAY_TN_ALIASES.get(slug, slug)
+
+
 def _procesar_orden_tiendanube(tienda, order, order_id):
     """
     Crea una Venta a partir de una orden de Tienda Nube.
@@ -4517,7 +4536,7 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
     # calcula con la tasa/IVA/CPT que haya configurado la tienda para este
     # gateway (ver ArancelTiendaNube). 'criterio' permite distinguir débito de
     # crédito para gateways que cobran distinto según el medio (ej. MODO).
-    gateway_slug = str(order.get('gateway') or '').strip().lower()
+    gateway_slug = _normalizar_gateway_tn(order.get('gateway'))
     payment_method = str((order.get('payment_details') or {}).get('method') or '').lower()
     if 'debit' in payment_method:
         criterio_pago = 'DEBITO'

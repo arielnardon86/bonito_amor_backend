@@ -491,8 +491,21 @@ class ArancelTiendaNubeCreateSerializer(serializers.ModelSerializer):
         model = ArancelTiendaNube
         fields = ['id', 'tienda', 'gateway', 'gateway_nombre', 'criterio', 'tasa_porcentaje', 'iva_porcentaje', 'cpt_porcentaje']
 
+    # Mismos alias que normaliza _procesar_orden_tiendanube (views.py) al recibir
+    # una orden real -- se duplica acá (en vez de importar desde views, que ya
+    # importa de este módulo) para que, sin importar cuál de los dos slugs
+    # posibles mande Tienda Nube para un mismo medio de pago, el arancel
+    # configurado quede guardado siempre con el valor canónico.
+    GATEWAY_ALIASES = {
+        'pago_nube': 'pagonube',
+        'mercado_pago': 'mercadopago',
+        'payway': 'decidir',
+        'uala_bis': 'ualabis',
+    }
+
     def validate_gateway(self, value):
-        return (value or '').strip().lower()
+        slug = (value or '').strip().lower()
+        return self.GATEWAY_ALIASES.get(slug, slug)
 
     def _validar_porcentaje(self, value, campo):
         if value is not None and (value < 0 or value > 100):
