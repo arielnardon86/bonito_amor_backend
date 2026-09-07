@@ -326,6 +326,9 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 BACKEND_URL = os.environ.get('BACKEND_URL', '')
 # Clave secreta para validar firma de webhooks de MP (Configurar notificaciones → clave secreta)
 MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
+# Nombre de la Tienda interna donde se registra y factura (ARCA) el cobro de la
+# suscripción de cada cliente de Total Stock -- ver mp_webhook_suscripcion.
+TIENDA_SUSCRIPCIONES_NOMBRE = os.environ.get('TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
 
 # ── Tienda Nube / Nuvemshop ───────────────────────────────────────────────────
 # Hay una sola app de Total Stock registrada en el Panel de Partners de Tienda

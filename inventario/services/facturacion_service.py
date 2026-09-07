@@ -1025,10 +1025,15 @@ class FacturacionService:
                 'punto_venta': self.tienda.punto_venta,
                 'tipo_comprobante': tipo_comprobante,
                 'cliente': {
-                    'nombre': cliente_data.get('nombre', 'Consumidor Final'),
-                    'cuit': cliente_data.get('cuit', '').replace('-', '') if cliente_data.get('cuit') else None,
-                    'domicilio': cliente_data.get('domicilio', ''),
-                    'tipo_documento': cliente_data.get('tipo_documento', '99'),
+                    # El resto del sistema (webhooks de ML/TN, EmitirFacturaSerializer,
+                    # _facturar_cobro_suscripcion) arma cliente_data con claves
+                    # 'cliente_*' -- se acepta también la clave corta por compatibilidad,
+                    # pero sin este fallback estos datos siempre caían en el default
+                    # ("Consumidor Final") para cualquier tienda que facture con ARCA.
+                    'nombre': cliente_data.get('cliente_nombre') or cliente_data.get('nombre') or 'Consumidor Final',
+                    'cuit': (cliente_data.get('cliente_cuit') or cliente_data.get('cuit') or '').replace('-', '') or None,
+                    'domicilio': cliente_data.get('cliente_domicilio') or cliente_data.get('domicilio') or '',
+                    'tipo_documento': cliente_data.get('cliente_tipo_documento') or cliente_data.get('tipo_documento') or '99',
                 },
                 'items': items,
                 'subtotal': float(subtotal),

@@ -761,6 +761,11 @@ class Venta(models.Model):
     ml_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Mercado Libre (para evitar duplicados)")
     origen_tiendanube = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Tienda Nube")
     tn_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Tienda Nube (para evitar duplicados)")
+    # Cobro de suscripción de un cliente de Total Stock (no una venta real de la
+    # tienda) -- se registra en la tienda interna designada para autofacturarse
+    # (ver settings.TIENDA_SUSCRIPCIONES_NOMBRE y mp_webhook_suscripcion).
+    origen_mp_suscripcion = models.BooleanField(default=False, help_text="True si la venta representa el cobro de una suscripción de un cliente de Total Stock")
+    mp_authorized_payment_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID del pago autorizado de Mercado Pago (para evitar duplicados)")
     
     # Campos para facturación
     facturada = models.BooleanField(default=False, help_text="Indica si esta venta ha sido facturada")
@@ -794,6 +799,11 @@ class Venta(models.Model):
                 fields=['tienda', 'ml_order_id'],
                 condition=models.Q(ml_order_id__isnull=False),
                 name='unique_ml_order_per_tienda'
+            ),
+            models.UniqueConstraint(
+                fields=['tienda', 'mp_authorized_payment_id'],
+                condition=models.Q(mp_authorized_payment_id__isnull=False),
+                name='unique_mp_authorized_payment_per_tienda'
             ),
             models.UniqueConstraint(
                 fields=['tienda', 'tn_order_id'],

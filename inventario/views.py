@@ -9025,6 +9025,130 @@ def tn_instalar_vincular_cuenta_existente(request):
     return Response({'success': True, 'tienda_slug': tienda.nombre})
 
 
+def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
+    """
+    Registra y factura, en la Tienda interna designada (settings.
+    TIENDA_SUSCRIPCIONES_NOMBRE), el cobro de la suscripción de un cliente de
+    Total Stock -- Total Stock le cobra a sus propios clientes por su plan y
+    necesita su propio comprobante ARCA por eso, igual que cualquier otra venta.
+    Se llama desde mp_webhook_suscripcion ante un subscription_authorized_payment.
+
+    No lanza excepciones hacia arriba en casos de configuración faltante (tienda
+    no existe, sin facturación) -- son "no aplica todavía", no errores. Sí puede
+    propagar errores inesperados de DB/facturación; el caller decide si los
+    atrapa (hoy sí, para no romper el procesamiento del webhook de MP).
+    """
+    if not payment_id:
+        return
+
+    nombre_tienda_facturacion = getattr(settings, 'TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
+    tienda_facturacion = Tienda.objects.filter(nombre=nombre_tienda_facturacion).first()
+    if not tienda_facturacion:
+        logger.warning(
+            "_facturar_cobro_suscripcion: no existe la tienda '%s' (TIENDA_SUSCRIPCIONES_NOMBRE) -- no se factura el cobro de %s",
+            nombre_tienda_facturacion, suscripcion.tienda.nombre,
+        )
+        return
+    if tienda_facturacion.tipo_facturacion == 'NINGUNA':
+        return
+
+    # Evitar duplicar la venta si Mercado Pago reintenta el webhook para el mismo pago.
+    if Venta.objects.filter(tienda=tienda_facturacion, mp_authorized_payment_id=payment_id).exists():
+        return
+
+    if monto is not None:
+        monto_decimal = Decimal(str(monto))
+    else:
+        monto_decimal = suscripcion.plan.precio_mensual
+        logger.warning(
+            "_facturar_cobro_suscripcion: la API de Mercado Pago no informó el monto cobrado para el pago %s "
+            "-- se usa el precio del plan (%s) como valor de referencia, puede no coincidir con lo realmente cobrado",
+            payment_id, monto_decimal,
+        )
+
+    usuario_sistema, _ = User.objects.get_or_create(
+        username='mercadopago_suscripciones',
+        defaults={
+            'is_staff': False, 'is_active': True, 'tienda': tienda_facturacion,
+            'first_name': 'Mercado Pago', 'last_name': 'Suscripciones',
+        },
+    )
+    producto_suscripcion, _ = Producto.objects.get_or_create(
+        tienda=tienda_facturacion, nombre='Suscripción Total Stock',
+        defaults={'precio': monto_decimal, 'stock': 0},
+    )
+
+    tienda_cliente = suscripcion.tienda
+    with transaction.atomic():
+        venta = Venta.objects.create(
+            tienda=tienda_facturacion,
+            usuario=usuario_sistema,
+            total=monto_decimal,
+            metodo_pago='Mercado Pago',
+            mp_authorized_payment_id=payment_id,
+            origen_mp_suscripcion=True,
+            cliente_nombre=tienda_cliente.nombre,
+            cliente_cuit=tienda_cliente.cuit or '',
+        )
+        DetalleVenta.objects.create(
+            venta=venta,
+            producto=producto_suscripcion,
+            cantidad=1,
+            precio_unitario=monto_decimal,
+            subtotal=monto_decimal,
+        )
+
+    cliente_data = {
+        'cliente_nombre': tienda_cliente.nombre,
+        'cliente_cuit': tienda_cliente.cuit or '',
+        'cliente_domicilio': '',
+        'cliente_tipo_documento': 'CUIT' if tienda_cliente.cuit else '99',
+        'cliente_condicion_iva': tienda_cliente.condicion_iva_emisor or 'CF',
+    }
+
+    exito, datos_factura, error = FacturacionService(tienda_facturacion).emitir_factura(venta, cliente_data)
+    if exito:
+        Factura.objects.create(
+            venta=venta, tienda=tienda_facturacion,
+            numero_comprobante=datos_factura.get('numero_comprobante'),
+            punto_venta=datos_factura.get('punto_venta', tienda_facturacion.punto_venta),
+            tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+            cliente_nombre=cliente_data['cliente_nombre'],
+            cliente_cuit=cliente_data.get('cliente_cuit', ''),
+            cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+            cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+            cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+            subtotal=datos_factura.get('subtotal', venta.total),
+            impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+            total=datos_factura.get('total', venta.total),
+            estado='EMITIDA',
+            sistema_facturacion=tienda_facturacion.tipo_facturacion,
+            cae=datos_factura.get('cae'),
+            fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+            numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+            respuesta_bruta=datos_factura.get('respuesta_bruta'),
+        )
+        venta.facturada = True
+        venta.save(update_fields=['facturada'])
+        logger.info(
+            "_facturar_cobro_suscripcion: factura emitida para el cobro de suscripción de %s ($%s) — venta=%s payment_id=%s",
+            tienda_cliente.nombre, monto_decimal, venta.id, payment_id,
+        )
+    else:
+        Factura.objects.create(
+            venta=venta, tienda=tienda_facturacion, punto_venta=tienda_facturacion.punto_venta,
+            tipo_comprobante='B', cliente_nombre=cliente_data['cliente_nombre'],
+            cliente_cuit='', cliente_domicilio='', cliente_tipo_documento='99',
+            cliente_condicion_iva='CF', subtotal=venta.total, impuesto_iva=Decimal('0.00'),
+            total=venta.total, estado='ERROR', sistema_facturacion=tienda_facturacion.tipo_facturacion,
+            error_mensaje=error,
+        )
+        logger.warning(
+            "_facturar_cobro_suscripcion: fallo al facturar el cobro de suscripción de %s ($%s): %s — venta=%s payment_id=%s",
+            tienda_cliente.nombre, monto_decimal, error, venta.id, payment_id,
+        )
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def mp_webhook_suscripcion(request):
@@ -9173,7 +9297,21 @@ def mp_webhook_suscripcion(request):
                 timeout=10,
             )
             pago_resp.raise_for_status()
-            preapproval_id = pago_resp.json().get('preapproval_id', '')
+            pago_data = pago_resp.json()
+            preapproval_id = pago_data.get('preapproval_id', '')
+            # El campo exacto del monto no está 100% confirmado contra un payload
+            # real todavía -- se prueban las variantes más probables de la API de
+            # Preapproval/authorized_payments de MP, con log si ninguna aparece
+            # (_facturar_cobro_suscripcion cae al precio del plan como respaldo).
+            monto_cobrado = (
+                pago_data.get('transaction_amount')
+                or (pago_data.get('payment') or {}).get('transaction_amount')
+            )
+            if monto_cobrado is None:
+                logger.warning(
+                    "mp_webhook_suscripcion: authorized_payment %s sin transaction_amount reconocible — payload=%s",
+                    resource_id, pago_data,
+                )
         except Exception as e:
             logger.error("Error obteniendo authorized_payment %s: %s", resource_id, e)
             return Response(status=200)
@@ -9190,6 +9328,16 @@ def mp_webhook_suscripcion(request):
         from .services.suscripcion_service import renovar_suscripcion as _renovar
         _renovar(suscripcion)
         logger.info("Suscripción renovada por authorized_payment: %s", suscripcion.id)
+
+        # Facturar el cobro en la tienda interna de Total Stock -- best-effort: un
+        # problema acá no debe impedir que la suscripción del cliente quede renovada.
+        try:
+            _facturar_cobro_suscripcion(suscripcion, resource_id, monto_cobrado)
+        except Exception as e:
+            logger.error(
+                "Error facturando cobro de suscripción (payment=%s, tienda=%s): %s",
+                resource_id, suscripcion.tienda.nombre, e, exc_info=True,
+            )
 
     return Response(status=200)
 
