@@ -1324,58 +1324,105 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 "vincular_tienda_nube: producto TN %s tiene %s variantes y el local es suelto — se crea familia local — %s",
                 tn_product_id, len(variantes), log_ctx,
             )
-            with transaction.atomic():
-                producto.tn_product_id = tn_product_id
-                producto.tn_variant_id = None
-                producto.tn_sincronizado = False
-                producto.stock = 0
-                producto.talle = None
-                producto.variante2 = None
-                producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'stock', 'talle', 'variante2'])
+            try:
+                with transaction.atomic():
+                    producto.tn_product_id = tn_product_id
+                    producto.tn_variant_id = None
+                    producto.tn_sincronizado = False
+                    producto.stock = 0
+                    producto.talle = None
+                    producto.variante2 = None
+                    producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'stock', 'talle', 'variante2'])
 
-                nuevas = []
-                for v in variantes:
-                    valores = [(val.get('es') or '') for val in v.get('values', []) if val]
-                    if len(valores) > 2:
-                        logger.warning(
-                            "vincular_tienda_nube: producto TN %s tiene %s ejes de variante, solo se importan los primeros 2 — %s",
-                            tn_product_id, len(valores), log_ctx,
-                        )
-                    talle_variante = valores[0] if len(valores) > 0 and valores[0] else None
-                    # '' y no None: NULL no colisiona consigo mismo en el unique_together
-                    # (nombre, tienda, talle, variante2) y dejaría de proteger contra
-                    # variantes duplicadas cuando esta familia no usa el segundo eje.
-                    variante2_variante = valores[1] if len(valores) > 1 and valores[1] else ''
-                    nuevas.append(Producto.objects.create(
-                        tienda=tienda,
-                        nombre=producto.nombre,
-                        producto_padre=producto,
-                        talle=talle_variante,
-                        variante2=variante2_variante,
-                        precio=producto.precio,
-                        costo=producto.costo,
-                        iva_porcentaje=producto.iva_porcentaje,
-                        rubro=producto.rubro,
-                        codigo_barras=_generar_codigo_barras_unico(tienda),
-                        stock=0,
-                        tn_product_id=tn_product_id,
-                        tn_variant_id=str(v.get('id')),
-                        tn_sincronizado=True,
-                    ))
+                    nuevas = []
+                    reutilizadas = []
+                    for v in variantes:
+                        valores = [(val.get('es') or '') for val in v.get('values', []) if val]
+                        if len(valores) > 2:
+                            logger.warning(
+                                "vincular_tienda_nube: producto TN %s tiene %s ejes de variante, solo se importan los primeros 2 — %s",
+                                tn_product_id, len(valores), log_ctx,
+                            )
+                        talle_variante = valores[0] if len(valores) > 0 and valores[0] else None
+                        # '' y no None: NULL no colisiona consigo mismo en el unique_together
+                        # (nombre, tienda, talle, variante2) y dejaría de proteger contra
+                        # variantes duplicadas cuando esta familia no usa el segundo eje.
+                        variante2_variante = valores[1] if len(valores) > 1 and valores[1] else ''
+
+                        # Si ya existe un producto local suelto con este mismo nombre+talle
+                        # (ej. el cliente ya había cargado a mano alguna de las variantes
+                        # antes de vincular con TN), crear uno nuevo rompería el
+                        # unique_together (nombre, tienda, talle, variante2) con un
+                        # IntegrityError sin capturar -- en vez de eso, se reutiliza el
+                        # producto existente como esa variante (conserva su stock real).
+                        existente = None
+                        if talle_variante:
+                            existente = Producto.objects.filter(
+                                tienda=tienda, nombre__iexact=producto.nombre,
+                                talle=talle_variante, variante2=variante2_variante,
+                            ).exclude(pk=producto.pk).first()
+
+                        if existente:
+                            existente.producto_padre = producto
+                            existente.tn_product_id = tn_product_id
+                            existente.tn_variant_id = str(v.get('id'))
+                            existente.tn_sincronizado = True
+                            existente.save(update_fields=['producto_padre', 'tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                            reutilizadas.append(existente)
+                            logger.info(
+                                "vincular_tienda_nube: variante TN %s reutiliza producto local existente %s (talle=%r) en vez de crear uno nuevo — %s",
+                                v.get('id'), existente.id, talle_variante, log_ctx,
+                            )
+                        else:
+                            nuevas.append(Producto.objects.create(
+                                tienda=tienda,
+                                nombre=producto.nombre,
+                                producto_padre=producto,
+                                talle=talle_variante,
+                                variante2=variante2_variante,
+                                precio=producto.precio,
+                                costo=producto.costo,
+                                iva_porcentaje=producto.iva_porcentaje,
+                                rubro=producto.rubro,
+                                codigo_barras=_generar_codigo_barras_unico(tienda),
+                                stock=0,
+                                tn_product_id=tn_product_id,
+                                tn_variant_id=str(v.get('id')),
+                                tn_sincronizado=True,
+                            ))
+            except Exception as e:
+                logger.error(
+                    "vincular_tienda_nube: error creando familia local para producto TN %s: %s — %s",
+                    tn_product_id, e, log_ctx, exc_info=True,
+                )
+                return Response(
+                    {'error': f'No se pudo vincular: {e}'},
+                    status=400,
+                )
 
             logger.info(
-                "vincular_tienda_nube: familia local creada (padre=%s, %s variantes) — %s",
-                producto.id, len(nuevas), log_ctx,
+                "vincular_tienda_nube: familia local creada (padre=%s, %s nuevas, %s reutilizadas) — %s",
+                producto.id, len(nuevas), len(reutilizadas), log_ctx,
             )
+            partes_mensaje = [
+                f'"{producto.nombre}" se convirtió en una familia vinculada a "{nombre_tn}" en Tienda Nube.'
+            ]
+            if nuevas:
+                partes_mensaje.append(
+                    f'Se crearon {len(nuevas)} variante(s) nueva(s) con stock en 0 — hace falta '
+                    f'cargarlo a mano según lo que tengas físicamente de cada una.'
+                )
+            if reutilizadas:
+                partes_mensaje.append(
+                    f'{len(reutilizadas)} variante(s) ya existían como producto local suelto y se '
+                    f'reutilizaron tal cual (conservan su stock actual).'
+                )
             return Response({
-                'mensaje': (
-                    f'"{producto.nombre}" se convirtió en una familia de {len(nuevas)} variante(s) '
-                    f'vinculada(s) a "{nombre_tn}" en Tienda Nube. El stock de cada variante quedó '
-                    f'en 0 — hace falta cargarlo a mano según lo que tengas físicamente de cada una.'
-                ),
+                'mensaje': ' '.join(partes_mensaje),
                 'familia_creada': True,
                 'padre_id': str(producto.id),
                 'variantes_creadas': len(nuevas),
+                'variantes_reutilizadas': len(reutilizadas),
             })
 
         variante_elegida = None
