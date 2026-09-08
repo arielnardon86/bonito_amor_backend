@@ -440,16 +440,27 @@ class ArancelMercadoLibreCreateSerializer(serializers.ModelSerializer):
 # SERIALIZER: Arancel Mercado Libre por Producto (costo de envío fijo + impuestos %)
 class ArancelMercadoLibreProductoSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    # Un producto con variantes de ML es en realidad varias publicaciones (varios
+    # Producto locales, uno por ml_item_id) agrupadas bajo un mismo nombre -- sin
+    # esto, el desplegable/tabla del frontend no puede distinguir cuál es cuál.
+    producto_talle = serializers.CharField(source='producto.talle', read_only=True, allow_null=True)
+    producto_variante2 = serializers.CharField(source='producto.variante2', read_only=True, allow_null=True)
+    producto_ml_item_id = serializers.CharField(source='producto.ml_item_id', read_only=True, allow_null=True)
+    producto_es_padre = serializers.SerializerMethodField()
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
 
     class Meta:
         model = ArancelMercadoLibreProducto
         fields = [
             'id', 'tienda', 'tienda_nombre', 'producto', 'producto_nombre',
+            'producto_talle', 'producto_variante2', 'producto_ml_item_id', 'producto_es_padre',
             'costo_envio', 'impuestos_porcentaje',
             'fecha_creacion', 'fecha_actualizacion',
         ]
         read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+    def get_producto_es_padre(self, obj):
+        return obj.producto.producto_padre_id is None and obj.producto.variantes.exists()
 
 class ArancelMercadoLibreProductoCreateSerializer(serializers.ModelSerializer):
     tienda = serializers.SlugRelatedField(slug_field='nombre', queryset=Tienda.objects.all(), required=True, write_only=True)

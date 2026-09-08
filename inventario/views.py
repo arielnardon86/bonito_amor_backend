@@ -65,6 +65,31 @@ def _detalle_variante(producto):
     return f' ({", ".join(partes)})' if partes else ''
 
 
+def _buscar_arancel_ml_producto(tienda, producto):
+    """
+    Busca el ArancelMercadoLibreProducto (costo de envío + impuestos) configurado
+    para `producto`, con fallback a toda su familia de variantes (padre y
+    hermanos) si ese Producto puntual no tiene uno propio.
+
+    Cada variante/talle de un producto de Mercado Libre con catálogo es en
+    realidad una publicación (ml_item_id) y por lo tanto un Producto local
+    DISTINTO (ver create_producto_from_ml_item) -- si el vendedor configuró el
+    arancel sobre una sola de esas publicaciones (lo más común: el costo de
+    envío real no cambia según el talle/color vendido), sin este fallback las
+    ventas de las demás publicaciones de la misma familia quedaban siempre en
+    $0 de envío/impuestos aunque el vendedor sí lo hubiera cargado.
+    """
+    from .models import ArancelMercadoLibreProducto as _ArancelML
+    arancel = _ArancelML.objects.filter(tienda=tienda, producto=producto).first()
+    if arancel:
+        return arancel, False
+    padre_id = producto.producto_padre_id or producto.id
+    arancel = _ArancelML.objects.filter(tienda=tienda).filter(
+        Q(producto_id=padre_id) | Q(producto__producto_padre_id=padre_id)
+    ).exclude(producto_id=producto.id).first()
+    return arancel, arancel is not None
+
+
 def _clonar_producto_a_tienda(producto, tienda, producto_padre, stock):
     """Crea en `tienda` un producto equivalente a `producto` (mismo nombre/talle/precio/etc),
     usado cuando una transferencia de stock no encuentra un producto ya existente en destino."""
@@ -3433,17 +3458,15 @@ class TiendaViewSet(viewsets.ModelViewSet):
                                         costo_envio_item = Decimal('0.00')
                                         if ArancelMercadoLibreProducto is not None:
                                             try:
-                                                arancel_ml = ArancelMercadoLibreProducto.objects.filter(
-                                                    tienda=tienda,
-                                                    producto=producto
-                                                ).first()
+                                                arancel_ml, via_familia = _buscar_arancel_ml_producto(tienda, producto)
                                                 if arancel_ml:
                                                     impuestos_pct = arancel_ml.impuestos_porcentaje or Decimal('0')
                                                     arancel_item = subtotal_item * (impuestos_pct / Decimal('100'))
                                                     total_arancel += arancel_item
                                                     costo_envio_item = (arancel_ml.costo_envio or Decimal('0')) * quantity
                                                     total_costo_envio += costo_envio_item
-                                                    logger.info(f"Impuestos {impuestos_pct}% (${arancel_item}) + envío ${costo_envio_item} para {producto.nombre}")
+                                                    origen = f"heredado de \"{arancel_ml.producto.nombre}\" (misma familia)" if via_familia else "propio"
+                                                    logger.info(f"Impuestos {impuestos_pct}% (${arancel_item}) + envío ${costo_envio_item} para {producto.nombre} [{origen}]")
                                             except Exception as e:
                                                 logger.error(f"Error al calcular arancel/envío para producto {producto.nombre}: {e}")
                                         
