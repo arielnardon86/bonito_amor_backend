@@ -117,6 +117,49 @@ def _clonar_producto_a_tienda(producto, tienda, producto_padre, stock):
     )
 
 
+def _buscar_padre_destino_transferencia(producto_origen, tienda_destino):
+    """Busca (sin crear nada) el producto padre ya existente en tienda_destino que
+    agruparía a producto_origen si se transfiriera. None si no existe todavía."""
+    padre_origen = producto_origen.producto_padre
+    return Producto.objects.filter(
+        tienda=tienda_destino, producto_padre__isnull=True, nombre__iexact=padre_origen.nombre,
+    ).first()
+
+
+def _buscar_match_transferencia(producto_origen, tienda_destino, padre_destino=None):
+    """Busca (sin crear ni modificar nada) el producto ya existente en tienda_destino
+    que sería el destino de transferir producto_origen -- mismo criterio de matching
+    que usa _transferir_unidad (codigo_barras, o nombre+talle/variante2). Devuelve None
+    si no hay match (la transferencia crearía un producto nuevo)."""
+    if producto_origen.producto_padre_id:
+        if padre_destino is None:
+            padre_destino = _buscar_padre_destino_transferencia(producto_origen, tienda_destino)
+        if padre_destino is None:
+            return None
+        match = None
+        if producto_origen.codigo_barras:
+            match = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre=padre_destino, codigo_barras=producto_origen.codigo_barras,
+            ).first()
+        if match is None:
+            match = Producto.objects.filter(
+                tienda=tienda_destino, producto_padre=padre_destino,
+                talle=producto_origen.talle, variante2=producto_origen.variante2,
+            ).first()
+        return match
+
+    match = None
+    if producto_origen.codigo_barras:
+        match = Producto.objects.filter(tienda=tienda_destino, codigo_barras=producto_origen.codigo_barras).first()
+    if match is None:
+        match = Producto.objects.filter(
+            tienda=tienda_destino, producto_padre__isnull=True,
+            nombre__iexact=producto_origen.nombre,
+            talle=producto_origen.talle, variante2=producto_origen.variante2,
+        ).first()
+    return match
+
+
 def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_cache=None):
     """Resta `cantidad` de producto_origen.stock y la suma en el producto equivalente de
     `tienda_destino` (matcheando por codigo_barras o nombre+talle), creándolo si no existe.
@@ -129,9 +172,7 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
         padre_origen = producto_origen.producto_padre
         padre_destino = padre_destino_cache.get(padre_origen.id)
         if padre_destino is None:
-            padre_destino = Producto.objects.filter(
-                tienda=tienda_destino, producto_padre__isnull=True, nombre__iexact=padre_origen.nombre,
-            ).first()
+            padre_destino = _buscar_padre_destino_transferencia(producto_origen, tienda_destino)
             if padre_destino is None:
                 padre_destino = _clonar_producto_a_tienda(padre_origen, tienda_destino, None, 0)
             padre_destino_cache[padre_origen.id] = padre_destino
@@ -157,16 +198,7 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
             if not ya_existe:
                 _clonar_producto_a_tienda(hermana, tienda_destino, padre_destino, 0)
 
-        variante_destino = None
-        if producto_origen.codigo_barras:
-            variante_destino = Producto.objects.filter(
-                tienda=tienda_destino, producto_padre=padre_destino, codigo_barras=producto_origen.codigo_barras,
-            ).first()
-        if variante_destino is None:
-            variante_destino = Producto.objects.filter(
-                tienda=tienda_destino, producto_padre=padre_destino,
-                talle=producto_origen.talle, variante2=producto_origen.variante2,
-            ).first()
+        variante_destino = _buscar_match_transferencia(producto_origen, tienda_destino, padre_destino=padre_destino)
 
         if variante_destino:
             variante_destino.stock = (variante_destino.stock or 0) + cantidad
@@ -177,15 +209,7 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
             creado = True
         producto_destino = variante_destino
     else:
-        match = None
-        if producto_origen.codigo_barras:
-            match = Producto.objects.filter(tienda=tienda_destino, codigo_barras=producto_origen.codigo_barras).first()
-        if match is None:
-            match = Producto.objects.filter(
-                tienda=tienda_destino, producto_padre__isnull=True,
-                nombre__iexact=producto_origen.nombre,
-                talle=producto_origen.talle, variante2=producto_origen.variante2,
-            ).first()
+        match = _buscar_match_transferencia(producto_origen, tienda_destino)
         if match:
             match.stock = (match.stock or 0) + cantidad
             match.save(update_fields=['stock'])
@@ -198,6 +222,10 @@ def _transferir_unidad(producto_origen, tienda_destino, cantidad, padre_destino_
     producto_origen.stock = (producto_origen.stock or 0) - cantidad
     producto_origen.save(update_fields=['stock'])
     return producto_destino, creado
+
+
+def _tienda_conectada_tn(tienda):
+    return bool(tienda.tn_access_token and tienda.tn_store_id and tienda.tn_sync_habilitado)
 
 
 try:
@@ -1540,7 +1568,14 @@ class ProductoViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='transferir-stock')
     def transferir_stock(self, request, pk=None):
         """Transfiere stock de este producto (o variante) hacia el mismo producto en otra
-        tienda a la que el usuario tenga acceso, creándolo en destino si no existe."""
+        tienda a la que el usuario tenga acceso, creándolo en destino si no existe.
+
+        Si origen y/o destino están vinculados a Tienda Nube y el body no trae
+        'sincronizar_tn', no transfiere nada todavía: devuelve
+        {requiere_confirmacion_tn: true, ...} para que el frontend le pregunte al
+        usuario si también quiere reflejar el cambio de stock en TN, y vuelva a
+        llamar con 'sincronizar_tn': true/false ya decidido.
+        """
         user = request.user
         if not (user.is_superuser or user.is_supervisor):
             return Response({'error': 'No tenés permiso para transferir stock.'}, status=403)
@@ -1562,6 +1597,17 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if tienda_destino.pk == producto_origen.tienda_id:
             return Response({'error': 'La tienda destino debe ser distinta de la tienda de origen.'}, status=400)
 
+        sincronizar_tn = request.data.get('sincronizar_tn')
+        match_destino = _buscar_match_transferencia(producto_origen, tienda_destino)
+        origen_vinculado = bool(producto_origen.tn_variant_id) and _tienda_conectada_tn(producto_origen.tienda)
+        destino_vinculado = bool(match_destino and match_destino.tn_variant_id) and _tienda_conectada_tn(tienda_destino)
+        if (origen_vinculado or destino_vinculado) and sincronizar_tn is None:
+            return Response({
+                'requiere_confirmacion_tn': True,
+                'origen_vinculado': origen_vinculado,
+                'destino_vinculado': destino_vinculado,
+            })
+
         with transaction.atomic():
             producto_destino, creado = _transferir_unidad(producto_origen, tienda_destino, cantidad)
             talle_str = _detalle_variante(producto_origen)
@@ -1575,6 +1621,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 detalle=f'Transferencia +{cantidad} · {producto_destino.nombre}{talle_str} · desde {producto_origen.tienda.nombre}',
                 objeto_id=producto_destino.id,
             )
+
+        if sincronizar_tn is not False:
+            from .services.tiendanube_service import sincronizar_stock_producto
+            sincronizar_stock_producto(producto_origen)
+            sincronizar_stock_producto(producto_destino)
 
         serializer = self.get_serializer(producto_origen)
         data = dict(serializer.data)
@@ -1628,10 +1679,37 @@ class ProductoViewSet(viewsets.ModelViewSet):
             cantidades[vid] = cantidad
             total += cantidad
 
+        sincronizar_tn = request.data.get('sincronizar_tn')
+        origen_conectada = _tienda_conectada_tn(padre.tienda)
+        destino_conectada = _tienda_conectada_tn(tienda_destino)
+        origen_vinculado = False
+        destino_vinculado = False
+        if origen_conectada or destino_conectada:
+            for vid in cantidades:
+                variante = variantes_por_id[vid]
+                if origen_conectada and variante.tn_variant_id:
+                    origen_vinculado = True
+                if destino_conectada:
+                    match = _buscar_match_transferencia(variante, tienda_destino)
+                    if match and match.tn_variant_id:
+                        destino_vinculado = True
+                if origen_vinculado and destino_vinculado:
+                    break
+        if (origen_vinculado or destino_vinculado) and sincronizar_tn is None:
+            return Response({
+                'requiere_confirmacion_tn': True,
+                'origen_vinculado': origen_vinculado,
+                'destino_vinculado': destino_vinculado,
+            })
+
         with transaction.atomic():
             cache = {}
+            productos_destino = []
             for vid, cantidad in cantidades.items():
-                _transferir_unidad(variantes_por_id[vid], tienda_destino, cantidad, padre_destino_cache=cache)
+                producto_destino, _creado = _transferir_unidad(
+                    variantes_por_id[vid], tienda_destino, cantidad, padre_destino_cache=cache,
+                )
+                productos_destino.append(producto_destino)
 
             _registrar_accion(
                 tienda=padre.tienda, usuario=user, accion='transferencia_stock',
@@ -1643,6 +1721,13 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 detalle=f'Transferencia de lote +{total} · {len(cantidades)} variante(s) de "{padre.nombre}" · desde {padre.tienda.nombre}',
                 objeto_id=padre.id,
             )
+
+        if sincronizar_tn is not False:
+            from .services.tiendanube_service import sincronizar_stock_producto
+            for vid in cantidades:
+                sincronizar_stock_producto(variantes_por_id[vid])
+            for producto_destino in productos_destino:
+                sincronizar_stock_producto(producto_destino)
 
         serializer = self.get_serializer(padre)
         data = dict(serializer.data)
