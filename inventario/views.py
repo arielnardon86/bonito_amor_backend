@@ -4266,28 +4266,60 @@ class TiendaViewSet(viewsets.ModelViewSet):
                         ]
 
                         if variantes_pendientes:
-                            # Producto con variantes: crear un solo TN product con todas las variantes
-                            variantes_data = [
-                                {
-                                    'precio': v.precio,
-                                    'stock': v.stock,
-                                    'sku': v.codigo_barras or None,
-                                    'talle': v.talle or None,
-                                    'variante2': v.variante2 or None,
-                                }
-                                for v in variantes_pendientes
-                            ]
-                            tn_product_id, tn_variants = tn.create_product_with_variants(
-                                nombre=prod.nombre,
-                                variantes=variantes_data,
+                            # Si la familia ya tiene alguna variante publicada en TN (caso
+                            # típico: se agrega un color/talle nuevo después de la
+                            # publicación inicial), hay que sumar la variante nueva al
+                            # producto de TN YA EXISTENTE -- crear un producto de nuevo
+                            # dejaría la familia partida en dos fichas distintas de TN.
+                            variante_ya_publicada = next(
+                                (v for v in prod.variantes.all() if v.tn_product_id), None
                             )
-                            for i, variante in enumerate(variantes_pendientes):
-                                if i < len(tn_variants):
-                                    variante.tn_product_id   = tn_product_id
-                                    variante.tn_variant_id   = str(tn_variants[i]['id'])
-                                    variante.tn_sincronizado = True
-                                    variante.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
-                                    publicados += 1
+                            if variante_ya_publicada:
+                                tn_product_id = variante_ya_publicada.tn_product_id
+                                for variante in variantes_pendientes:
+                                    try:
+                                        tn_variant_id = tn.add_variant(
+                                            tn_product_id=tn_product_id,
+                                            precio=variante.precio,
+                                            stock=variante.stock,
+                                            sku=variante.codigo_barras or None,
+                                            talle=variante.talle or None,
+                                            variante2=variante.variante2 or None,
+                                        )
+                                        variante.tn_product_id   = tn_product_id
+                                        variante.tn_variant_id   = tn_variant_id
+                                        variante.tn_sincronizado = True
+                                        variante.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                                        publicados += 1
+                                    except Exception as e:
+                                        logger.error(
+                                            "Error agregando variante %s al producto TN %s existente: %s",
+                                            variante.nombre, tn_product_id, e,
+                                        )
+                                        errores += 1
+                            else:
+                                # Producto con variantes: crear un solo TN product con todas las variantes
+                                variantes_data = [
+                                    {
+                                        'precio': v.precio,
+                                        'stock': v.stock,
+                                        'sku': v.codigo_barras or None,
+                                        'talle': v.talle or None,
+                                        'variante2': v.variante2 or None,
+                                    }
+                                    for v in variantes_pendientes
+                                ]
+                                tn_product_id, tn_variants = tn.create_product_with_variants(
+                                    nombre=prod.nombre,
+                                    variantes=variantes_data,
+                                )
+                                for i, variante in enumerate(variantes_pendientes):
+                                    if i < len(tn_variants):
+                                        variante.tn_product_id   = tn_product_id
+                                        variante.tn_variant_id   = str(tn_variants[i]['id'])
+                                        variante.tn_sincronizado = True
+                                        variante.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                                        publicados += 1
                             padres_vistos.add(prod.id)
                         else:
                             # Producto standalone sin variantes
