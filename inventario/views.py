@@ -3990,7 +3990,9 @@ class TiendaViewSet(viewsets.ModelViewSet):
         """
         Endpoint público que recibe notificaciones de Tienda Nube.
         GET  → validación de existencia (devuelve 200).
-        POST → procesa el evento order/paid.
+        POST → valida y encola el evento order/paid; el procesamiento pesado
+               (traer la orden, crear la venta, facturar, notificar) corre en
+               background para responder dentro del timeout de TN (~3s).
         """
         if request.method == 'GET':
             return Response({'status': 'ok'})
@@ -4028,48 +4030,60 @@ class TiendaViewSet(viewsets.ModelViewSet):
             logger.info("Orden TN %s ya procesada para tienda %s", order_id, tienda.nombre)
             return Response({'status': 'already_processed'}, status=200)
 
-        try:
-            tn = TiendaNubeService(tienda)
-            order = tn.get_order(order_id)
-        except Exception as e:
-            logger.error("Error obteniendo orden TN %s: %s", order_id, e)
-            return Response({'status': 'error', 'detail': str(e)}, status=200)
+        tienda_id = tienda.id
 
-        # Temporal: para diseñar "Aranceles Tienda Nube" necesitamos ver qué manda
-        # TN sobre el método de pago real usado -- gateway/gateway_name son los
-        # únicos campos que el código lee hoy, pero la API de TN documenta también
-        # payment_details (método + cuotas) que nunca se inspeccionó. Sacar este log
-        # una vez confirmada la estructura real (no dejarlo para siempre).
-        logger.info(
-            "TN orden %s — gateway=%s gateway_name=%s payment_details=%s status=%s payment_status=%s",
-            order_id, order.get('gateway'), order.get('gateway_name'),
-            order.get('payment_details'), order.get('status'), order.get('payment_status'),
-        )
-
-        try:
-            venta = _procesar_orden_tiendanube(tienda, order, order_id)
-        except Exception as e:
-            logger.error("Error procesando orden TN %s: %s", order_id, e, exc_info=True)
-            return Response({'status': 'error', 'detail': str(e)}, status=200)
-
-        # ── Facturación automática ────────────────────────────────────────
-        if tienda.tn_facturar_ventas:
+        def _procesar():
+            from django.db import connection as db_conn
             try:
-                from .services.facturacion_service import FacturacionService
-                fs = FacturacionService(tienda)
-                cliente_data = _cliente_data_desde_orden_tn(order, venta)
-                fs.emitir_factura(venta, cliente_data)
+                t = Tienda.objects.get(id=tienda_id)
+
+                # Re-chequear dedup: pudo haber llegado un reintento de TN
+                # mientras el hilo anterior todavía estaba procesando.
+                if Venta.objects.filter(tienda=t, tn_order_id=order_id).exists():
+                    logger.info("Orden TN %s ya procesada para tienda %s (dedup en hilo)", order_id, t.nombre)
+                    return
+
+                tn = TiendaNubeService(t)
+                order = tn.get_order(order_id)
+
+                # Temporal: para diseñar "Aranceles Tienda Nube" necesitamos ver qué manda
+                # TN sobre el método de pago real usado -- gateway/gateway_name son los
+                # únicos campos que el código lee hoy, pero la API de TN documenta también
+                # payment_details (método + cuotas) que nunca se inspeccionó. Sacar este log
+                # una vez confirmada la estructura real (no dejarlo para siempre).
+                logger.info(
+                    "TN orden %s — gateway=%s gateway_name=%s payment_details=%s status=%s payment_status=%s",
+                    order_id, order.get('gateway'), order.get('gateway_name'),
+                    order.get('payment_details'), order.get('status'), order.get('payment_status'),
+                )
+
+                venta = _procesar_orden_tiendanube(t, order, order_id)
+
+                # ── Facturación automática ────────────────────────────────
+                if t.tn_facturar_ventas:
+                    try:
+                        from .services.facturacion_service import FacturacionService
+                        fs = FacturacionService(t)
+                        cliente_data = _cliente_data_desde_orden_tn(order, venta)
+                        fs.emitir_factura(venta, cliente_data)
+                    except Exception as e:
+                        logger.warning("Error al facturar venta TN %s: %s", venta.id, e)
+
+                # ── Notificación push ─────────────────────────────────────
+                try:
+                    from .services.notificaciones_service import NotificacionesService
+                    NotificacionesService.enviar_notificacion_venta(venta)
+                except Exception as e:
+                    logger.warning("Error enviando notificación push venta TN: %s", e)
+
             except Exception as e:
-                logger.warning("Error al facturar venta TN %s: %s", venta.id, e)
+                logger.error("Error procesando orden TN %s (tienda=%s): %s", order_id, tienda_id, e, exc_info=True)
+            finally:
+                db_conn.close()
 
-        # ── Notificación push ─────────────────────────────────────────────
-        try:
-            from .services.notificaciones_service import NotificacionesService
-            NotificacionesService.enviar_notificacion_venta(venta)
-        except Exception as e:
-            logger.warning("Error enviando notificación push venta TN: %s", e)
+        threading.Thread(target=_procesar, daemon=True).start()
 
-        return Response({'status': 'ok', 'venta_id': str(venta.id)}, status=200)
+        return Response({'status': 'ok'}, status=200)
 
     # ── Exportar (publicar) productos de Total Stock → Tienda Nube ───────────
 
