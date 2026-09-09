@@ -517,6 +517,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     detalle=f'Ajuste -{diff} · {instancia.nombre}{talle_str} · stock anterior: {stock_anterior} → nuevo: {nuevo_stock}',
                     objeto_id=instancia.id,
                 )
+            from .services.tiendanube_service import sincronizar_stock_producto
+            sincronizar_stock_producto(instancia)
         else:
             serializer.save()
 
@@ -995,6 +997,23 @@ class ProductoViewSet(viewsets.ModelViewSet):
                         batch_size=500,
                     )
                     actualizados = len(productos_a_actualizar)
+
+                    # bulk_update no dispara ninguna sincronización: los productos
+                    # repuestos que ya están vinculados a Tienda Nube quedarían con
+                    # stock desactualizado ahí. Se empuja en background (uno por uno,
+                    # la API de TN no tiene un endpoint de stock masivo) para no
+                    # frenar la respuesta de la carga masiva con archivos grandes.
+                    vinculados_tn = [p for p in productos_a_actualizar if p.tn_variant_id]
+                    if vinculados_tn:
+                        def _sincronizar_stock_tn_lote(productos=vinculados_tn):
+                            from django.db import connection as db_conn
+                            from .services.tiendanube_service import sincronizar_stock_producto
+                            try:
+                                for p in productos:
+                                    sincronizar_stock_producto(p)
+                            finally:
+                                db_conn.close()
+                        threading.Thread(target=_sincronizar_stock_tn_lote, daemon=True).start()
                 except Exception as e:
                     logger.error(
                         "Carga masiva: bulk_update falló para %s reposición(es) en tienda %s: %s",
