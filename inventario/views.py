@@ -1303,6 +1303,52 @@ class ProductoViewSet(viewsets.ModelViewSet):
         producto.save(update_fields=['producto_padre'])
         return Response({'mensaje': f'"{producto.nombre}" ahora es un producto independiente.'})
 
+    @action(detail=True, methods=['post'], url_path='mover-variante')
+    def mover_variante(self, request, pk=None):
+        """
+        Mueve esta variante un lugar hacia arriba o abajo dentro del orden de
+        variantes de su familia (campo Producto.orden). Body: { "direccion": "arriba"
+        | "abajo" }. Recalcula el orden de TODA la familia a partir del orden actual
+        de pantalla antes de mover -- así se "autocorrige" la primera vez que se usa,
+        aunque todas las variantes todavía tengan el orden default (0).
+        """
+        if self.request.user.is_supervisor and not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Los supervisores no pueden reordenar variantes.")
+
+        variante = self.get_object()
+        if not variante.producto_padre_id:
+            return Response({'error': 'Este producto no es una variante.'}, status=400)
+
+        direccion = request.data.get('direccion')
+        if direccion not in ('arriba', 'abajo'):
+            return Response({'error': "direccion debe ser 'arriba' o 'abajo'."}, status=400)
+
+        hermanas = list(
+            Producto.objects.filter(producto_padre_id=variante.producto_padre_id)
+            .order_by('orden', 'talle', 'variante2', 'id')
+        )
+        idx = next((i for i, v in enumerate(hermanas) if v.id == variante.id), None)
+        if idx is None:
+            return Response({'error': 'Variante no encontrada en la familia.'}, status=404)
+
+        idx_destino = idx - 1 if direccion == 'arriba' else idx + 1
+        sin_cambios = idx_destino < 0 or idx_destino >= len(hermanas)
+        if not sin_cambios:
+            hermanas[idx], hermanas[idx_destino] = hermanas[idx_destino], hermanas[idx]
+
+        # Se persiste el orden completo (0..n-1) incluso cuando ya está en el extremo
+        # y no hay nada para swapear: así el orden mostrado en pantalla queda "fijado"
+        # desde el primer toque, en vez de depender de la resolución de empates que
+        # haga la base cada vez que todas las variantes todavía comparten orden=0.
+        for i, v in enumerate(hermanas):
+            v.orden = i
+        Producto.objects.bulk_update(hermanas, ['orden'])
+
+        if sin_cambios:
+            return Response({'mensaje': 'Ya está en el extremo.', 'sin_cambios': True})
+        return Response({'mensaje': 'Orden actualizado.'})
+
     @action(detail=True, methods=['post'], url_path='vincular-tienda-nube')
     def vincular_tienda_nube(self, request, pk=None):
         """

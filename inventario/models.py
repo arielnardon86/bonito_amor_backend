@@ -334,6 +334,11 @@ class Producto(models.Model):
         related_name='variantes',
         help_text="Producto padre del que esta variante forma parte"
     )
+    # Posición manual dentro de la familia de variantes (menor = primero). Sin esto,
+    # el orden entre variantes con el mismo nombre (todas comparten Meta.ordering)
+    # quedaba librado al orden físico de la tabla -- no reflejaba ningún criterio y
+    # se veía "desordenado" en Gestión de Productos (ver mover_variante en views.py).
+    orden = models.PositiveIntegerField(default=0)
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='productos')
     codigo_barras = models.CharField(max_length=100, blank=True, null=True)
@@ -409,7 +414,7 @@ class Producto(models.Model):
         verbose_name = "Producto"
         verbose_name_plural = "Productos"
         unique_together = [('nombre', 'tienda', 'talle', 'variante2'), ('codigo_barras', 'tienda'), ('codigo_interno', 'tienda')]
-        ordering = ['nombre']
+        ordering = ['nombre', 'orden']
         indexes = [
             models.Index(fields=['tienda'], name='producto_tienda_idx'),
             # Acelera el listado paginado de Punto de Venta / Productos, que siempre

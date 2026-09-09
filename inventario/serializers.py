@@ -25,7 +25,7 @@ class VarianteSimpleSerializer(serializers.ModelSerializer):
         model = Producto
         fields = ['id', 'nombre', 'talle', 'variante2', 'precio', 'costo', 'stock', 'codigo_barras', 'codigo_interno',
                   'imagen', 'tn_product_id', 'tn_variant_id', 'tn_sincronizado', 'ml_stock_full',
-                  'stock_ultimo_ingreso', 'fecha_ultimo_ingreso']
+                  'stock_ultimo_ingreso', 'fecha_ultimo_ingreso', 'orden']
 
 
 class ProductoSerializer(serializers.ModelSerializer):
