@@ -320,6 +320,12 @@ class Producto(models.Model):
     # en el Punto de Venta se carga el peso en gramos en vez de una cantidad de
     # unidades. Ver VentaCreateSerializer para el cálculo de precio/costo por gramo.
     se_vende_por_peso = models.BooleanField(default=False)
+    # Producto "Varios": no lleva control de stock (como se_vende_por_peso) pero la
+    # cantidad se sigue cargando en unidades -- lo que cambia es que el precio no
+    # sale del catálogo sino que se carga a mano en cada línea del Punto de Venta
+    # (ej. un producto sin código propio, cobrado con un código rápido como "00").
+    # Ver VentaCreateSerializer, que no valida/descuenta stock para estos productos.
+    precio_variable = models.BooleanField(default=False)
     talle = models.CharField(max_length=50, blank=True, null=True)
     # Segundo eje de variante, opcional (ej. color, material) — talle es el
     # primer eje genérico, este es un segundo eje igual de genérico para

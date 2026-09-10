@@ -133,6 +133,14 @@ class ProductoSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'se_vende_por_peso': 'Un producto por peso no puede ser variante de otro producto.'}
             )
+        if attrs.get('precio_variable') and attrs.get('producto_padre'):
+            raise serializers.ValidationError(
+                {'precio_variable': 'Un producto de precio variable no puede ser variante de otro producto.'}
+            )
+        if attrs.get('precio_variable') and attrs.get('se_vende_por_peso'):
+            raise serializers.ValidationError(
+                {'precio_variable': 'Un producto no puede ser "por peso" y de "precio variable" a la vez.'}
+            )
         imagen = attrs.get('imagen')
         if imagen and len(imagen) > 700_000:  # ~500KB decodificado, de sobra para una foto ya redimensionada chica
             raise serializers.ValidationError(
@@ -789,6 +797,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
                 precio_unitario = (producto_obj.precio / Decimal('1000')).quantize(Decimal('0.01'))
                 detalle_data['precio_unitario'] = precio_unitario
                 costo_unitario = (producto_obj.costo / Decimal('1000')).quantize(Decimal('0.01')) if producto_obj.costo else None
+            elif producto_obj.precio_variable:
+                # "Varios": sin control de stock, y el precio ya viene cargado a mano
+                # desde el Punto de Venta en precio_unitario -- no se pisa acá.
+                costo_unitario = producto_obj.costo
             else:
                 # Si la venta viene de un cambio/devolución, el stock ya se validó y restó,
                 # así que no validamos stock aquí para evitar errores
@@ -1051,8 +1063,8 @@ class VentaCreateSerializer(serializers.ModelSerializer):
 
             # NO restar stock si la venta viene de un cambio/devolución
             # porque el stock ya se restó cuando se procesó el cambio/devolución.
-            # Tampoco si el producto se vende por peso: no lleva stock.
-            if not cambio_devolucion_id and not producto_obj.se_vende_por_peso:
+            # Tampoco si el producto se vende por peso o es de precio variable: no llevan stock.
+            if not cambio_devolucion_id and not producto_obj.se_vende_por_peso and not producto_obj.precio_variable:
                 producto_obj.stock -= cantidad
                 producto_obj.save()
                 from .services.tiendanube_service import sincronizar_stock_producto
