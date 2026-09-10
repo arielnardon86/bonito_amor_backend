@@ -757,7 +757,20 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"tienda_slug": "Tienda no encontrada."})
 
         data['tienda'] = tienda_obj
-        
+
+        # Cierre de caja obligatorio: si el usuario lo tiene activado, no puede
+        # procesar ventas sin una caja propia abierta. Antes esto solo se avisaba
+        # en el frontend (y ni siquiera ahí, para supervisores/superusers) -- acá
+        # queda validado server-side para cualquier usuario, sin excepción de rol.
+        request = self.context.get('request')
+        usuario = getattr(request, 'user', None)
+        if usuario is not None and getattr(usuario, 'cierre_caja_habilitado', False):
+            tiene_caja_abierta = CierreCaja.objects.filter(usuario=usuario, estado='ABIERTO').exists()
+            if not tiene_caja_abierta:
+                raise serializers.ValidationError(
+                    "Tenés el cierre de caja obligatorio activado: abrí tu caja antes de procesar ventas."
+                )
+
         calculated_subtotal = Decimal('0.00')
         for detalle_data in detalles_data:
             producto_id = detalle_data.get('producto')
