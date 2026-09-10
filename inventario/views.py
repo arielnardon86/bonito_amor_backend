@@ -733,6 +733,16 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
             codigo_interno = producto.codigo_interno or _generar_codigo_interno_unico(producto)
 
+            # % sobre costo con IVA (markup) -- mismo criterio que editar_masivo/carga_masiva
+            # y que la columna "Margen" de Gestión de Productos: precio = costo_con_iva * (1+%).
+            margen_porcentaje = ''
+            if producto.costo is not None and producto.precio is not None:
+                iva_pct = producto.iva_porcentaje or Decimal('0')
+                costo_con_iva = producto.costo * (Decimal('1') + iva_pct / Decimal('100'))
+                if costo_con_iva > 0:
+                    margen = (producto.precio - costo_con_iva) / costo_con_iva * Decimal('100')
+                    margen_porcentaje = str(margen.quantize(Decimal('0.1')))
+
             filas.append({
                 'codigo_interno': codigo_interno,
                 'nombre': nombre,
@@ -740,7 +750,7 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 'iva_porcentaje': str(producto.iva_porcentaje) if producto.iva_porcentaje is not None else '',
                 'costo': str(producto.costo) if producto.costo is not None else '',
                 'precio_venta': str(producto.precio) if producto.precio is not None else '',
-                'margen_porcentaje': '',
+                'margen_porcentaje': margen_porcentaje,
                 'cantidad': producto.stock,
                 'codigo_barras': producto.codigo_barras or '',
             })
