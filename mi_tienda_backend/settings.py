@@ -355,3 +355,8 @@ EMAIL_HOST_USER   = os.environ.get('EMAIL_HOST_USER', 'info@totalstock.com.ar')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL  = f'Total Stock <{EMAIL_HOST_USER}>'
 SERVER_EMAIL        = EMAIL_HOST_USER
+
+# Casilla que recibe el aviso interno de cada alta nueva (tienda + plan elegido,
+# ver _crear_tienda_usuario_suscripcion en views.py). Por default la misma que
+# envía los mails; se puede apuntar a otra sin tocar código.
+ADMIN_NOTIFICATION_EMAIL = os.environ.get('ADMIN_NOTIFICATION_EMAIL', EMAIL_HOST_USER)

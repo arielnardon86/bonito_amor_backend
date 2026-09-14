@@ -9095,6 +9095,29 @@ def _crear_tienda_usuario_suscripcion(data):
             mp_payer_email=mp_payer_email,
         )
 
+    # Aviso interno de cada alta nueva -- a qué plan se suscribió, con qué
+    # tienda/usuario/contacto. Best-effort: un problema de SMTP no puede tirar
+    # abajo un alta que ya se guardó bien en la base.
+    try:
+        from django.core.mail import send_mail
+        send_mail(
+            subject=f'Nueva cuenta en Total Stock: "{tienda.nombre}" — plan {plan.get_nombre_display()}',
+            message=(
+                f'Se registró una tienda nueva en Total Stock.\n\n'
+                f'Tienda: {tienda.nombre}\n'
+                f'Plan: {plan.get_nombre_display()} (${plan.precio_mensual}/mes)\n'
+                f'Usuario: {username}\n'
+                f'Email de contacto: {email}\n'
+                f'CUIT/CUIL: {cuit}\n'
+                f'Teléfono: {data.get("telefono") or "-"}\n'
+            ),
+            from_email=None,  # usa DEFAULT_FROM_EMAIL
+            recipient_list=[settings.ADMIN_NOTIFICATION_EMAIL],
+            fail_silently=True,
+        )
+    except Exception as e:
+        logger.warning("No se pudo enviar el aviso de alta nueva (tienda=%s): %s", tienda.nombre, e)
+
     return tienda, user, plan
 
 
