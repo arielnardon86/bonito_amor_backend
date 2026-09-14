@@ -605,6 +605,22 @@ class ProductoViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(productos, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'], url_path='tiene-codigo-interno')
+    def tiene_codigo_interno(self, request):
+        """
+        Indica si la tienda tiene al menos un producto (o variante) con "Código
+        Interno" cargado -- ese campo solo lo completa la carga masiva por Excel, así
+        que la mayoría de las tiendas nunca lo usa. Pensado para que el Punto de Venta
+        muestre esa columna solo cuando aporta algo, sin depender de qué página o
+        filtro esté viendo el usuario en ese momento.
+        """
+        tienda_slug = request.query_params.get('tienda_slug')
+        tienda = self._resolver_tienda(tienda_slug)
+        if not tienda:
+            return Response({'error': 'Tienda no encontrada o no autorizada.'}, status=404)
+        existe = Producto.objects.filter(tienda=tienda).exclude(codigo_interno__isnull=True).exclude(codigo_interno='').exists()
+        return Response({'tiene_codigo_interno': existe})
+
     @action(detail=False, methods=['post'], url_path='editar_masivo')
     def editar_masivo(self, request):
         """
