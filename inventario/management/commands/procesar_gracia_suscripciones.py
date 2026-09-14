@@ -36,10 +36,15 @@ class Command(BaseCommand):
 
     DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
 
-    # Estados desde los que tiene sentido reconciliar: si ya está 'activa' o
-    # 'cancelada' asumimos que está al día (evita pegarle a MP por cada una en
-    # cada corrida del cron).
-    ESTADOS_A_RECONCILIAR = ('pending', 'trial', 'gracia', 'pausada')
+    # Estados desde los que tiene sentido reconciliar. 'activa' estaba afuera
+    # originalmente bajo el supuesto de "si ya está activa, está al día" -- pero
+    # ese supuesto solo cubre el caso "no llegó el webhook de PAGO" (pending/
+    # trial/gracia/pausada -> activa). No cubre el caso inverso: una tienda que
+    # YA estaba activa y el cliente cancela directo en MP -- si ese webhook de
+    # cancelación se pierde, nunca se la vuelve a chequear y queda activa acá
+    # para siempre aunque en MP figure cancelada. Solo 'cancelada' queda afuera
+    # (una vez cancelada de verdad, no hay nada más que reconciliar).
+    ESTADOS_A_RECONCILIAR = ('pending', 'trial', 'activa', 'gracia', 'pausada')
 
     def handle(self, *args, **options):
         from inventario.models import Suscripcion
@@ -153,9 +158,13 @@ class Command(BaseCommand):
             resumen = datos.get('summarized') or {}
             cobros_realizados = resumen.get('charged_quantity') or 0
 
-            if estado_mp == 'authorized' and cobros_realizados >= 1:
+            if sus.estado != 'activa' and estado_mp == 'authorized' and cobros_realizados >= 1:
                 # MP ya cobró al menos una vez pero acá seguíamos sin reflejarlo
                 # (pending/trial/gracia/pausada) → el webhook de pago se perdió.
+                # 'charged_quantity' es acumulado histórico de MP, no del ciclo
+                # actual -- por eso esta rama se salta directamente si ya estamos
+                # en 'activa': ahí no hay nada que corregir, y si se ejecutara
+                # igual pisaría fecha_proximo_cobro todos los días sin necesidad.
                 self.stdout.write(self.style.SUCCESS(
                     f"Reconciliado con MP: {sus.tienda.nombre} estaba en "
                     f"'{sus.get_estado_display()}' con {cobros_realizados} cobro(s) "
