@@ -9007,7 +9007,14 @@ def _crear_tienda_usuario_suscripcion(data):
     from .models import Plan, Suscripcion
     from django.utils import timezone
 
-    required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit', 'mp_payer_email']
+    # El plan Free nunca cobra, así que no tiene sentido pedirle el email de
+    # Mercado Pago (que solo sirve para eso) -- se libera esa fricción de más
+    # para el alta gratuita, que es justamente la que busca ser frictionless.
+    es_free = str(data.get('plan') or '').strip().lower() == 'free'
+
+    required = ['nombre_tienda', 'email', 'username', 'password', 'plan', 'cuit']
+    if not es_free:
+        required.append('mp_payer_email')
     missing = [f for f in required if not data.get(f)]
     if missing:
         raise _RegistroError(Response({'error': f'Faltan campos: {", ".join(missing)}'}, status=400))
@@ -9018,17 +9025,18 @@ def _crear_tienda_usuario_suscripcion(data):
     password        = data['password']
     plan_nombre     = data['plan'].lower()
     cuit            = data['cuit'].strip()
-    mp_payer_email  = data['mp_payer_email'].strip().lower()
+    mp_payer_email  = (data.get('mp_payer_email') or '').strip().lower() or None
     logo            = (data.get('logo') or '').strip() or None
 
     cuit_limpio = re.sub(r'[^0-9]', '', cuit)
     if len(cuit_limpio) != 11:
         raise _RegistroError(Response({'error': 'El CUIT/CUIL debe tener 11 dígitos.'}, status=400))
 
-    try:
-        validate_email(mp_payer_email)
-    except DjangoValidationError:
-        raise _RegistroError(Response({'error': 'El email de Mercado Pago no es válido.'}, status=400))
+    if mp_payer_email:
+        try:
+            validate_email(mp_payer_email)
+        except DjangoValidationError:
+            raise _RegistroError(Response({'error': 'El email de Mercado Pago no es válido.'}, status=400))
 
     if logo and len(logo) > MAX_LOGO_BASE64_CHARS:
         raise _RegistroError(Response({'error': 'El logo es demasiado pesado. Probá con una imagen más chica.'}, status=400))
