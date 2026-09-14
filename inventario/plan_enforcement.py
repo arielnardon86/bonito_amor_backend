@@ -16,6 +16,8 @@ Uso desde una view:
         return Response(detalle, status=403)
 """
 
+from django.utils import timezone
+
 from .models import Producto, User
 
 
@@ -103,6 +105,46 @@ def verificar_limite_usuarios(tienda) -> tuple[bool, dict]:
             f'Para agregar más, actualizá tu plan.'
         ),
         'planes_sugeridos': _planes_superiores(sus.plan, 'usuarios'),
+    }
+
+
+def verificar_limite_ventas_diarias(tienda) -> tuple[bool, dict]:
+    """
+    Verifica si la tienda todavía puede procesar una venta más hoy.
+    Pensado para el plan Free (10 ventas/día); el resto de los planes no tiene
+    tope (max_ventas_diarias=None).
+    """
+    from .models import Venta
+
+    sus = _get_suscripcion(tienda)
+    if _es_legacy(sus):
+        return True, {}
+
+    if sus.plan.max_ventas_diarias is None:
+        return True, {}
+
+    hoy = timezone.localdate()
+    cantidad_actual = Venta.objects.filter(
+        tienda=tienda,
+        fecha_venta__date=hoy,
+        anulada=False,
+    ).count()
+
+    if cantidad_actual < sus.plan.max_ventas_diarias:
+        return True, {}
+
+    return False, {
+        'limite': True,
+        'tipo': 'ventas_diarias',
+        'plan_actual': sus.plan.nombre,
+        'max_permitido': sus.plan.max_ventas_diarias,
+        'cantidad_actual': cantidad_actual,
+        'mensaje': (
+            f'Tu plan {sus.plan.get_nombre_display()} permite hasta '
+            f'{sus.plan.max_ventas_diarias} ventas por día, y ya las alcanzaste. '
+            f'Para seguir vendiendo hoy, actualizá tu plan.'
+        ),
+        'planes_sugeridos': _planes_superiores(sus.plan, 'ventas_diarias'),
     }
 
 
@@ -231,7 +273,12 @@ def _info_suscripcion_propia(tienda) -> dict:
 # ── Helpers internos ──────────────────────────────────────────────────────────
 
 def _planes_superiores(plan_actual, motivo: str) -> list:
-    """Devuelve los nombres de planes que superan el límite del plan actual."""
+    """
+    Devuelve los nombres de planes que superan el límite del plan actual.
+    Excluye siempre 'legacy' y 'free': ninguno de los dos es un destino de
+    upgrade real (legacy es interno, asignado a mano; free es más chico o
+    igual que cualquier plan pago, nunca "superior").
+    """
     from .models import Plan
     if motivo == 'productos':
         qs = Plan.objects.filter(max_productos__gt=plan_actual.max_productos or 0) | \
@@ -239,9 +286,13 @@ def _planes_superiores(plan_actual, motivo: str) -> list:
     elif motivo == 'usuarios':
         qs = Plan.objects.filter(max_usuarios__gt=plan_actual.max_usuarios or 0) | \
              Plan.objects.filter(max_usuarios__isnull=True)
+    elif motivo == 'ventas_diarias':
+        qs = Plan.objects.filter(max_ventas_diarias__gt=plan_actual.max_ventas_diarias or 0) | \
+             Plan.objects.filter(max_ventas_diarias__isnull=True)
     else:
         qs = Plan.objects.exclude(nombre=plan_actual.nombre)
-    return list(qs.values_list('nombre', flat=True))
+    qs = qs.exclude(nombre__in=['legacy', 'free'])
+    return list(qs.values_list('nombre', flat=True).distinct())
 
 
 def _planes_desde(plan_nombre: str) -> list:

@@ -500,6 +500,16 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return queryset.filter(tienda__pk__in=tiendas_ids).order_by('nombre')
         return Producto.objects.none()
 
+    def create(self, request, *args, **kwargs):
+        from .plan_enforcement import verificar_limite_productos
+        tienda_slug = request.data.get('tienda_slug')
+        tienda = self._resolver_tienda(tienda_slug) or request.user.tienda
+        if tienda:
+            puede, info_limite = verificar_limite_productos(tienda)
+            if not puede:
+                return Response(info_limite, status=status.HTTP_403_FORBIDDEN)
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         tienda_slug = self.request.data.get('tienda_slug')
         tienda = self._resolver_tienda(tienda_slug)
@@ -821,6 +831,37 @@ class ProductoViewSet(viewsets.ModelViewSet):
             for p in Producto.objects.filter(tienda=tienda)
             .exclude(codigo_interno__isnull=True).exclude(codigo_interno='')
         }
+
+        # Límite de productos del plan (ej. Free: 50): verificar_limite_productos()
+        # solo confirma que no esté YA al tope, pero acá puede haber decenas de
+        # productos nuevos en el mismo archivo -- se cuenta cuántas filas son
+        # altas reales (no reposición) y se rechaza el archivo entero si lo
+        # llevaría a superar el máximo, antes de crear nada.
+        if modo == 'confirmar':
+            from .models import Suscripcion as _Suscripcion
+            try:
+                sus = tienda.suscripcion
+            except _Suscripcion.DoesNotExist:
+                sus = None
+            if sus is not None and sus.plan.nombre != 'legacy' and sus.plan.max_productos is not None:
+                nuevos_en_archivo = sum(
+                    1 for fila in filas
+                    if str(fila.get('codigo_interno') or '').strip() not in productos_existentes_por_codigo
+                )
+                cantidad_actual = Producto.objects.filter(tienda=tienda, producto_padre__isnull=True).count()
+                if cantidad_actual + nuevos_en_archivo > sus.plan.max_productos:
+                    return Response({
+                        'limite': True,
+                        'tipo': 'productos',
+                        'plan_actual': sus.plan.nombre,
+                        'max_permitido': sus.plan.max_productos,
+                        'cantidad_actual': cantidad_actual,
+                        'mensaje': (
+                            f'Este archivo agregaría {nuevos_en_archivo} producto(s) nuevo(s), pero tu plan '
+                            f'{sus.plan.get_nombre_display()} permite hasta {sus.plan.max_productos} en total '
+                            f'({cantidad_actual} ya cargados). Achicá el archivo o actualizá tu plan.'
+                        ),
+                    }, status=status.HTTP_403_FORBIDDEN)
         rubros_por_nombre = {
             r.nombre.strip().lower(): r
             for r in Rubro.objects.filter(tienda=tienda)
@@ -5023,6 +5064,16 @@ class UserViewSet(viewsets.ModelViewSet):
             return UserUpdateSerializer
         return UserSerializer
 
+    def create(self, request, *args, **kwargs):
+        from .plan_enforcement import verificar_limite_usuarios
+        tienda_slug = request.data.get('tienda')
+        tienda = Tienda.objects.filter(nombre=tienda_slug).first() if tienda_slug else request.user.tienda
+        if tienda:
+            puede, info_limite = verificar_limite_usuarios(tienda)
+            if not puede:
+                return Response(info_limite, status=status.HTTP_403_FORBIDDEN)
+        return super().create(request, *args, **kwargs)
+
     def _tiendas_gestionables(self):
         """Devuelve el queryset de Tiendas que el usuario autenticado puede gestionar."""
         user = self.request.user
@@ -5142,6 +5193,17 @@ class VentaViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         from rest_framework import serializers as drf_serializers
+        from .plan_enforcement import verificar_limite_ventas_diarias
+        tienda = _resolver_tienda_por_slug(request)
+        if tienda:
+            puede, info_limite = verificar_limite_ventas_diarias(tienda)
+            if not puede:
+                # Un dict crudo (no un ValidationError de DRF): si se lanzara como
+                # serializers.ValidationError(info_limite), DRF normaliza cada valor
+                # del dict a lista de ErrorDetail (así hasta 'limite': True termina
+                # como 'limite': ['True'], perdiendo el tipo) -- acá se devuelve la
+                # respuesta directamente, con la forma intacta para el frontend.
+                return Response(info_limite, status=status.HTTP_403_FORBIDDEN)
         try:
             return super().create(request, *args, **kwargs)
         except drf_serializers.ValidationError as exc:
@@ -9011,10 +9073,16 @@ def _crear_tienda_usuario_suscripcion(data):
             is_superuser=True,
             tienda=tienda,
         )
+        # El plan Free no tiene checkout de Mercado Pago que completar (mp_plan_id
+        # vacío, ver registro_publico) -- si quedara en 'pending' como el resto de
+        # los planes, la tienda arrancaría bloqueada para siempre (estado='pending'
+        # no está en Suscripcion.esta_activa) sin ningún webhook de MP que la vaya
+        # a activar más adelante.
+        estado_inicial = 'activa' if plan.nombre == 'free' else 'pending'
         Suscripcion.objects.create(
             tienda=tienda,
             plan=plan,
-            estado='pending',
+            estado=estado_inicial,
             fecha_inicio=timezone.now(),
             mp_payer_email=mp_payer_email,
         )
@@ -10144,6 +10212,8 @@ def cambiar_plan(request):
     plan_nombre = request.data.get('plan', '').lower()
     if plan_nombre == 'legacy':
         return Response({'error': f'Plan "{plan_nombre}" no existe.'}, status=400)
+    if plan_nombre == 'free':
+        return Response({'error': 'El plan Free solo está disponible al crear una tienda nueva.'}, status=400)
     try:
         plan_nuevo = Plan.objects.get(nombre=plan_nombre)
     except Plan.DoesNotExist:

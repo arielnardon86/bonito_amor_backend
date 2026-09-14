@@ -1401,6 +1401,11 @@ class EgresoCaja(models.Model):
 
 class Plan(models.Model):
     TIER_CHOICES = [
+        # Gratuito, sin cobro (mp_plan_id vacío -- ver registro_publico, que solo
+        # arma el checkout de Mercado Pago si el plan tiene mp_plan_id cargado).
+        # Solo se ofrece en el alta pública, nunca como destino de cambiar_plan
+        # (una tienda ya paga no puede "bajarse" a Free desde el panel).
+        ('free',     'Free'),
         ('starter',  'Starter'),
         ('pro',      'Pro'),
         ('advanced', 'Advanced'),
@@ -1414,6 +1419,8 @@ class Plan(models.Model):
     # None = ilimitado
     max_productos    = models.IntegerField(null=True, blank=True)
     max_usuarios     = models.IntegerField(null=True, blank=True)
+    # None = ilimitado. Solo el plan Free lo usa hoy (ver plan_enforcement.verificar_limite_ventas_diarias).
+    max_ventas_diarias = models.IntegerField(null=True, blank=True)
     # Feature flags
     permite_factura_electronica    = models.BooleanField(default=False)
     permite_integracion_ecommerce  = models.BooleanField(default=False)  # ML + TN
