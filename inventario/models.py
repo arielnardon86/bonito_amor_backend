@@ -1465,6 +1465,12 @@ class Suscripcion(models.Model):
     # Mercado Pago
     mp_preapproval_id = models.CharField(max_length=255, blank=True, null=True)
     mp_payer_email    = models.EmailField(blank=True, null=True)
+    # True mientras MP tiene un cobro sin resolver (reintentando) sobre un
+    # preapproval que sigue 'authorized' -- a diferencia de 'gracia'/'pausada',
+    # NO le saca acceso a la tienda: solo dispara un aviso en el frontend cada
+    # vez que inicia sesión. Lo mantiene al día la reconciliación diaria contra
+    # MP (procesar_gracia_suscripciones), tanto para prenderlo como apagarlo.
+    pago_atrasado = models.BooleanField(default=False)
 
     fecha_creacion     = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

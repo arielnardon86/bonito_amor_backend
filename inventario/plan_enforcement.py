@@ -257,6 +257,10 @@ def _info_suscripcion_propia(tienda) -> dict:
         'plan_display': sus.plan.get_nombre_display(),
         'estado': 'requiere_plan' if forzar_eleccion else sus.estado,
         'esta_activa': False if forzar_eleccion else sus.esta_activa,
+        # No le saca el acceso (a diferencia de gracia/pausada): solo le avisa al
+        # usuario en el frontend que MP tiene un cobro sin resolver. Lo mantiene
+        # al día la reconciliación diaria (procesar_gracia_suscripciones).
+        'pago_atrasado': sus.pago_atrasado,
         'dias_gracia_restantes': sus.dias_gracia_restantes,
         'fecha_fin_trial': sus.fecha_fin_trial,
         'fecha_proximo_cobro': sus.fecha_proximo_cobro,

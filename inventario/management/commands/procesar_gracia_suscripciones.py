@@ -160,22 +160,32 @@ class Command(BaseCommand):
             # MP no cancela ni pausa el preapproval apenas falla un cobro: lo
             # reintenta varias veces primero (el panel de MP lo muestra como
             # "Atrasado — intento N de 4"), y durante todo ese período el
-            # preapproval sigue con status='authorized'. Si además ya tuvo algún
-            # cobro exitoso en el pasado (charged_quantity >= 1, que es un
-            # acumulado histórico, no del ciclo actual), este chequeo lo hubiera
-            # promovido a 'activa' igual, ocultando que el ciclo en curso está
-            # en mora. pending_charge_quantity > 0 es la señal de que MP todavía
-            # tiene un cobro sin resolver -- no confirmado 100% contra un payload
-            # real de un caso "atrasado" (de ahí el log del summarized completo
-            # más abajo), así que se lee de forma defensiva.
+            # preapproval sigue con status='authorized'. pending_charge_quantity
+            # > 0 es la señal de que MP todavía tiene un cobro sin resolver -- no
+            # confirmado 100% contra un payload real de un caso "atrasado" (de
+            # ahí el log del summarized completo más abajo), así que se lee de
+            # forma defensiva.
             cobros_pendientes = resumen.get('pending_charge_quantity') or 0
 
+            if estado_mp == 'cancelled' and sus.estado != 'cancelada':
+                # MP la canceló (o nunca llegó a autorizarla) pero acá seguía con acceso.
+                self.stdout.write(self.style.WARNING(
+                    f"Reconciliado con MP: {sus.tienda.nombre} estaba cancelada en MP "
+                    f"pero localmente seguía en '{sus.get_estado_display()}' → cancelada"
+                ))
+                cancelar_suscripcion(sus)
+                corregidas += 1
+                continue
+
+            if estado_mp != 'authorized':
+                continue
+
             if (
-                sus.estado != 'activa' and estado_mp == 'authorized'
-                and cobros_realizados >= 1 and cobros_pendientes == 0
+                sus.estado != 'activa' and cobros_realizados >= 1 and cobros_pendientes == 0
             ):
-                # MP ya cobró al menos una vez pero acá seguíamos sin reflejarlo
-                # (pending/trial/gracia/pausada) → el webhook de pago se perdió.
+                # MP ya cobró al menos una vez y no tiene nada pendiente, pero acá
+                # seguíamos sin reflejarlo (pending/trial/gracia/pausada) → el
+                # webhook de pago se perdió.
                 self.stdout.write(self.style.SUCCESS(
                     f"Reconciliado con MP: {sus.tienda.nombre} estaba en "
                     f"'{sus.get_estado_display()}' con {cobros_realizados} cobro(s) "
@@ -183,29 +193,29 @@ class Command(BaseCommand):
                 ))
                 renovar_suscripcion(sus)
                 corregidas += 1
-            elif (
-                sus.estado != 'activa' and estado_mp == 'authorized'
-                and cobros_realizados >= 1 and cobros_pendientes > 0
-            ):
-                # Hubiera calificado para pasar a 'activa' de no ser por el cobro
-                # pendiente -- se deja sin tocar y se loguea el summarized
-                # completo para confirmar (o corregir) el nombre del campo la
-                # próxima vez que aparezca un caso así.
-                self.stdout.write(self.style.WARNING(
-                    f"MP: {sus.tienda.nombre} tiene un cobro pendiente en curso "
-                    f"(no se promueve a activa) — summarized={resumen}"
-                ))
-                logger.warning(
-                    "Reconciliación MP: %s con cobro pendiente, no se promueve — datos=%s",
-                    sus.tienda.nombre, datos,
-                )
-            elif estado_mp == 'cancelled' and sus.estado != 'cancelada':
-                # MP la canceló (o nunca llegó a autorizarla) pero acá seguía con acceso.
-                self.stdout.write(self.style.WARNING(
-                    f"Reconciliado con MP: {sus.tienda.nombre} estaba cancelada en MP "
-                    f"pero localmente seguía en '{sus.get_estado_display()}' → cancelada"
-                ))
-                cancelar_suscripcion(sus)
+
+            # pago_atrasado es independiente del bloque anterior y se revisa para
+            # CUALQUIER suscripción con acceso (incluida 'activa'): a diferencia
+            # de gracia/pausada, no le saca el acceso a la tienda, solo prende o
+            # apaga el aviso que ve el usuario al iniciar sesión -- por eso se
+            # actualiza en los dos sentidos acá, todos los días.
+            nuevo_atrasado = cobros_pendientes > 0
+            if sus.pago_atrasado != nuevo_atrasado:
+                if nuevo_atrasado:
+                    self.stdout.write(self.style.WARNING(
+                        f"MP: {sus.tienda.nombre} tiene un cobro pendiente en curso "
+                        f"(sigue con acceso, se activa el aviso) — summarized={resumen}"
+                    ))
+                    logger.warning(
+                        "Reconciliación MP: %s con cobro pendiente, se marca pago_atrasado — datos=%s",
+                        sus.tienda.nombre, datos,
+                    )
+                else:
+                    self.stdout.write(self.style.SUCCESS(
+                        f"MP: {sus.tienda.nombre} regularizó su cobro pendiente — se apaga el aviso"
+                    ))
+                sus.pago_atrasado = nuevo_atrasado
+                sus.save(update_fields=['pago_atrasado'])
                 corregidas += 1
 
         self.stdout.write(
