@@ -315,11 +315,20 @@ class Producto(models.Model):
     precio = models.DecimalField(max_digits=10, decimal_places=2) # Precio de venta
     costo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True) # NUEVO CAMPO
     stock = models.IntegerField(default=0)
-    # Cobro por peso: si está activo, 'precio'/'costo' son por KILOGRAMO en vez de
-    # por unidad, no se lleva stock (no aplica: se pesa lo que haya físicamente) y
-    # en el Punto de Venta se carga el peso en gramos en vez de una cantidad de
-    # unidades. Ver VentaCreateSerializer para el cálculo de precio/costo por gramo.
+    # Venta fraccionada: si está activo, 'precio'/'costo' son por unidad "grande"
+    # (Kg o Metro, ver unidad_fraccionada) en vez de por unidad de venta, no se
+    # lleva stock (no aplica: se corta/pesa lo que haya físicamente) y en el Punto
+    # de Venta se carga la cantidad en la unidad "chica" correspondiente (gramos o
+    # centímetros) en vez de una cantidad de unidades. Ver VentaCreateSerializer
+    # para el cálculo de precio/costo por unidad chica.
     se_vende_por_peso = models.BooleanField(default=False)
+    UNIDAD_FRACCIONADA_CHOICES = [
+        ('KG', 'Kilogramo'),
+        ('METRO', 'Metro'),
+    ]
+    # Solo tiene efecto cuando se_vende_por_peso=True. Default 'KG' para que los
+    # productos "por peso" ya cargados sigan funcionando exactamente igual.
+    unidad_fraccionada = models.CharField(max_length=10, choices=UNIDAD_FRACCIONADA_CHOICES, default='KG')
     # Producto "Varios": no lleva control de stock (como se_vende_por_peso) pero la
     # cantidad se sigue cargando en unidades -- lo que cambia es que el precio no
     # sale del catálogo sino que se carga a mano en cada línea del Punto de Venta

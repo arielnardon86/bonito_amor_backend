@@ -807,9 +807,12 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             # subtotal = precio_unitario * cantidad seguido siendo válido en el resto
             # del sistema (métricas, tickets, etc.) sin tener que tocar esas cuentas.
             if producto_obj.se_vende_por_peso:
-                precio_unitario = (producto_obj.precio / Decimal('1000')).quantize(Decimal('0.01'))
+                # Kg -> gramos (÷1000) o Metro -> centímetros (÷100): la "unidad chica"
+                # que se carga como cantidad en el Punto de Venta.
+                divisor = Decimal('100') if producto_obj.unidad_fraccionada == 'METRO' else Decimal('1000')
+                precio_unitario = (producto_obj.precio / divisor).quantize(Decimal('0.01'))
                 detalle_data['precio_unitario'] = precio_unitario
-                costo_unitario = (producto_obj.costo / Decimal('1000')).quantize(Decimal('0.01')) if producto_obj.costo else None
+                costo_unitario = (producto_obj.costo / divisor).quantize(Decimal('0.01')) if producto_obj.costo else None
             elif producto_obj.precio_variable:
                 # "Varios": sin control de stock, y el precio ya viene cargado a mano
                 # desde el Punto de Venta en precio_unitario -- no se pisa acá.
