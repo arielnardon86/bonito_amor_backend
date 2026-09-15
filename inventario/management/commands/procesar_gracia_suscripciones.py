@@ -36,6 +36,16 @@ class Command(BaseCommand):
 
     DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
 
+    # fecha_proximo_cobro se guarda como medianoche del día 10 (_proximo_dia_10
+    # en suscripcion_service.py), pero MP no cobra instantáneo a las 00:00 -- lo
+    # procesa en algún momento de ese día. Sin este margen, el cron (que corre a
+    # las 9am) trataba "fecha_proximo_cobro < ahora" como "no pagó" para
+    # CUALQUIER tienda con ciclo el día 10 apenas pasaba la medianoche, mandando
+    # el mail de "tu pago está pendiente, tenés 5 días" a clientes que en
+    # realidad iban a pagar bien más tarde ese mismo día. Con el margen, recién
+    # se considera "sin cobro" al otro día.
+    MARGEN_VERIFICACION_COBRO = timedelta(hours=24)
+
     # Estados desde los que tiene sentido reconciliar. 'activa' estaba afuera
     # originalmente bajo el supuesto de "si ya está activa, está al día" -- pero
     # ese supuesto solo cubre el caso "no llegó el webhook de PAGO" (pending/
@@ -81,12 +91,13 @@ class Command(BaseCommand):
             except Exception as e:
                 logger.error("Error eliminando tienda %s: %s", nombre, e)
 
-        # 1. Suscripciones trial/activa con fecha_proximo_cobro vencida
-        #    (el día 10 pasó y MP no notificó pago exitoso)
+        # 1. Suscripciones trial/activa con fecha_proximo_cobro vencida hace más
+        #    de MARGEN_VERIFICACION_COBRO (no apenas pasó la medianoche del día
+        #    10 -- ver el comentario en esa constante) y MP no notificó pago exitoso.
         sin_cobro = Suscripcion.objects.filter(
             estado__in=('trial', 'activa'),
             fecha_proximo_cobro__isnull=False,
-            fecha_proximo_cobro__lt=ahora,
+            fecha_proximo_cobro__lt=ahora - self.MARGEN_VERIFICACION_COBRO,
         ).select_related('plan', 'tienda')
 
         for sus in sin_cobro:
