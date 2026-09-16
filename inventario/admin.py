@@ -1,6 +1,6 @@
 # inventario/admin.py - CÓDIGO COMPLETO Y CORREGIDO
 # BONITO_AMOR/backend/inventario/admin.py
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
 from django.utils.html import format_html
 from django.utils import timezone
@@ -437,6 +437,46 @@ def _accion_cancelar(modeladmin, request, queryset):
 _accion_cancelar.short_description = '🚫 Cancelar suscripción'
 
 
+def _accion_reautorizar_medio_pago(modeladmin, request, queryset):
+    """
+    Para el caso "el cliente ya no usa la cuenta de MP con la que paga":
+    cancela el preapproval VIEJO en Mercado Pago (si no se hace esto, MP le
+    sigue intentando cobrar a esa cuenta para siempre, aunque acá la
+    canceláramos) y deja la suscripción en 'pending' sin preapproval_id,
+    con el MISMO plan. Con eso, el próximo login de la tienda le muestra la
+    pantalla de "completá tu pago" -- al tocarla, cambiar_plan() arma un
+    checkout nuevo para el mismo plan (permite re-elegir el plan actual
+    cuando el estado es 'pending', a diferencia de una tienda ya activa) y
+    ahí el cliente autoriza con la cuenta de MP que sí usa.
+    """
+    from inventario.services.suscripcion_service import cancelar_preaprobacion_mp
+
+    ok = 0
+    for sus in queryset:
+        if sus.mp_preapproval_id:
+            try:
+                cancelar_preaprobacion_mp(sus.mp_preapproval_id)
+            except Exception as e:
+                modeladmin.message_user(
+                    request,
+                    f'{sus.tienda.nombre}: no se pudo cancelar el preapproval viejo en MP '
+                    f'({sus.mp_preapproval_id}): {e}. Cancelalo a mano desde el panel de MP '
+                    f'antes de que el cliente vuelva a suscribirse.',
+                    level=messages.WARNING,
+                )
+        sus.mp_preapproval_id = None
+        sus.mp_payer_email = None
+        sus.estado = 'pending'
+        sus.save(update_fields=['mp_preapproval_id', 'mp_payer_email', 'estado'])
+        ok += 1
+    modeladmin.message_user(
+        request,
+        f'{ok} suscripción(es) lista(s) para volver a suscribirse con otra cuenta de MP '
+        f'(mismo plan, sin preapproval viejo).',
+    )
+_accion_reautorizar_medio_pago.short_description = '💳 Reautorizar con otra cuenta de MP (mismo plan)'
+
+
 @admin.register(Suscripcion)
 class SuscripcionAdmin(admin.ModelAdmin):
     list_display  = ('tienda_nombre', 'tienda_email', 'plan', 'estado_badge',
@@ -444,7 +484,7 @@ class SuscripcionAdmin(admin.ModelAdmin):
                      'mp_preapproval_id')
     list_filter   = ('estado', 'plan')
     search_fields = ('tienda__nombre', 'tienda__email', 'mp_preapproval_id', 'mp_payer_email')
-    actions       = [_accion_activar, _accion_pausar, _accion_cancelar]
+    actions       = [_accion_activar, _accion_pausar, _accion_cancelar, _accion_reautorizar_medio_pago]
     readonly_fields = ('id', 'fecha_creacion', 'fecha_actualizacion',
                        'mp_preapproval_id', 'mp_payer_email', 'estado_badge')
     fieldsets = (
