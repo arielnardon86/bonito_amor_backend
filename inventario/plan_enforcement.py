@@ -51,7 +51,8 @@ def verificar_limite_productos(tienda) -> tuple[bool, dict]:
     if _es_legacy(sus):
         return True, {}  # legacy: sin límite
 
-    if sus.plan.max_productos is None:
+    max_productos = sus.limite_productos_override if sus.limite_productos_override is not None else sus.plan.max_productos
+    if max_productos is None:
         return True, {}
 
     cantidad_actual = Producto.objects.filter(
@@ -59,18 +60,18 @@ def verificar_limite_productos(tienda) -> tuple[bool, dict]:
         producto_padre__isnull=True,  # solo productos raíz
     ).count()
 
-    if cantidad_actual < sus.plan.max_productos:
+    if cantidad_actual < max_productos:
         return True, {}
 
     return False, {
         'limite': True,
         'tipo': 'productos',
         'plan_actual': sus.plan.nombre,
-        'max_permitido': sus.plan.max_productos,
+        'max_permitido': max_productos,
         'cantidad_actual': cantidad_actual,
         'mensaje': (
             f'Tu plan {sus.plan.get_nombre_display()} permite hasta '
-            f'{sus.plan.max_productos} productos. '
+            f'{max_productos} productos. '
             f'Para agregar más, actualizá tu plan.'
         ),
         'planes_sugeridos': _planes_superiores(sus.plan, 'productos'),
@@ -264,7 +265,7 @@ def _info_suscripcion_propia(tienda) -> dict:
         'dias_gracia_restantes': sus.dias_gracia_restantes,
         'fecha_fin_trial': sus.fecha_fin_trial,
         'fecha_proximo_cobro': sus.fecha_proximo_cobro,
-        'max_productos': sus.plan.max_productos,
+        'max_productos': sus.limite_productos_override if sus.limite_productos_override is not None else sus.plan.max_productos,
         'max_usuarios': sus.plan.max_usuarios,
         'cantidad_productos': cantidad_productos,
         'cantidad_usuarios': cantidad_usuarios,

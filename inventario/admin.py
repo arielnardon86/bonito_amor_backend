@@ -524,7 +524,7 @@ class SuscripcionAdmin(admin.ModelAdmin):
             'fields': ('tienda',),
         }),
         ('Plan y estado', {
-            'fields': ('estado_badge', 'plan', 'estado'),
+            'fields': ('estado_badge', 'plan', 'estado', 'limite_productos_override'),
         }),
         ('Fechas', {
             'fields': ('fecha_inicio', 'fecha_fin_trial',

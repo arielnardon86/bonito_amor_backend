@@ -843,22 +843,25 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 sus = tienda.suscripcion
             except _Suscripcion.DoesNotExist:
                 sus = None
-            if sus is not None and sus.plan.nombre != 'legacy' and sus.plan.max_productos is not None:
+            max_productos = None
+            if sus is not None and sus.plan.nombre != 'legacy':
+                max_productos = sus.limite_productos_override if sus.limite_productos_override is not None else sus.plan.max_productos
+            if max_productos is not None:
                 nuevos_en_archivo = sum(
                     1 for fila in filas
                     if str(fila.get('codigo_interno') or '').strip() not in productos_existentes_por_codigo
                 )
                 cantidad_actual = Producto.objects.filter(tienda=tienda, producto_padre__isnull=True).count()
-                if cantidad_actual + nuevos_en_archivo > sus.plan.max_productos:
+                if cantidad_actual + nuevos_en_archivo > max_productos:
                     return Response({
                         'limite': True,
                         'tipo': 'productos',
                         'plan_actual': sus.plan.nombre,
-                        'max_permitido': sus.plan.max_productos,
+                        'max_permitido': max_productos,
                         'cantidad_actual': cantidad_actual,
                         'mensaje': (
                             f'Este archivo agregaría {nuevos_en_archivo} producto(s) nuevo(s), pero tu plan '
-                            f'{sus.plan.get_nombre_display()} permite hasta {sus.plan.max_productos} en total '
+                            f'{sus.plan.get_nombre_display()} permite hasta {max_productos} en total '
                             f'({cantidad_actual} ya cargados). Achicá el archivo o actualizá tu plan.'
                         ),
                     }, status=status.HTTP_403_FORBIDDEN)

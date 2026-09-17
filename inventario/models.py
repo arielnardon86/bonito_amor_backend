@@ -1462,6 +1462,12 @@ class Suscripcion(models.Model):
     fecha_inicio_gracia = models.DateTimeField(null=True, blank=True)
     fecha_cancelacion   = models.DateTimeField(null=True, blank=True)
 
+    # Excepción puntual: reemplaza sus.plan.max_productos SOLO para esta
+    # suscripción, sin tocar plan/precio/features (a diferencia de asignar el
+    # plan 'legacy', que exime de todos los límites y borra el precio real
+    # cobrado por MP del panel). Vacío = sin excepción, se usa el límite del plan.
+    limite_productos_override = models.IntegerField(null=True, blank=True)
+
     # Mercado Pago
     mp_preapproval_id = models.CharField(max_length=255, blank=True, null=True)
     mp_payer_email    = models.EmailField(blank=True, null=True)
@@ -1495,9 +1501,10 @@ class Suscripcion(models.Model):
         return None
 
     def puede_agregar_producto(self, cantidad_actual):
-        if self.plan.max_productos is None:
+        max_productos = self.limite_productos_override if self.limite_productos_override is not None else self.plan.max_productos
+        if max_productos is None:
             return True
-        return cantidad_actual < self.plan.max_productos
+        return cantidad_actual < max_productos
 
     def puede_agregar_usuario(self, cantidad_actual):
         if self.plan.max_usuarios is None:
