@@ -660,7 +660,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha_venta', 'total', 'anulada',
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago',
+            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones',
             'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
@@ -731,7 +731,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
-            'presupuesto_id', 'cliente_id', 'fecha_limite_pago',
+            'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -740,6 +740,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_monto': {'required': False},
             'monto_efectivo': {'required': False},
             'fecha_limite_pago': {'required': False, 'allow_null': True},
+            'observaciones': {'required': False, 'allow_null': True, 'allow_blank': True},
         }
 
     def validate(self, data):
@@ -1006,6 +1007,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             fecha_venta=validated_data['fecha_venta'],
             cliente=cliente_obj,
             fecha_limite_pago=validated_data.get('fecha_limite_pago'),
+            observaciones=validated_data.get('observaciones') or None,
         )
 
         # Cuenta Corriente: registrar el débito en el libro de movimientos del cliente.

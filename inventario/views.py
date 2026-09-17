@@ -5923,6 +5923,8 @@ class VentaViewSet(viewsets.ModelViewSet):
         story.append(Paragraph(f"<b>Nº de Venta:</b> {venta.id}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
+        if venta.metodo_pago == 'Cuenta Corriente' and venta.observaciones:
+            story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
 
         if venta.cliente_id:
@@ -7315,6 +7317,8 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
+        if venta.metodo_pago == 'Cuenta Corriente' and venta.observaciones:
+            story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
 
         # Datos del cliente
