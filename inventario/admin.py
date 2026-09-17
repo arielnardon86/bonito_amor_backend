@@ -439,19 +439,35 @@ _accion_cancelar.short_description = '🚫 Cancelar suscripción'
 
 def _accion_reautorizar_medio_pago(modeladmin, request, queryset):
     """
-    Para el caso "el cliente ya no usa la cuenta de MP con la que paga":
-    cancela el preapproval VIEJO en Mercado Pago (si no se hace esto, MP le
-    sigue intentando cobrar a esa cuenta para siempre, aunque acá la
-    canceláramos) y deja la suscripción en 'pending' sin preapproval_id,
-    con el MISMO plan. Con eso, el próximo login de la tienda le muestra la
-    pantalla de "completá tu pago" -- al tocarla, cambiar_plan() arma un
-    checkout nuevo para el mismo plan (permite re-elegir el plan actual
-    cuando el estado es 'pending', a diferencia de una tienda ya activa) y
-    ahí el cliente autoriza con la cuenta de MP que sí usa.
-    """
-    from inventario.services.suscripcion_service import cancelar_preaprobacion_mp
+    Para el caso "el cliente ya no usa la cuenta de MP con la que paga, y ya
+    usó su período de prueba": cancela el preapproval VIEJO en Mercado Pago
+    (si no se hace esto, MP le sigue intentando cobrar a esa cuenta para
+    siempre) y genera un link de autorización INDIVIDUAL para el mismo plan,
+    SIN período de prueba (cobra apenas el cliente autoriza) -- a diferencia
+    del checkout normal de la app, que redirige al preapproval_plan_id
+    compartido del Plan y ahí sí le daría el trial de siempre a cualquiera.
 
-    ok = 0
+    Importante: el link se muestra en este mensaje para que se lo pases vos
+    mismo al cliente (por mail, WhatsApp, etc.) -- si en cambio el cliente usa
+    el botón normal de "completar pago" dentro de la app, va a terminar en el
+    checkout compartido de siempre, CON trial. mp_preapproval_id queda vacío
+    hasta que llegue el webhook de MP tras la autorización, igual que en el
+    alta normal.
+
+    ⚠️ Esta función (crear_preaprobacion) crea una preaprobación individual
+    vía API en vez del checkout hosteado que usa el resto del sistema -- no
+    hay forma de probarla contra la API real de MP desde este entorno, así
+    que conviene mirar de cerca el primer uso real (que el link cargue bien,
+    que llegue el webhook, que MP cobre en el momento esperado).
+    """
+    from django.conf import settings as dj_settings
+    from inventario.services.suscripcion_service import cancelar_preaprobacion_mp, crear_preaprobacion
+
+    frontend_url = getattr(dj_settings, 'FRONTEND_URL', 'https://www.totalstock.com.ar').rstrip('/')
+    backend_url = getattr(dj_settings, 'BACKEND_URL', '').rstrip('/')
+    back_url = f"{frontend_url}/"
+    notification_url = f"{backend_url}/api/mp-webhook-suscripcion/" if backend_url else None
+
     for sus in queryset:
         if sus.mp_preapproval_id:
             try:
@@ -461,20 +477,36 @@ def _accion_reautorizar_medio_pago(modeladmin, request, queryset):
                     request,
                     f'{sus.tienda.nombre}: no se pudo cancelar el preapproval viejo en MP '
                     f'({sus.mp_preapproval_id}): {e}. Cancelalo a mano desde el panel de MP '
-                    f'antes de que el cliente vuelva a suscribirse.',
+                    f'antes de que el cliente autorice el nuevo.',
                     level=messages.WARNING,
                 )
+
         sus.mp_preapproval_id = None
         sus.mp_payer_email = None
         sus.estado = 'pending'
         sus.save(update_fields=['mp_preapproval_id', 'mp_payer_email', 'estado'])
-        ok += 1
-    modeladmin.message_user(
-        request,
-        f'{ok} suscripción(es) lista(s) para volver a suscribirse con otra cuenta de MP '
-        f'(mismo plan, sin preapproval viejo).',
-    )
-_accion_reautorizar_medio_pago.short_description = '💳 Reautorizar con otra cuenta de MP (mismo plan)'
+
+        try:
+            init_point = crear_preaprobacion(sus, back_url, notification_url, omitir_trial=True)
+            modeladmin.message_user(
+                request,
+                format_html(
+                    '{}: pasale este link para que autorice con la cuenta nueva de MP '
+                    '(sin período de prueba, cobra al autorizar): '
+                    '<a href="{}" target="_blank" rel="noopener">{}</a>',
+                    sus.tienda.nombre, init_point, init_point,
+                ),
+            )
+        except Exception as e:
+            modeladmin.message_user(
+                request,
+                f'{sus.tienda.nombre}: quedó lista para re-suscribirse (mismo plan, preapproval '
+                f'viejo cancelado) pero no pude generar el link sin trial automáticamente ({e}). '
+                f'Puede volver a suscribirse desde la app con el botón normal, pero ahí MP le va '
+                f'a dar el período de prueba de siempre.',
+                level=messages.WARNING,
+            )
+_accion_reautorizar_medio_pago.short_description = '💳 Reautorizar con otra cuenta de MP, sin trial'
 
 
 @admin.register(Suscripcion)

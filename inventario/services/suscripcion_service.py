@@ -55,35 +55,51 @@ def _headers():
     }
 
 
-def crear_preaprobacion(suscripcion, back_url: str, notification_url: str) -> str:
+def crear_preaprobacion(suscripcion, back_url: str, notification_url: str, omitir_trial: bool = False) -> str:
     """
-    Crea una preaprobación en MP para el plan dado.
-    Devuelve la init_point (URL a la que redirigir al usuario).
+    Crea una preaprobación INDIVIDUAL en MP para esta suscripción puntual (no
+    ligada al preapproval_plan_id compartido del Plan). Devuelve la init_point
+    (URL a la que redirigir al usuario para que autorice).
 
-    - Los primeros 7 días son trial; se cobra $1 al vincular tarjeta.
-    - Luego se cobra el precio mensual del plan automáticamente.
+    El alta normal (registro_publico/cambiar_plan) redirige al checkout del
+    preapproval_plan_id del Plan, que tiene el período de prueba que se haya
+    configurado en el panel de MP para ESE plan -- igual para cualquiera que se
+    suscriba. Esta función existe para el caso puntual de "reautorizar con otra
+    cuenta de MP sin darle otro trial a alguien que ya lo usó" (omitir_trial=True):
+    al no pasar por el preapproval_plan_id compartido, el trial de ese plan no
+    aplica, y si omitir_trial=True tampoco se manda ningún free_trial propio, así
+    que MP cobra desde el momento en que el cliente autoriza.
+
+    No guarda nada en `suscripcion` -- igual que el resto del sistema, el
+    preapproval_id queda vinculado recién cuando llega el webhook
+    subscription_preapproval (por external_reference), no al crear el checkout.
     """
     plan = suscripcion.plan
-    fecha_inicio_cobro = tz.now() + timedelta(days=suscripcion.DIAS_TRIAL)
+
+    auto_recurring = {
+        "frequency": 1,
+        "frequency_type": "months",
+        "transaction_amount": float(plan.precio_mensual),
+        "currency_id": "ARS",
+    }
+    if not omitir_trial:
+        fecha_inicio_cobro = tz.now() + timedelta(days=suscripcion.DIAS_TRIAL)
+        auto_recurring["start_date"] = fecha_inicio_cobro.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
+        auto_recurring["free_trial"] = {
+            "frequency": suscripcion.DIAS_TRIAL,
+            "frequency_type": "days",
+        }
 
     payload = {
         "reason": f"Total Stock — Plan {plan.get_nombre_display()}",
-        "auto_recurring": {
-            "frequency": 1,
-            "frequency_type": "months",
-            "transaction_amount": float(plan.precio_mensual),
-            "currency_id": "ARS",
-            "start_date": fecha_inicio_cobro.strftime("%Y-%m-%dT%H:%M:%S.000-03:00"),
-            # Cargo de $1 como verificación de fondos al activar
-            "free_trial": {
-                "frequency": suscripcion.DIAS_TRIAL,
-                "frequency_type": "days",
-            },
-        },
+        "external_reference": str(suscripcion.tienda_id),
+        "payer_email": suscripcion.mp_payer_email or suscripcion.tienda.email,
+        "auto_recurring": auto_recurring,
         "back_url": back_url,
-        "notification_url": notification_url,
         "status": "pending",
     }
+    if notification_url:
+        payload["notification_url"] = notification_url
 
     resp = requests.post(
         f"{MP_API_BASE}/preapproval",
@@ -93,12 +109,6 @@ def crear_preaprobacion(suscripcion, back_url: str, notification_url: str) -> st
     )
     resp.raise_for_status()
     data = resp.json()
-
-    # Guardar el preapproval_id en la suscripción
-    suscripcion.mp_preapproval_id = str(data.get("id", ""))
-    suscripcion.fecha_fin_trial = fecha_inicio_cobro
-    suscripcion.fecha_proximo_cobro = fecha_inicio_cobro
-    suscripcion.save(update_fields=["mp_preapproval_id", "fecha_fin_trial", "fecha_proximo_cobro"])
 
     init_point = data.get("init_point", "")
     if not init_point:
