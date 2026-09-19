@@ -1444,9 +1444,15 @@ class ClienteSerializer(serializers.ModelSerializer):
             'id', 'tienda_slug', 'nombre_razon_social', 'cuit_cuil',
             'direccion', 'telefono', 'email', 'activo', 'saldo_pendiente',
             'tiene_deuda_vencida', 'fecha_vencimiento_mas_antigua',
-            'fecha_creacion',
+            'dia_cierre_cuenta_corriente', 'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion']
+
+    def to_internal_value(self, data):
+        """Normalizar dia_cierre_cuenta_corriente: '' (input vacío del frontend) -> None."""
+        if isinstance(data, dict) and data.get('dia_cierre_cuenta_corriente') == '':
+            data = {**data, 'dia_cierre_cuenta_corriente': None}
+        return super().to_internal_value(data)
 
     def get_saldo_pendiente(self, obj):
         return str(calcular_saldo_pendiente(obj))

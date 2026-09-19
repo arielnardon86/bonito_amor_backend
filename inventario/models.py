@@ -1,10 +1,11 @@
 # inventario/models.py - CÓDIGO COMPLETO Y CORREGIDO
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-import uuid 
-from django.utils import timezone 
-from django.conf import settings 
-from decimal import Decimal 
+from django.core.validators import MinValueValidator, MaxValueValidator
+import uuid
+from django.utils import timezone
+from django.conf import settings
+from decimal import Decimal
        
 # Modelo de Usuario Personalizado
 class User(AbstractUser):
@@ -663,6 +664,16 @@ class Cliente(models.Model):
     email = models.EmailField(blank=True, null=True)
     # Soft delete: un cliente con historial de compras o cuenta corriente no se borra nunca en duro.
     activo = models.BooleanField(default=True)
+
+    # Día del mes (1-31) en que cierra la cuenta corriente de este cliente: al vender a
+    # Cuenta Corriente, la fecha límite de pago se autocompleta con la próxima ocurrencia
+    # de este día (si el mes no lo tiene, el último día del mes) en vez de pedirla a mano.
+    # Vacío = comportamiento de siempre, se carga la fecha manualmente en cada venta.
+    dia_cierre_cuenta_corriente = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text="Día del mes (1-31) de cierre de cuenta corriente. Vacío = pedir la fecha a mano en cada venta.",
+    )
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
