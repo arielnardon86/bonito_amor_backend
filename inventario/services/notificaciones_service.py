@@ -35,7 +35,15 @@ def _get_firebase_app():
 
     if path and os.path.isfile(path):
         cred = credentials.Certificate(path)
-        _firebase_app = firebase_admin.initialize_app(cred)
+        try:
+            _firebase_app = firebase_admin.initialize_app(cred)
+        except ValueError:
+            # Este worker (gunicorn corre con --workers 2, cada uno con su propio
+            # _firebase_app) ya registró la app default alguna vez -- probablemente un
+            # intento anterior falló DESPUÉS de registrarla pero antes de cachearla acá,
+            # dejando este proceso "trabado" reintentando initialize_app() y fallando
+            # para siempre. Reusar la app default en vez de propagar el error.
+            _firebase_app = firebase_admin.get_app()
         logger.info("Firebase Admin inicializado con FIREBASE_SERVICE_ACCOUNT_PATH (FCM v1)")
         return _firebase_app
 
@@ -47,7 +55,10 @@ def _get_firebase_app():
                 import base64
                 info = json.loads(base64.b64decode(json_str).decode('utf-8'))
             cred = credentials.Certificate(info)
-            _firebase_app = firebase_admin.initialize_app(cred)
+            try:
+                _firebase_app = firebase_admin.initialize_app(cred)
+            except ValueError:
+                _firebase_app = firebase_admin.get_app()
             logger.info("Firebase Admin inicializado con FIREBASE_SERVICE_ACCOUNT_JSON (FCM v1)")
             return _firebase_app
         except json.JSONDecodeError as e:
