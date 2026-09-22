@@ -454,7 +454,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
             return obj
         return super().get_object()
 
-    def get_queryset(self):
+    # Mismo umbral que STOCK_BAJO_THRESHOLD en Productos.js -- si se cambia acá,
+    # cambiarlo también ahí. No es configurable por tienda (a propósito, ver plan).
+    STOCK_BAJO_UMBRAL = 5
+
+    def _queryset_producto_tienda(self, aplicar_stock_bajo=True):
+        """Queryset de productos raíz de la tienda del usuario, con rubro_id/search/
+        stock_bajo de la query string ya aplicados (salvo que aplicar_stock_bajo=False,
+        que usa `resumen` para poder contar cuántos productos hay en total Y cuántos
+        están en stock bajo con la misma base, sin que un filtro pise al otro)."""
         user = self.request.user
         # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
         # Esto evita que variantes ocupen slots de paginación y desplacen el padre a la pág 2.
@@ -480,6 +488,12 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 Q(variantes__codigo_interno__iexact=search)
             ).distinct()
 
+        if aplicar_stock_bajo and self.request.query_params.get('stock_bajo') == '1':
+            queryset = queryset.filter(
+                stock__lte=self.STOCK_BAJO_UMBRAL,
+                se_vende_por_peso=False, precio_variable=False,
+            )
+
         if user.is_superuser:
             if tienda_slug:
                 return queryset.filter(tienda__nombre=tienda_slug).order_by('nombre')
@@ -499,6 +513,34 @@ class ProductoViewSet(viewsets.ModelViewSet):
         if tiendas_ids:
             return queryset.filter(tienda__pk__in=tiendas_ids).order_by('nombre')
         return Producto.objects.none()
+
+    def get_queryset(self):
+        return self._queryset_producto_tienda()
+
+    @action(detail=False, methods=['get'])
+    def resumen(self, request):
+        """Resumen para el header de Gestión de Productos: total de productos,
+        cuántos están en stock bajo y el valorizado del stock (a costo). No aplica
+        el filtro stock_bajo=1 de la query string a la base (aplicar_stock_bajo=False):
+        el conteo de "stock_bajo" siempre es sobre el total, independientemente de si
+        el chip de la pantalla está prendido o no."""
+        from django.db.models import Sum, F, Value, DecimalField
+        from django.db.models.functions import Coalesce
+
+        base_qs = self._queryset_producto_tienda(aplicar_stock_bajo=False)
+        stock_bajo_qs = base_qs.filter(
+            stock__lte=self.STOCK_BAJO_UMBRAL,
+            se_vende_por_peso=False, precio_variable=False,
+        )
+        valorizado = base_qs.aggregate(
+            total=Sum(F('stock') * Coalesce('costo', Value(0), output_field=DecimalField()))
+        )['total'] or Decimal('0.00')
+
+        return Response({
+            'total': base_qs.count(),
+            'stock_bajo': stock_bajo_qs.count(),
+            'valorizado': str(valorizado),
+        })
 
     def create(self, request, *args, **kwargs):
         from .plan_enforcement import verificar_limite_productos
