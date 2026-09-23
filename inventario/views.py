@@ -410,6 +410,37 @@ def _resolver_tienda_por_slug(request):
     return Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).first()
 
 
+def _decodificar_barcode_peso_variable(codigo):
+    """
+    Decodifica un código de barras EAN-13 de "peso variable" impreso por balanzas
+    con etiquetadora (confirmado contra etiquetas reales de una Systel Cuora Max,
+    formato configurable en la balanza -- este es el que tiene configurado esta
+    tienda, no es un estándar universal):
+
+        dígito 1        = "2" fijo (prefijo GS1 de circulación restringida / uso interno)
+        dígitos 2-6     = código PLU del producto (5 dígitos, con ceros a la izquierda)
+        dígitos 7-12    = peso en GRAMOS (6 dígitos, con ceros a la izquierda)
+        dígito 13       = dígito verificador EAN-13 estándar sobre los primeros 12
+
+    Devuelve (plu: str, peso_gramos: int) si el código matchea el patrón Y el
+    dígito verificador cierra, o None si no (para no confundir un código de barras
+    de producto normal -- que también podría arrancar con "2" por azar -- con uno
+    de peso variable: exigir el checksum válido reduce muchísimo los falsos positivos).
+    """
+    if not codigo or len(codigo) != 13 or not codigo.isdigit() or codigo[0] != '2':
+        return None
+
+    digitos = [int(d) for d in codigo[:12]]
+    suma = sum(d if i % 2 == 0 else d * 3 for i, d in enumerate(digitos))
+    verificador_esperado = (10 - (suma % 10)) % 10
+    if verificador_esperado != int(codigo[12]):
+        return None
+
+    plu = str(int(codigo[1:6]))  # sin ceros a la izquierda, para matchear codigo_interno tal cual se carga
+    peso_gramos = int(codigo[6:12])
+    return plu, peso_gramos
+
+
 class ProductoPagination(rest_framework_pagination.PageNumberPagination):
     """Paginación de productos: 10 por página por defecto (comportamiento actual),
     pero acepta ?page_size= para casos puntuales que necesitan traer un lote grande
@@ -627,6 +658,24 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         if not codigo or not tienda_slug:
             return Response({"detail": "Código de barras y slug de tienda son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Etiqueta de balanza (peso variable): el código no es un barcode fijo de
+        # producto -- trae el PLU y el peso pesado embebidos, y cambia en cada
+        # etiqueta aunque sea el mismo producto. Si matchea el patrón, se resuelve
+        # por PLU (contra codigo_interno) en vez de por codigo_barras/codigo_interno
+        # literal, y la respuesta lleva el peso ya decodificado para agregarlo al
+        # carrito directo, sin pedírselo de nuevo al usuario.
+        decodificado = _decodificar_barcode_peso_variable(codigo)
+        if decodificado:
+            plu, peso_gramos = decodificado
+            producto = Producto.objects.filter(
+                codigo_interno=plu, tienda__nombre=tienda_slug, se_vende_por_peso=True,
+            ).first()
+            if not producto:
+                return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+            data = self.get_serializer(producto).data
+            data['peso_decodificado_gramos'] = peso_gramos
+            return Response(data)
 
         producto = Producto.objects.filter(codigo_barras=codigo, tienda__nombre=tienda_slug).first()
         if not producto:
