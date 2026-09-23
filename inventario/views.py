@@ -633,6 +633,19 @@ class ProductoViewSet(viewsets.ModelViewSet):
         else:
             serializer.save()
 
+        # El producto "padre" de una familia de variantes no se vende directo (no
+        # aparece en Punto de Venta, ver exportar()/perform_destroy) -- su precio/costo
+        # solo tiene sentido como "precio de toda la familia". Si se editan acá, se
+        # replican a todas sus variantes para no tener que repetir la edición una por
+        # una cuando todas valen lo mismo.
+        campos_replicar = {}
+        if 'precio' in serializer.validated_data:
+            campos_replicar['precio'] = instancia.precio
+        if 'costo' in serializer.validated_data:
+            campos_replicar['costo'] = instancia.costo
+        if campos_replicar and instancia.producto_padre_id is None:
+            instancia.variantes.update(**campos_replicar)
+
     def perform_destroy(self, instance):
         if self.request.user.is_supervisor and not self.request.user.is_superuser:
             from rest_framework.exceptions import PermissionDenied
