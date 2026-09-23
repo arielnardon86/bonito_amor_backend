@@ -5888,25 +5888,37 @@ class VentaViewSet(viewsets.ModelViewSet):
             logger.info(f"Resultado: exito={exito}, error={error}")
             
             if not exito:
-                # Crear registro de factura con error
-                factura = Factura.objects.create(
+                # update_or_create (no create): si un intento anterior ya había dejado
+                # un registro 'ERROR' para esta venta (ver OneToOneField en el modelo
+                # Factura), un reintento manual desde Listado de Ventas debe actualizar
+                # ese mismo registro en vez de chocar con la restricción de unicidad.
+                factura, _ = Factura.objects.update_or_create(
                     venta=venta,
-                    tienda=venta.tienda,
-                    punto_venta=venta.tienda.punto_venta,
-                    tipo_comprobante='B',  # Por defecto Factura B
-                    cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
-                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
-                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
-                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
-                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
-                    subtotal=venta.total,
-                    impuesto_iva=Decimal('0.00'),
-                    total=venta.total,
-                    estado='ERROR',
-                    sistema_facturacion=venta.tienda.tipo_facturacion,
-                    error_mensaje=error,
+                    defaults=dict(
+                        tienda=venta.tienda,
+                        punto_venta=venta.tienda.punto_venta,
+                        tipo_comprobante='B',  # Por defecto Factura B
+                        cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+                        cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                        cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                        cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                        cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                        subtotal=venta.total,
+                        impuesto_iva=Decimal('0.00'),
+                        total=venta.total,
+                        estado='ERROR',
+                        sistema_facturacion=venta.tienda.tipo_facturacion,
+                        error_mensaje=error,
+                        # Limpia campos de una eventual EMITIDA anterior (no debería
+                        # poder pasar por el guard de venta.facturada, pero por las dudas
+                        # no dejar un cae/numero viejo colgado de un estado ERROR nuevo).
+                        cae=None,
+                        fecha_vencimiento_cae=None,
+                        numero_comprobante=None,
+                        numero_comprobante_afip=None,
+                    ),
                 )
-                
+
                 return Response(
                     {
                         "error": error,
@@ -5916,27 +5928,31 @@ class VentaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Crear registro de factura exitosa
-            factura = Factura.objects.create(
+            # Crear (o actualizar, si un intento anterior había quedado en 'ERROR')
+            # el registro de factura exitosa -- ver comentario de update_or_create arriba.
+            factura, _ = Factura.objects.update_or_create(
                 venta=venta,
-                tienda=venta.tienda,
-                numero_comprobante=datos_factura.get('numero_comprobante'),
-                punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
-                tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
-                cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
-                cliente_cuit=cliente_data.get('cliente_cuit', ''),
-                cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
-                cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
-                cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
-                subtotal=datos_factura.get('subtotal', venta.total),
-                impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
-                total=datos_factura.get('total', venta.total),
-                estado='EMITIDA',
-                sistema_facturacion=venta.tienda.tipo_facturacion,
-                cae=datos_factura.get('cae'),
-                fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
-                numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
-                respuesta_bruta=datos_factura.get('respuesta_bruta'),
+                defaults=dict(
+                    tienda=venta.tienda,
+                    numero_comprobante=datos_factura.get('numero_comprobante'),
+                    punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
+                    tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+                    cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                    subtotal=datos_factura.get('subtotal', venta.total),
+                    impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+                    total=datos_factura.get('total', venta.total),
+                    estado='EMITIDA',
+                    sistema_facturacion=venta.tienda.tipo_facturacion,
+                    cae=datos_factura.get('cae'),
+                    fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+                    numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+                    respuesta_bruta=datos_factura.get('respuesta_bruta'),
+                    error_mensaje=None,
+                ),
             )
             
             # Marcar venta como facturada y actualizar datos del cliente

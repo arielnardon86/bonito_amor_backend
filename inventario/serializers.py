@@ -577,9 +577,13 @@ class VentaSerializer(serializers.ModelSerializer):
     es_diferencia_pendiente = serializers.SerializerMethodField()
 
     def get_tiene_factura(self, obj):
-        """Verifica si la venta tiene una factura asociada (usa select_related)"""
+        """Verifica si la venta tiene una factura EMITIDA (con CAE) asociada -- una
+        Factura en estado 'ERROR' (intento fallido, ver emitir_factura) no cuenta:
+        si contara, el botón 'Ver Factura' quedaría habilitado para un comprobante
+        sin CAE, y el botón manual de 'Facturar' (pensado para reintentar) quedaría
+        oculto creyendo que la venta ya está facturada."""
         try:
-            return obj.factura is not None
+            return obj.factura is not None and obj.factura.estado == 'EMITIDA'
         except Exception:
             return False
 
