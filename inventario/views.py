@@ -7414,9 +7414,12 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
         tiendas_ids = _resolver_tiendas_para_exportar(request)
         if not tiendas_ids:
-            return Response({"comprobantes": [], "totales": {"neto": "0.00", "iva": "0.00", "total": "0.00"}})
+            return Response({
+                "comprobantes": [], "totales": {"neto": "0.00", "iva": "0.00", "total": "0.00"},
+                "alertas": {"facturas_venta_anulada_sin_nc": 0},
+            })
 
-        facturas = Factura.objects.select_related('tienda').filter(
+        facturas = Factura.objects.select_related('tienda', 'venta').prefetch_related('notas_credito').filter(
             tienda_id__in=tiendas_ids, estado='EMITIDA',
             fecha_emision__date__gte=fecha_desde, fecha_emision__date__lte=fecha_hasta,
         )
@@ -7429,8 +7432,21 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         neto_total = Decimal('0.00')
         iva_total = Decimal('0.00')
         importe_total = Decimal('0.00')
+        alertas_venta_anulada_sin_nc = 0
 
         for f in facturas:
+            # La venta se anuló pero la factura sigue EMITIDA -- fiscalmente eso es
+            # válido solo si ya se emitió la Nota de Crédito que la compensa (a AFIP
+            # no se le puede "borrar" una factura autorizada). Si no hay ninguna NC
+            # EMITIDA para esta factura, es una venta anulada que probablemente el
+            # usuario se olvidó de compensar: se marca para que la revise antes de
+            # mandarle el reporte al contador -- una vez que emita la NC, esta
+            # alerta desaparece sola la próxima vez que se genere el reporte.
+            venta_anulada_sin_nc = bool(f.venta and f.venta.anulada and not any(
+                nc.estado == 'EMITIDA' for nc in f.notas_credito.all()
+            ))
+            if venta_anulada_sin_nc:
+                alertas_venta_anulada_sin_nc += 1
             comprobantes.append({
                 'fecha': f.fecha_emision.isoformat(),
                 'tienda_nombre': f.tienda.nombre,
@@ -7444,6 +7460,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 'iva': str(f.impuesto_iva),
                 'total': str(f.total),
                 'cae': f.cae or '',
+                'venta_anulada_sin_nc': venta_anulada_sin_nc,
             })
             neto_total += f.subtotal
             iva_total += f.impuesto_iva
@@ -7464,6 +7481,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 'iva': str(-nc.impuesto_iva),
                 'total': str(-nc.monto),
                 'cae': nc.cae or '',
+                'venta_anulada_sin_nc': False,
             })
             neto_total -= neto_nc
             iva_total -= nc.impuesto_iva
@@ -7477,6 +7495,9 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 'neto': str(neto_total),
                 'iva': str(iva_total),
                 'total': str(importe_total),
+            },
+            'alertas': {
+                'facturas_venta_anulada_sin_nc': alertas_venta_anulada_sin_nc,
             },
         })
 
