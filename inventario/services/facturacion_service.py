@@ -1505,15 +1505,20 @@ class FacturacionService:
             nro_doc_cliente = re.sub(r'[^0-9]', '', factura.cliente_cuit or '')
             if nro_doc_cliente and len(nro_doc_cliente) != 11:
                 nro_doc_cliente = ''
-            nro_doc_cliente = nro_doc_cliente or '0'
-            # NC clase A (tipo 3): DocTipo DEBE ser 80 (CUIT), igual que Factura A
-            if tipo_nc in [3]:
+            # Mismo criterio que ya usa _emitir_afip más arriba en este archivo para
+            # Facturas: DocTipo se decide por si hay un CUIT válido cargado, no por
+            # factura.cliente_tipo_documento -- ese campo nunca lo completa ningún
+            # flujo del frontend (Punto de Venta, Listado de Ventas), así que siempre
+            # quedaba vacío y la NC se mandaba a AFIP como "Consumidor Final" (99)
+            # aunque la factura original tuviera un CUIT real.
+            if tipo_nc == 3 or nro_doc_cliente:
+                # NC clase A (tipo 3): DocTipo DEBE ser 80 (CUIT), igual que Factura A.
                 tipo_doc_cliente = 80
+                nro_doc_cliente = nro_doc_cliente or '0'
             else:
-                tipo_doc_cliente = int(factura.cliente_tipo_documento or 99)
                 # AFIP regla: DocTipo=99 → DocNro debe ser 0
-                if tipo_doc_cliente == 99:
-                    nro_doc_cliente = '0'
+                tipo_doc_cliente = 99
+                nro_doc_cliente = '0'
 
             fecha_cbte = datetime.now()
 
