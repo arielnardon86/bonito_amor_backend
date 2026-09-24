@@ -16,6 +16,7 @@ Webhook:
 import hashlib
 import hmac
 import logging
+import time
 import requests
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,16 @@ TN_AUTH_URL  = "https://www.tiendanube.com/apps/{app_id}/authorize"
 TN_TOKEN_URL = "https://www.tiendanube.com/apps/authorize/token"
 
 USER_AGENT = "TotalStock (soporte@totalstock.com.ar)"
+
+# Límite oficial de la API de Tiendanube (leaky bucket): 40 requests de ráfaga,
+# tasa de fuga de 2 req/seg (x10 en planes Next/Evolution) -- ver
+# https://nuvemshop.dev/en-US/apps/erp-guide/api-usage. 0.55s de margen sobre
+# el teórico 0.5s para no quedar al límite exacto.
+MIN_INTERVAL_SECONDS = 0.55
+# Techo al tiempo de espera ante un 429, aunque x-rate-limit-reset pida más --
+# esto corre adentro del hilo del webhook (o de un request síncrono del panel),
+# no puede colgarse indefinidamente.
+MAX_RETRY_WAIT_SECONDS = 5.0
 
 
 class TiendaNubeService:
@@ -37,6 +48,12 @@ class TiendaNubeService:
         self.store_id      = tienda.tn_store_id
         self.app_id        = settings.TIENDANUBE_APP_ID
         self.client_secret = settings.TIENDANUBE_CLIENT_SECRET
+        self._last_request_ts = 0.0
+        # Cache en memoria del id de location por defecto, para no repetir el
+        # GET /locations en cada llamada dentro del mismo request/hilo (ver
+        # _resolver_location_id_default).
+        self._location_id_default = None
+        self._location_id_resuelto = False
 
     # ── Helpers de petición ──────────────────────────────────────────────────
 
@@ -50,20 +67,47 @@ class TiendaNubeService:
     def _url(self, path):
         return f"{TN_API_BASE}/{self.store_id}/{path.lstrip('/')}"
 
-    def _get(self, path, params=None):
-        resp = requests.get(self._url(path), headers=self._headers(), params=params, timeout=15)
+    def _throttle(self):
+        """Autothrottle a ~2 req/seg por instancia: los loops que ya reusan una
+        misma instancia (tn_sync_stock, tn_export_products) quedan protegidos
+        sin tocar esos call sites."""
+        elapsed = time.monotonic() - self._last_request_ts
+        if elapsed < MIN_INTERVAL_SECONDS:
+            time.sleep(MIN_INTERVAL_SECONDS - elapsed)
+
+    def _request(self, method, path, **kwargs):
+        """Punto único de salida a la API de TN. Si pega un 429, espera lo que
+        indica x-rate-limit-reset (ms, con techo MAX_RETRY_WAIT_SECONDS) y
+        reintenta una sola vez -- nunca reintenta en loop infinito."""
+        url = self._url(path)
+        for intento in range(2):
+            self._throttle()
+            self._last_request_ts = time.monotonic()
+            resp = requests.request(method, url, headers=self._headers(), timeout=15, **kwargs)
+            if resp.status_code == 429 and intento == 0:
+                try:
+                    espera = min(int(resp.headers.get('x-rate-limit-reset', 1000)) / 1000, MAX_RETRY_WAIT_SECONDS)
+                except (TypeError, ValueError):
+                    espera = 1.0
+                logger.warning("429 de Tiendanube en %s %s -- esperando %.2fs y reintentando", method, path, espera)
+                time.sleep(espera)
+                continue
+            resp.raise_for_status()
+            return resp
         resp.raise_for_status()
-        return resp.json()
+        return resp
+
+    def _get(self, path, params=None):
+        return self._request('GET', path, params=params).json()
 
     def _post(self, path, data):
-        resp = requests.post(self._url(path), headers=self._headers(), json=data, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request('POST', path, json=data).json()
+
+    def _put(self, path, data):
+        return self._request('PUT', path, json=data).json()
 
     def _delete(self, path):
-        resp = requests.delete(self._url(path), headers=self._headers(), timeout=15)
-        resp.raise_for_status()
-        return resp.status_code
+        return self._request('DELETE', path).status_code
 
     # ── OAuth ────────────────────────────────────────────────────────────────
 
@@ -167,11 +211,6 @@ class TiendaNubeService:
         """Obtiene los detalles de una orden."""
         return self._get(f"orders/{order_id}")
 
-    def _put(self, path, data):
-        resp = requests.put(self._url(path), headers=self._headers(), json=data, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
-
     def create_product(self, nombre, precio, stock, sku=None):
         """
         Crea un producto en Tienda Nube con una sola variante.
@@ -251,16 +290,60 @@ class TiendaNubeService:
 
     # ── Stock ────────────────────────────────────────────────────────────────
 
+    def get_locations(self):
+        """Lista las locations (centros de distribución) de la tienda. Requiere
+        el scope read_locations -- si la app no lo tiene pedido, o la tienda no
+        tiene multi-inventory activado, la llamada falla y el caller
+        (_resolver_location_id_default) cae al campo 'stock' plano de siempre."""
+        return self._get("locations")
+
+    def _resolver_location_id_default(self):
+        """Resuelve (y cachea en self.tienda.tn_location_id) el id de la
+        location marcada is_default en Tiendanube, para poder mandar
+        inventory_levels en vez del campo 'stock' plano -- que en tiendas
+        multi-CD Tiendanube solo lo aplica a la PRIMERA location (ver
+        nuvemshop.dev/api/guides/multi-inventory/products: "if only
+        variant.stock is sent, we'll update the first inventory_level"), así
+        que sin esto un comercio con más de un centro de distribución nunca
+        vería actualizado el stock del resto.
+
+        Se resuelve una sola vez por tienda (persistido en el modelo), no en
+        cada sincronización de stock -- evita duplicar la cantidad de
+        requests a la API en el path más frecuente (después de cada venta).
+        Si /locations falla (401/403 por falta del scope read_locations en la
+        configuración de la app, o 404 en tiendas sin multi-inventory
+        activado) devuelve None sin propagar el error."""
+        if self._location_id_resuelto:
+            return self._location_id_default
+        self._location_id_resuelto = True
+        if self.tienda.tn_location_id:
+            self._location_id_default = self.tienda.tn_location_id
+            return self._location_id_default
+        try:
+            locations = self.get_locations()
+        except requests.exceptions.RequestException as e:
+            logger.info("No se pudo resolver la location por defecto de TN (tienda %s): %s", self.tienda.nombre, e)
+            return None
+        default = next((loc for loc in locations if loc.get('is_default')), None) or (locations[0] if locations else None)
+        if not default:
+            return None
+        location_id = str(default.get('id'))
+        self._location_id_default = location_id
+        self.tienda.tn_location_id = location_id
+        self.tienda.save(update_fields=['tn_location_id'])
+        return location_id
+
     def update_variant_stock(self, product_id, variant_id, quantity):
-        """Actualiza el stock de una variante (anidada bajo su producto en la API de TN)."""
-        resp = requests.put(
-            self._url(f"products/{product_id}/variants/{variant_id}"),
-            headers=self._headers(),
-            json={"stock": quantity},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        """Actualiza el stock de una variante (anidada bajo su producto en la
+        API de TN). Ver _resolver_location_id_default: si se pudo resolver la
+        location por defecto de la tienda, manda inventory_levels (formato
+        multi-inventory); si no, cae al campo 'stock' plano de siempre."""
+        location_id = self._resolver_location_id_default()
+        if location_id:
+            data = {"inventory_levels": [{"location_id": location_id, "stock": quantity}]}
+        else:
+            data = {"stock": quantity}
+        return self._put(f"products/{product_id}/variants/{variant_id}", data)
 
     # ── Webhooks ─────────────────────────────────────────────────────────────
 
@@ -317,5 +400,20 @@ def sincronizar_stock_producto(producto):
     try:
         tn = TiendaNubeService(tienda)
         tn.update_variant_stock(producto.tn_product_id, producto.tn_variant_id, producto.stock)
+    except requests.exceptions.HTTPError as e:
+        # 404 confirmado = el producto/variante ya no existe del lado de TN
+        # (se borró ahí) -- desvincular para no volver a intentarlo por
+        # siempre en cada venta futura. Cualquier otro status (429, 500, etc)
+        # es una falla transitoria: no tocar el vínculo, solo loguear.
+        if e.response is not None and e.response.status_code == 404:
+            logger.warning(
+                "Producto/variante de %s ya no existe en Tiendanube (404) -- desvinculando", producto.nombre
+            )
+            producto.tn_product_id = None
+            producto.tn_variant_id = None
+            producto.tn_sincronizado = False
+            producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+        else:
+            logger.warning("No se pudo sincronizar stock a Tienda Nube para producto %s: %s", producto.nombre, e)
     except Exception as e:
         logger.warning("No se pudo sincronizar stock a Tienda Nube para producto %s: %s", producto.nombre, e)

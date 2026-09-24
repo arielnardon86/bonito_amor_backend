@@ -4900,6 +4900,20 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             ok += 1
                             continue
                     except Exception as inner:
+                        # El refresh también 404 -- el producto entero ya no existe del
+                        # lado de TN (no solo la variante). Desvincular acá evita que
+                        # cada corrida futura de esta sincronización repita el mismo
+                        # 404 para siempre (justamente lo que señaló la revisión de
+                        # Tienda Nube: "repetición persistente" de 404 en /products/<id>).
+                        inner_404 = hasattr(inner, 'response') and getattr(inner.response, 'status_code', None) == 404
+                        if inner_404:
+                            prod.tn_product_id = None
+                            prod.tn_variant_id = None
+                            prod.tn_sincronizado = False
+                            prod.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+                            logger.warning("Producto %s ya no existe en Tiendanube (404) -- desvinculado", prod.nombre)
+                            errores.append(f"{prod.nombre}: ya no existe en Tiendanube, se desvinculó")
+                            continue
                         logger.error("No se pudo refrescar variante TN para %s: %s", prod.nombre, inner)
                 logger.error("Error actualizando stock TN variante %s: %s", prod.tn_variant_id, e)
                 errores.append(f"{prod.nombre}: {str(e)}")

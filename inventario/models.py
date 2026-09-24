@@ -199,6 +199,16 @@ class Tienda(models.Model):
         max_length=50, blank=True, null=True,
         help_text="ID del webhook order/paid registrado en Tienda Nube"
     )
+    # Location (centro de distribución) por defecto de la tienda en TN, resuelta
+    # y cacheada la primera vez que se sincroniza stock (ver
+    # TiendaNubeService._resolver_location_id_default) -- necesaria para
+    # actualizar el stock correcto en tiendas con multi-inventory (multiCD)
+    # activado, en vez de depender del campo 'stock' plano (que TN solo aplica
+    # a la primera location).
+    tn_location_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de la location (centro de distribución) por defecto en Tienda Nube, para sincronizar stock en tiendas multi-inventory"
+    )
     # Configuración
     tn_sync_habilitado = models.BooleanField(
         default=False,
