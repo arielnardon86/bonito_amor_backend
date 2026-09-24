@@ -391,6 +391,21 @@ def _get_tiendas_ids_usuario(user):
     return tiendas_ids
 
 
+def _resolver_tiendas_para_exportar(request):
+    """PKs de tienda a incluir en un export contable multi-tienda: la intersección
+    entre lo que el usuario puede ver (_get_tiendas_ids_usuario, sin excepción para
+    superuser -- acá no se hereda el "sin filtro = todas las tiendas de la
+    plataforma" que sí tienen VentaViewSet/FacturaViewSet para superuser) y el
+    parámetro opcional 'tiendas' (ids separados por coma). Sin ese parámetro,
+    exporta todas las tiendas permitidas."""
+    tiendas_ids_permitidas = _get_tiendas_ids_usuario(request.user)
+    tiendas_param = request.query_params.get('tiendas')
+    if tiendas_param:
+        pedidas = set(tiendas_param.split(','))
+        return [t for t in tiendas_ids_permitidas if str(t) in pedidas]
+    return tiendas_ids_permitidas
+
+
 def _resolver_tienda_por_slug(request):
     """
     Resuelve la tienda efectiva para endpoints scoped-por-tienda que no son un
@@ -5476,7 +5491,59 @@ class VentaViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(Q(id__startswith=cleaned_id[:8]) | Q(id__icontains=cleaned_id[:8]))
             
         return queryset
-    
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAdminOrSuperUser], url_path='exportar-multitienda')
+    def exportar_multitienda(self, request):
+        """
+        Detalle de ventas combinado de todas las tiendas del usuario (o el
+        subconjunto pedido en 'tiendas'), pensado para el export contable de
+        Panel de Administración -- a diferencia del resto de VentaViewSet, que
+        siempre trabaja sobre una sola tienda a la vez (tienda_slug).
+        Params: fecha_desde, fecha_hasta (obligatorios), tiendas (opcional,
+        ids separados por coma).
+        """
+        fecha_desde = request.query_params.get('fecha_desde')
+        fecha_hasta = request.query_params.get('fecha_hasta')
+        if not fecha_desde or not fecha_hasta:
+            return Response(
+                {"error": "Los parámetros 'fecha_desde' y 'fecha_hasta' son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tiendas_ids = _resolver_tiendas_para_exportar(request)
+        if not tiendas_ids:
+            return Response({"ventas": []})
+
+        ventas = Venta.objects.select_related('tienda', 'usuario').prefetch_related(
+            'nota_credito_origen', 'cambio_devolucion_diferencia',
+        ).filter(
+            tienda_id__in=tiendas_ids,
+            fecha_venta__date__gte=fecha_desde,
+            fecha_venta__date__lte=fecha_hasta,
+        ).order_by('fecha_venta')
+
+        filas = []
+        for venta in ventas:
+            # Mismo criterio que VentaSerializer.get_es_nota_credito /
+            # get_es_diferencia_pendiente (views.py usa prefetch, no son campos).
+            if len(venta.nota_credito_origen.all()) > 0:
+                tipo = 'Nota de Crédito'
+            elif len(venta.cambio_devolucion_diferencia.all()) > 0:
+                tipo = 'Diferencia Cambio'
+            else:
+                tipo = 'Normal'
+            filas.append({
+                'fecha': venta.fecha_venta.isoformat(),
+                'tienda_nombre': venta.tienda.nombre,
+                'vendedor': venta.usuario.username if venta.usuario else 'N/A',
+                'metodo_pago': venta.metodo_pago,
+                'total': str(venta.total),
+                'anulada': venta.anulada,
+                'tipo': tipo,
+            })
+
+        return Response({'ventas': filas})
+
     def retrieve(self, request, *args, **kwargs):
         """Sobrescribir retrieve para permitir acceso a ventas de nota de crédito relacionadas con cambios/devoluciones"""
         pk = kwargs.get('pk')
@@ -7292,10 +7359,14 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 tienda_nombre = self.request.query_params.get('tienda_nombre')
                 if tienda_nombre:
                     queryset = queryset.filter(tienda__nombre=tienda_nombre)
-        elif user.tienda:
-            queryset = queryset.filter(tienda=user.tienda)
         else:
-            return Factura.objects.none()
+            # Antes solo miraba user.tienda, ignorando tiendas_autorizadas -- un
+            # dueño no-superuser con una segunda tienda autorizada no veía sus
+            # facturas acá (a diferencia de VentaViewSet, que sí usa este helper).
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return Factura.objects.none()
+            queryset = queryset.filter(tienda_id__in=tiendas_ids)
 
         estado = self.request.query_params.get('estado', None)
         if estado:
@@ -7322,7 +7393,93 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(venta__anulada=venta_anulada.lower() == 'true')
 
         return queryset
-    
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAdminOrSuperUser], url_path='subdiario-iva')
+    def subdiario_iva(self, request):
+        """
+        Libro IVA Ventas combinado de todas las tiendas del usuario (o el
+        subconjunto pedido en 'tiendas'): Facturas EMITIDA (suman) y Notas de
+        Crédito EMITIDA (restan), para el export contable de Panel de
+        Administración. Solo comprobantes con CAE real -- una Factura en
+        estado ERROR (ver perform_update de emitir_factura) nunca entra acá.
+        Params: fecha_desde, fecha_hasta (obligatorios), tiendas (opcional).
+        """
+        fecha_desde = request.query_params.get('fecha_desde')
+        fecha_hasta = request.query_params.get('fecha_hasta')
+        if not fecha_desde or not fecha_hasta:
+            return Response(
+                {"error": "Los parámetros 'fecha_desde' y 'fecha_hasta' son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tiendas_ids = _resolver_tiendas_para_exportar(request)
+        if not tiendas_ids:
+            return Response({"comprobantes": [], "totales": {"neto": "0.00", "iva": "0.00", "total": "0.00"}})
+
+        facturas = Factura.objects.select_related('tienda').filter(
+            tienda_id__in=tiendas_ids, estado='EMITIDA',
+            fecha_emision__date__gte=fecha_desde, fecha_emision__date__lte=fecha_hasta,
+        )
+        notas_credito = NotaCredito.objects.select_related('tienda', 'factura_origen').filter(
+            tienda_id__in=tiendas_ids, estado='EMITIDA',
+            fecha_emision__date__gte=fecha_desde, fecha_emision__date__lte=fecha_hasta,
+        )
+
+        comprobantes = []
+        neto_total = Decimal('0.00')
+        iva_total = Decimal('0.00')
+        importe_total = Decimal('0.00')
+
+        for f in facturas:
+            comprobantes.append({
+                'fecha': f.fecha_emision.isoformat(),
+                'tienda_nombre': f.tienda.nombre,
+                'tipo': 'FACTURA',
+                'tipo_comprobante': f.tipo_comprobante,
+                'numero_completo': f.numero_factura_completo,
+                'cliente_nombre': f.cliente_nombre,
+                'cliente_cuit': f.cliente_cuit or '',
+                'condicion_iva': f.cliente_condicion_iva,
+                'neto': str(f.subtotal),
+                'iva': str(f.impuesto_iva),
+                'total': str(f.total),
+                'cae': f.cae or '',
+            })
+            neto_total += f.subtotal
+            iva_total += f.impuesto_iva
+            importe_total += f.total
+
+        for nc in notas_credito:
+            neto_nc = nc.monto - nc.impuesto_iva
+            comprobantes.append({
+                'fecha': nc.fecha_emision.isoformat(),
+                'tienda_nombre': nc.tienda.nombre,
+                'tipo': 'NOTA_CREDITO',
+                'tipo_comprobante': nc.tipo_comprobante,
+                'numero_completo': nc.numero_nc_completo,
+                'cliente_nombre': nc.cliente_nombre,
+                'cliente_cuit': nc.cliente_cuit or '',
+                'condicion_iva': nc.factura_origen.cliente_condicion_iva if nc.factura_origen else '',
+                'neto': str(-neto_nc),
+                'iva': str(-nc.impuesto_iva),
+                'total': str(-nc.monto),
+                'cae': nc.cae or '',
+            })
+            neto_total -= neto_nc
+            iva_total -= nc.impuesto_iva
+            importe_total -= nc.monto
+
+        comprobantes.sort(key=lambda c: c['fecha'])
+
+        return Response({
+            'comprobantes': comprobantes,
+            'totales': {
+                'neto': str(neto_total),
+                'iva': str(iva_total),
+                'total': str(importe_total),
+            },
+        })
+
     def _construir_pdf_factura(self, factura):
         """
         Genera el PDF de una factura ya emitida. Devuelve un BytesIO listo para leer
@@ -7787,10 +7944,13 @@ class NotaCreditoViewSet(viewsets.ReadOnlyModelViewSet):
                 tienda_nombre = self.request.query_params.get('tienda_nombre')
                 if tienda_nombre:
                     queryset = queryset.filter(tienda__nombre=tienda_nombre)
-        elif user.tienda:
-            queryset = queryset.filter(tienda=user.tienda)
         else:
-            return NotaCredito.objects.none()
+            # Ver mismo fix en FacturaViewSet.get_queryset -- usar
+            # _get_tiendas_ids_usuario en vez de solo user.tienda.
+            tiendas_ids = _get_tiendas_ids_usuario(user)
+            if not tiendas_ids:
+                return NotaCredito.objects.none()
+            queryset = queryset.filter(tienda_id__in=tiendas_ids)
 
         factura_id = self.request.query_params.get('factura')
         if factura_id:
