@@ -14,7 +14,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.views import APIView
 from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Case, When
+from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Exists, Case, When
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -512,7 +512,11 @@ class ProductoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
         # Esto evita que variantes ocupen slots de paginación y desplacen el padre a la pág 2.
-        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True).distinct()
+        # Sin .distinct(): no hay ningún join en esta base que pueda duplicar filas
+        # (select_related de tienda es un M:1, prefetch_related es una query aparte),
+        # así que era puro costo de sort/hash en cada carga -- notable en catálogos
+        # grandes (ver bug de lentitud de búsqueda en Punto de Venta con 40k+ productos).
+        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True)
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         rubro_id = self.request.query_params.get('rubro_id', None)
@@ -523,16 +527,29 @@ class ProductoViewSet(viewsets.ModelViewSet):
         # Códigos: coincidencia exacta — un código parcial (ej. escanear "ALB125" cuando
         # existen "ALB1250", "ALB1251", etc.) no debe traer todos los que empiezan igual,
         # solo el producto/variante cuyo código sea idéntico al buscado.
+        #
+        # El match contra variantes usa Exists() (subquery correlacionada) en vez de un
+        # join + .distinct(): un join duplica la fila del padre por cada variante que
+        # tenga, y el .distinct() posterior fuerza un sort/hash de todo el resultado
+        # para deduplicar -- con catálogos grandes (40k+ productos) eso es justamente
+        # lo que hacía lenta esta búsqueda en cada tecleo de Punto de Venta. Ver también
+        # los índices agregados en la migración 0093 (trigram para nombre, funcionales
+        # para los códigos) -- sin eso, el WHERE de acá sigue siendo un escaneo completo
+        # en Postgres por más que se saque el join.
         search = self.request.query_params.get('search', None)
         if search:
+            variante_coincide = Producto.objects.filter(
+                producto_padre_id=OuterRef('pk')
+            ).filter(
+                Q(codigo_barras__iexact=search) | Q(codigo_interno__iexact=search)
+            )
             queryset = queryset.filter(
                 Q(nombre__icontains=search) |
                 Q(talle__icontains=search) |
                 Q(codigo_barras__iexact=search) |
                 Q(codigo_interno__iexact=search) |
-                Q(variantes__codigo_barras__iexact=search) |
-                Q(variantes__codigo_interno__iexact=search)
-            ).distinct()
+                Exists(variante_coincide)
+            )
 
         if aplicar_stock_bajo and self.request.query_params.get('stock_bajo') == '1':
             queryset = queryset.filter(
