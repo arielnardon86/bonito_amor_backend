@@ -4401,12 +4401,14 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 # ── Facturación automática ────────────────────────────────
                 if t.tn_facturar_ventas:
                     try:
-                        from .services.facturacion_service import FacturacionService
-                        fs = FacturacionService(t)
                         cliente_data = _cliente_data_desde_orden_tn(order, venta)
-                        fs.emitir_factura(venta, cliente_data)
+                        exito, factura, error = _emitir_y_persistir_factura(venta, cliente_data)
+                        if exito:
+                            logger.info("Factura emitida automáticamente para venta TN %s (CAE %s)", venta.id, factura.cae)
+                        else:
+                            logger.warning("No se pudo facturar automáticamente venta TN %s: %s", venta.id, error)
                     except Exception as e:
-                        logger.warning("Error al facturar venta TN %s: %s", venta.id, e)
+                        logger.warning("Error al facturar venta TN %s: %s", venta.id, e, exc_info=True)
 
                 # ── Notificación push ─────────────────────────────────────
                 try:
@@ -4953,6 +4955,91 @@ def _cliente_data_desde_orden_tn(order, venta):
         'cliente_domicilio': domicilio,
         'cliente_condicion_iva': 'CF',
     }
+
+
+def _emitir_y_persistir_factura(venta, cliente_data):
+    """
+    Corre FacturacionService.emitir_factura y persiste el resultado: crea/
+    actualiza el registro Factura (update_or_create -- ver comentario en el
+    caller sobre por qué no es un create simple) y, si tuvo éxito, marca
+    venta.facturada=True. Es el ÚNICO lugar que hace esta persistencia --
+    antes el webhook de Tienda Nube llamaba directo a
+    FacturacionService.emitir_factura() y descartaba el resultado sin guardar
+    nada, así que aunque ARCA emitiera el CAE correctamente, nunca quedaba
+    registrado en Total Stock (la venta se veía "sin factura" para siempre,
+    solo con recibo disponible). Devuelve (exito, factura, error).
+    """
+    from .services.facturacion_service import FacturacionService
+    facturacion_service = FacturacionService(venta.tienda)
+    exito, datos_factura, error = facturacion_service.emitir_factura(venta, cliente_data)
+
+    if not exito:
+        # update_or_create (no create): si un intento anterior ya había dejado
+        # un registro 'ERROR' para esta venta (ver OneToOneField en el modelo
+        # Factura), un reintento debe actualizar ese mismo registro en vez de
+        # chocar con la restricción de unicidad.
+        factura, _ = Factura.objects.update_or_create(
+            venta=venta,
+            defaults=dict(
+                tienda=venta.tienda,
+                punto_venta=venta.tienda.punto_venta,
+                tipo_comprobante='B',  # Por defecto Factura B
+                cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+                cliente_cuit=cliente_data.get('cliente_cuit', ''),
+                cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+                cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+                cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+                subtotal=venta.total,
+                impuesto_iva=Decimal('0.00'),
+                total=venta.total,
+                estado='ERROR',
+                sistema_facturacion=venta.tienda.tipo_facturacion,
+                error_mensaje=error,
+                # Limpia campos de una eventual EMITIDA anterior (no debería
+                # poder pasar por el guard de venta.facturada, pero por las dudas
+                # no dejar un cae/numero viejo colgado de un estado ERROR nuevo).
+                cae=None,
+                fecha_vencimiento_cae=None,
+                numero_comprobante=None,
+                numero_comprobante_afip=None,
+            ),
+        )
+        return False, factura, error
+
+    # Crear (o actualizar, si un intento anterior había quedado en 'ERROR') el
+    # registro de factura exitosa -- ver comentario de update_or_create arriba.
+    factura, _ = Factura.objects.update_or_create(
+        venta=venta,
+        defaults=dict(
+            tienda=venta.tienda,
+            numero_comprobante=datos_factura.get('numero_comprobante'),
+            punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
+            tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
+            cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
+            cliente_cuit=cliente_data.get('cliente_cuit', ''),
+            cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
+            cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
+            cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
+            subtotal=datos_factura.get('subtotal', venta.total),
+            impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
+            total=datos_factura.get('total', venta.total),
+            estado='EMITIDA',
+            sistema_facturacion=venta.tienda.tipo_facturacion,
+            cae=datos_factura.get('cae'),
+            fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
+            numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
+            respuesta_bruta=datos_factura.get('respuesta_bruta'),
+            error_mensaje=None,
+        ),
+    )
+
+    venta.facturada = True
+    venta.cliente_nombre = cliente_data.get('cliente_nombre', '')
+    venta.cliente_cuit = cliente_data.get('cliente_cuit', '')
+    venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
+    venta.cliente_tipo_documento = cliente_data.get('cliente_tipo_documento', '')
+    venta.save()
+    return True, factura, None
 
 
 # Algunos procesadores de pago de Tienda Nube mandan más de un slug distinto en
@@ -5960,46 +6047,14 @@ class VentaViewSet(viewsets.ModelViewSet):
             logger.info(f"Tipo facturación: {venta.tienda.tipo_facturacion}")
             logger.info(f"Datos del cliente: {cliente_data}")
             
-            # Inicializar servicio de facturación
-            facturacion_service = FacturacionService(venta.tienda)
-            
-            # Emitir factura
+            # Emitir y persistir (crea/actualiza el registro Factura, marca
+            # venta.facturada si tuvo éxito) -- mismo helper que usa el webhook
+            # de Tienda Nube, para que ambos caminos queden sincronizados.
             logger.info(f"⚠️ Llamando a facturacion_service.emitir_factura...")
-            exito, datos_factura, error = facturacion_service.emitir_factura(venta, cliente_data)
+            exito, factura, error = _emitir_y_persistir_factura(venta, cliente_data)
             logger.info(f"Resultado: exito={exito}, error={error}")
-            
-            if not exito:
-                # update_or_create (no create): si un intento anterior ya había dejado
-                # un registro 'ERROR' para esta venta (ver OneToOneField en el modelo
-                # Factura), un reintento manual desde Listado de Ventas debe actualizar
-                # ese mismo registro en vez de chocar con la restricción de unicidad.
-                factura, _ = Factura.objects.update_or_create(
-                    venta=venta,
-                    defaults=dict(
-                        tienda=venta.tienda,
-                        punto_venta=venta.tienda.punto_venta,
-                        tipo_comprobante='B',  # Por defecto Factura B
-                        cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
-                        cliente_cuit=cliente_data.get('cliente_cuit', ''),
-                        cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
-                        cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
-                        cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
-                        subtotal=venta.total,
-                        impuesto_iva=Decimal('0.00'),
-                        total=venta.total,
-                        estado='ERROR',
-                        sistema_facturacion=venta.tienda.tipo_facturacion,
-                        error_mensaje=error,
-                        # Limpia campos de una eventual EMITIDA anterior (no debería
-                        # poder pasar por el guard de venta.facturada, pero por las dudas
-                        # no dejar un cae/numero viejo colgado de un estado ERROR nuevo).
-                        cae=None,
-                        fecha_vencimiento_cae=None,
-                        numero_comprobante=None,
-                        numero_comprobante_afip=None,
-                    ),
-                )
 
+            if not exito:
                 return Response(
                     {
                         "error": error,
@@ -6008,45 +6063,10 @@ class VentaViewSet(viewsets.ModelViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # Crear (o actualizar, si un intento anterior había quedado en 'ERROR')
-            # el registro de factura exitosa -- ver comentario de update_or_create arriba.
-            factura, _ = Factura.objects.update_or_create(
-                venta=venta,
-                defaults=dict(
-                    tienda=venta.tienda,
-                    numero_comprobante=datos_factura.get('numero_comprobante'),
-                    punto_venta=datos_factura.get('punto_venta', venta.tienda.punto_venta),
-                    tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
-                    cliente_nombre=cliente_data.get('cliente_nombre', 'Consumidor Final'),
-                    cliente_cuit=cliente_data.get('cliente_cuit', ''),
-                    cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
-                    cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
-                    cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
-                    subtotal=datos_factura.get('subtotal', venta.total),
-                    impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
-                    total=datos_factura.get('total', venta.total),
-                    estado='EMITIDA',
-                    sistema_facturacion=venta.tienda.tipo_facturacion,
-                    cae=datos_factura.get('cae'),
-                    fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
-                    numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
-                    respuesta_bruta=datos_factura.get('respuesta_bruta'),
-                    error_mensaje=None,
-                ),
-            )
-            
-            # Marcar venta como facturada y actualizar datos del cliente
-            venta.facturada = True
-            venta.cliente_nombre = cliente_data.get('cliente_nombre', '')
-            venta.cliente_cuit = cliente_data.get('cliente_cuit', '')
-            venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
-            venta.cliente_tipo_documento = cliente_data.get('cliente_tipo_documento', '')
-            venta.save()
-            
+
             # Serializar y retornar factura
             factura_serializer = FacturaSerializer(factura)
-            
+
             return Response(
                 {
                     "message": "Factura emitida exitosamente",
@@ -6054,7 +6074,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_201_CREATED
             )
-            
+
         except Exception as e:
             import logging
             import traceback
