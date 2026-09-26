@@ -9509,7 +9509,6 @@ def registro_publico(request):
     Devuelve: { token_access, token_refresh, init_point (URL checkout MP) }
     """
     from .models import Suscripcion
-    from rest_framework_simplejwt.tokens import RefreshToken
     from django.conf import settings as django_settings
     import urllib.parse
 
@@ -9518,8 +9517,15 @@ def registro_publico(request):
     except _RegistroError as e:
         return e.response
 
-    # Generar tokens JWT para que el usuario quede logueado
-    refresh = RefreshToken.for_user(user)
+    # Generar tokens JWT para que el usuario quede logueado. Usamos el mismo
+    # serializer que el login normal (CustomTokenObtainPairSerializer) y no
+    # RefreshToken.for_user() a secas: este último no incluye los claims
+    # custom (is_staff/is_superuser/is_supervisor/tiendas_autorizadas/etc.)
+    # que el frontend necesita para decidir qué mostrar en el sidebar --
+    # con un token "pelado" el primer ingreso post-registro no renderizaba
+    # ninguna opción de menú hasta que el usuario recargaba y volvía a
+    # loguearse (ahí sí pasaba por /api/token/, que sí usa este serializer).
+    refresh = CustomTokenObtainPairSerializer.get_token(user)
 
     # Construir checkout URL del plan en MP
     # MP creará el preapproval individual y nos notificará vía webhook
@@ -9665,11 +9671,12 @@ def tn_instalar_completar_registro(request):
     instalacion.delete()
     _registrar_webhook_tn(tienda, request)
 
-    from rest_framework_simplejwt.tokens import RefreshToken
     from django.conf import settings as django_settings
     from .models import Suscripcion
     import urllib.parse
-    refresh = RefreshToken.for_user(user)
+    # Ver comentario en registro_publico: mismo motivo para usar
+    # CustomTokenObtainPairSerializer en vez de RefreshToken.for_user().
+    refresh = CustomTokenObtainPairSerializer.get_token(user)
 
     # Mismo armado de checkout de MP que registro_publico, para que el
     # frontend pueda reusar exactamente la misma lógica post-alta.
