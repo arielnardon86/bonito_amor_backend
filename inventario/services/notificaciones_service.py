@@ -268,6 +268,27 @@ class NotificacionesService:
         return NotificacionesService._despachar(venta, tokens, titulo, mensaje, data, etiqueta='venta ML anulada')
 
     @staticmethod
+    def enviar_notificacion_venta_anulada_tn(venta):
+        """
+        Envía notificaciones push cuando una venta de Tienda Nube se anula
+        automáticamente porque la orden se canceló en TN después de procesada.
+        """
+        tokens = NotificacionesService._tokens_de_tienda(venta.tienda)
+        logger.info("Enviando notificación de venta TN anulada a %s token(s) de tienda %s", len(tokens), venta.tienda.nombre)
+
+        titulo = f"Venta de Tienda Nube cancelada - {venta.tienda.nombre}"
+        mensaje = f"Se canceló un pedido de Tienda Nube por ${venta.total:.2f}. Stock repuesto automáticamente."
+        data = {
+            'type': 'venta_anulada_tn',
+            'venta_id': str(venta.id),
+            'tienda_id': str(venta.tienda.id),
+            'tienda_nombre': venta.tienda.nombre,
+            'total': str(venta.total),
+            'tn_order_id': venta.tn_order_id or '',
+        }
+        return NotificacionesService._despachar(venta, tokens, titulo, mensaje, data, etiqueta='venta TN anulada')
+
+    @staticmethod
     def registrar_token(user, token, device_info=None):
         """
         Registra o actualiza un token FCM para un usuario.

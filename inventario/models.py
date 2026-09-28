@@ -199,6 +199,10 @@ class Tienda(models.Model):
         max_length=50, blank=True, null=True,
         help_text="ID del webhook order/paid registrado en Tienda Nube"
     )
+    tn_webhook_cancelado_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID del webhook order/cancelled registrado en Tienda Nube (para poder borrarlo al desconectar)"
+    )
     # Location (centro de distribución) por defecto de la tienda en TN, resuelta
     # y cacheada la primera vez que se sincroniza stock (ver
     # TiendaNubeService._resolver_location_id_default) -- necesaria para
@@ -801,7 +805,8 @@ class Venta(models.Model):
     origen_mercadolibre = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Mercado Libre")
     ml_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Mercado Libre (para evitar duplicados)")
     origen_tiendanube = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Tienda Nube")
-    tn_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID de la orden en Tienda Nube (para evitar duplicados)")
+    tn_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID interno (order.id) de la orden en Tienda Nube -- usado solo para detectar duplicados, no se lo mostramos al comerciante (ver tn_order_number)")
+    tn_order_number = models.CharField(max_length=20, blank=True, null=True, help_text="Número de pedido (order.number) tal cual lo ve el comerciante en Tienda Nube -- para mostrar en vez de tn_order_id")
     # Cobro de suscripción de un cliente de Total Stock (no una venta real de la
     # tienda) -- se registra en la tienda interna designada para autofacturarse
     # (ver settings.TIENDA_SUSCRIPCIONES_NOMBRE y mp_webhook_suscripcion).

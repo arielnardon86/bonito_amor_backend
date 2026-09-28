@@ -637,6 +637,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
         nuevo_stock = serializer.validated_data.get('stock')
         instancia = serializer.instance
+        precio_anterior = instancia.precio
+        nombre_anterior = instancia.nombre
+        descripcion_anterior = instancia.descripcion
         if nuevo_stock is not None and nuevo_stock != (instancia.stock or 0):
             talle_str = _detalle_variante(instancia)
             stock_anterior = instancia.stock or 0
@@ -683,6 +686,32 @@ class ProductoViewSet(viewsets.ModelViewSet):
             campos_replicar['costo'] = instancia.costo
         if campos_replicar and instancia.producto_padre_id is None:
             instancia.variantes.update(**campos_replicar)
+
+        # Si el producto ya está publicado en Tienda Nube, propagar ahí los
+        # cambios de precio/nombre/descripción -- hasta ahora solo el stock se
+        # resincronizaba después de la publicación inicial (ver
+        # sincronizar_stock_producto), estos otros campos quedaban desactualizados
+        # en TN para siempre tras el primer export.
+        from .services.tiendanube_service import sincronizar_datos_producto
+        # nombre/descripción son del producto en TN, no de cada variante -- si
+        # esto es una variante puntual (talle/color), su 'nombre' local es el
+        # compuesto "Base - Color / Talle", no lo que corresponde mandar como
+        # nombre de producto en TN. Solo se propagan editando el padre/producto
+        # standalone; el precio sí es por variante y se propaga siempre.
+        precio_cambio = instancia.precio != precio_anterior
+        nombre_cambio = instancia.producto_padre_id is None and instancia.nombre != nombre_anterior
+        descripcion_cambio = instancia.producto_padre_id is None and instancia.descripcion != descripcion_anterior
+        if precio_cambio or nombre_cambio or descripcion_cambio:
+            sincronizar_datos_producto(
+                instancia, precio_cambio=precio_cambio,
+                nombre_cambio=nombre_cambio, descripcion_cambio=descripcion_cambio,
+            )
+        if 'precio' in campos_replicar:
+            # El precio recién replicado a las variantes fue un UPDATE masivo (no
+            # pasó una por una por este mismo método) -- sincronizarlo a TN para
+            # cada variante por separado.
+            for variante in instancia.variantes.all():
+                sincronizar_datos_producto(variante, precio_cambio=True)
 
     def perform_destroy(self, instance):
         if self.request.user.is_supervisor and not self.request.user.is_superuser:
@@ -4300,7 +4329,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='tiendanube/register-webhook', url_name='tn-register-webhook')
     def tn_register_webhook(self, request, pk=None):
         """
-        Registra el webhook order/paid en Tienda Nube.
+        Registra los webhooks order/paid y order/cancelled en Tienda Nube.
         La URL del webhook es /api/tiendas/{id}/tiendanube/webhook/
         """
         tienda = self.get_object()
@@ -4315,15 +4344,19 @@ class TiendaViewSet(viewsets.ModelViewSet):
         webhook_url = f"{base}/api/tiendas/{tienda.id}/tiendanube/webhook/"
 
         try:
-            # Si ya hay un webhook registrado, borrarlo primero
+            # Si ya hay webhooks registrados, borrarlos primero
             if tienda.tn_webhook_id:
                 tn.delete_webhook(tienda.tn_webhook_id)
+            if tienda.tn_webhook_cancelado_id:
+                tn.delete_webhook(tienda.tn_webhook_cancelado_id)
 
             webhook_id = tn.register_webhook('order/paid', webhook_url)
+            webhook_cancelado_id = tn.register_webhook('order/cancelled', webhook_url)
             tienda.tn_webhook_id = webhook_id
-            tienda.save(update_fields=['tn_webhook_id'])
-            logger.info("Webhook TN registrado — id=%s url=%s", webhook_id, webhook_url)
-            return Response({'success': True, 'webhook_id': webhook_id, 'url': webhook_url})
+            tienda.tn_webhook_cancelado_id = webhook_cancelado_id
+            tienda.save(update_fields=['tn_webhook_id', 'tn_webhook_cancelado_id'])
+            logger.info("Webhooks TN registrados — order/paid=%s order/cancelled=%s url=%s", webhook_id, webhook_cancelado_id, webhook_url)
+            return Response({'success': True, 'webhook_id': webhook_id, 'webhook_cancelado_id': webhook_cancelado_id, 'url': webhook_url})
         except Exception as e:
             logger.error("Error registrando webhook TN: %s", e)
             return Response({'error': f'Error al registrar webhook: {e}'}, status=400)
@@ -4332,15 +4365,20 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def tn_disconnect(self, request, pk=None):
         """Desconecta la integración con Tienda Nube."""
         tienda = self.get_object()
-        if tienda.tn_access_token and tienda.tn_webhook_id:
+        if tienda.tn_access_token:
             from .services.tiendanube_service import TiendaNubeService
-            TiendaNubeService(tienda).delete_webhook(tienda.tn_webhook_id)
+            tn = TiendaNubeService(tienda)
+            if tienda.tn_webhook_id:
+                tn.delete_webhook(tienda.tn_webhook_id)
+            if tienda.tn_webhook_cancelado_id:
+                tn.delete_webhook(tienda.tn_webhook_cancelado_id)
 
-        tienda.tn_access_token    = None
-        tienda.tn_store_id        = None
-        tienda.tn_webhook_id      = None
-        tienda.tn_sync_habilitado = False
-        tienda.save(update_fields=['tn_access_token', 'tn_store_id', 'tn_webhook_id', 'tn_sync_habilitado'])
+        tienda.tn_access_token         = None
+        tienda.tn_store_id             = None
+        tienda.tn_webhook_id           = None
+        tienda.tn_webhook_cancelado_id = None
+        tienda.tn_sync_habilitado      = False
+        tienda.save(update_fields=['tn_access_token', 'tn_store_id', 'tn_webhook_id', 'tn_webhook_cancelado_id', 'tn_sync_habilitado'])
         return Response({'success': True})
 
     @action(
@@ -4381,11 +4419,27 @@ class TiendaViewSet(viewsets.ModelViewSet):
         logger.info("Webhook TN recibido — event=%s store_id=%s order_id=%s tienda=%s",
                     event, store_id, order_id, tienda.nombre)
 
-        if event != 'order/paid' or not order_id:
+        if event not in ('order/paid', 'order/cancelled') or not order_id:
             return Response({'status': 'ignored'}, status=200)
 
         if not tienda.tn_sync_habilitado:
             return Response({'status': 'sync_disabled'}, status=200)
+
+        if event == 'order/cancelled':
+            tienda_id = tienda.id
+
+            def _procesar_cancelacion():
+                from django.db import connection as db_conn
+                try:
+                    t = Tienda.objects.get(id=tienda_id)
+                    _cancelar_venta_tiendanube(t, order_id)
+                except Exception as e:
+                    logger.error("Error procesando cancelación TN orden %s (tienda=%s): %s", order_id, tienda_id, e, exc_info=True)
+                finally:
+                    db_conn.close()
+
+            threading.Thread(target=_procesar_cancelacion, daemon=True).start()
+            return Response({'status': 'ok'}, status=200)
 
         # ── Deduplicación ─────────────────────────────────────────────────
         if Venta.objects.filter(tienda=tienda, tn_order_id=order_id).exists():
@@ -5167,6 +5221,7 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
             arancel_total=arancel_tn_total,
             origen_tiendanube=True,
             tn_order_id=order_id,
+            tn_order_number=str(order.get('number') or '') or None,
             cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
         )
 
@@ -5298,6 +5353,98 @@ def _procesar_cancelacion_orden_ml(venta, order_id):
         logger.warning(f"Error al enviar notificación push por cancelación ML (venta {venta.id}): {notif_err}")
 
     logger.info(f"✅ Venta ML {venta.id} anulada por cancelación de orden {order_id}")
+
+
+def _cancelar_venta_tiendanube(tienda, order_id):
+    """
+    Revierte una venta de Tienda Nube cuya orden fue cancelada (webhook
+    order/cancelled) después de haber sido procesada: repone el stock, la marca
+    como anulada, emite la Nota de Crédito fiscal si ya tenía factura, y avisa
+    por notificación push. Mismo criterio que _procesar_cancelacion_orden_ml,
+    pero la venta se busca por tn_order_id en vez de venir ya resuelta -- el
+    webhook de cancelación de TN no trae el pedido completo, solo su id.
+
+    No reutiliza la acción 'anular' de VentaViewSet por la misma razón que la
+    de ML: esa requiere un usuario autenticado (supervisor/admin), acá el
+    disparador es el propio webhook de TN, sin request de un humano.
+    """
+    venta = Venta.objects.filter(tienda=tienda, tn_order_id=order_id).first()
+    if not venta:
+        logger.info("Cancelación TN orden %s: no hay venta registrada para tienda %s (nunca se pagó, o ya no existe)", order_id, tienda.nombre)
+        return
+    if venta.anulada:
+        return
+
+    usuario_tn, created = User.objects.get_or_create(
+        username='tiendanube',
+        defaults={'first_name': 'Tienda', 'last_name': 'Nube', 'is_staff': False, 'is_active': True, 'tienda': tienda},
+    )
+    if created:
+        usuario_tn.set_unusable_password()
+        usuario_tn.save()
+
+    # Si ya tenía factura electrónica emitida, cancelarla fiscalmente antes de
+    # tocar la venta. Si esto falla, se loguea pero no bloquea el resto (reponer
+    # stock y anular la venta es más urgente que la parte fiscal).
+    try:
+        factura = getattr(venta, 'factura', None)
+        if factura and factura.estado == 'EMITIDA' and factura.tienda.tipo_facturacion != 'NINGUNA':
+            motivo_nc = 'Pedido de Tienda Nube cancelado'
+            facturacion_service = FacturacionService(factura.tienda)
+            exito, datos_nc, error = facturacion_service.emitir_nota_credito(factura, factura.total, motivo_nc)
+
+            campos_base = dict(
+                factura_origen=factura, tienda=factura.tienda, punto_venta=factura.tienda.punto_venta,
+                tipo_comprobante=factura.tipo_comprobante, motivo=motivo_nc,
+                monto=factura.total, impuesto_iva=Decimal('0.00'),
+                cliente_nombre=factura.cliente_nombre, cliente_cuit=factura.cliente_cuit,
+                sistema_facturacion=factura.tienda.tipo_facturacion,
+            )
+            if exito:
+                campos_base['punto_venta'] = datos_nc.get('punto_venta', factura.tienda.punto_venta)
+                campos_base['tipo_comprobante'] = datos_nc.get('tipo_comprobante', factura.tipo_comprobante)
+                campos_base['monto'] = datos_nc.get('monto', factura.total)
+                campos_base['impuesto_iva'] = datos_nc.get('impuesto_iva', Decimal('0.00'))
+                NotaCredito.objects.create(
+                    **campos_base, numero_comprobante=datos_nc.get('numero_comprobante'),
+                    estado='EMITIDA', cae=datos_nc.get('cae'),
+                    fecha_vencimiento_cae=datos_nc.get('fecha_vencimiento_cae'),
+                    numero_comprobante_afip=datos_nc.get('numero_comprobante_afip'),
+                    respuesta_bruta=datos_nc.get('respuesta_bruta'),
+                )
+                logger.info(f"✅ Nota de crédito fiscal automática emitida para venta TN {venta.id} (orden {order_id} cancelada)")
+            else:
+                NotaCredito.objects.create(**campos_base, estado='ERROR', error_mensaje=error)
+                logger.error(f"❌ No se pudo emitir NC automática para venta TN {venta.id}: {error}")
+    except Exception as e:
+        logger.error(f"Error al generar NC automática por cancelación TN (venta {venta.id}): {e}", exc_info=True)
+
+    # Reponer stock de cada detalle (mismo criterio que 'anular' para ventas normales)
+    for detalle in venta.detalles.all():
+        if detalle.producto and not detalle.anulado_individualmente:
+            producto = detalle.producto
+            producto.stock += detalle.cantidad
+            producto.save(update_fields=['stock'])
+            from .services.tiendanube_service import sincronizar_stock_producto
+            sincronizar_stock_producto(producto)
+            logger.info(f"✅ Stock repuesto por cancelación TN: {producto.nombre} (+{detalle.cantidad})")
+
+    venta.anulada = True
+    venta.save(update_fields=['anulada'])
+
+    _registrar_accion(
+        tienda=venta.tienda, usuario=usuario_tn, accion='anulacion_venta',
+        detalle=f'Anulación automática (pedido Tienda Nube {venta.tn_order_number or order_id} cancelado) · venta #{str(venta.id)[:8]} · ${venta.total}',
+        objeto_id=venta.id,
+    )
+
+    try:
+        from .services.notificaciones_service import NotificacionesService
+        NotificacionesService.enviar_notificacion_venta_anulada_tn(venta)
+    except Exception as notif_err:
+        logger.warning(f"Error al enviar notificación push por cancelación TN (venta {venta.id}): {notif_err}")
+
+    logger.info(f"✅ Venta TN {venta.id} anulada por cancelación de orden {order_id}")
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -9565,23 +9712,34 @@ def registro_publico(request):
 
 def _registrar_webhook_tn(tienda, request):
     """
-    Registra (o re-registra) el webhook order/paid en Tienda Nube para una
-    tienda recién conectada. No interrumpe el flujo si falla — se puede
-    reintentar a mano desde el panel.
+    Registra (o re-registra) los webhooks order/paid y order/cancelled en Tienda
+    Nube para una tienda recién conectada. No interrumpe el flujo si falla — se
+    puede reintentar a mano desde el panel.
     """
     from .services.tiendanube_service import TiendaNubeService
+    tn = TiendaNubeService(tienda)
+    base = request.build_absolute_uri('/').rstrip('/')
+    webhook_url = f"{base}/api/tiendas/{tienda.id}/tiendanube/webhook/"
+
     try:
-        tn = TiendaNubeService(tienda)
         if tienda.tn_webhook_id:
             tn.delete_webhook(tienda.tn_webhook_id)
-        base = request.build_absolute_uri('/').rstrip('/')
-        webhook_url = f"{base}/api/tiendas/{tienda.id}/tiendanube/webhook/"
         webhook_id = tn.register_webhook('order/paid', webhook_url)
         tienda.tn_webhook_id = webhook_id
         tienda.save(update_fields=['tn_webhook_id'])
-        logger.info("Webhook TN auto-registrado tras instalación — tienda=%s id=%s", tienda.nombre, webhook_id)
+        logger.info("Webhook TN order/paid auto-registrado tras instalación — tienda=%s id=%s", tienda.nombre, webhook_id)
     except Exception as e:
-        logger.error("No se pudo auto-registrar el webhook TN para %s: %s", tienda.nombre, e)
+        logger.error("No se pudo auto-registrar el webhook order/paid TN para %s: %s", tienda.nombre, e)
+
+    try:
+        if tienda.tn_webhook_cancelado_id:
+            tn.delete_webhook(tienda.tn_webhook_cancelado_id)
+        webhook_cancelado_id = tn.register_webhook('order/cancelled', webhook_url)
+        tienda.tn_webhook_cancelado_id = webhook_cancelado_id
+        tienda.save(update_fields=['tn_webhook_cancelado_id'])
+        logger.info("Webhook TN order/cancelled auto-registrado tras instalación — tienda=%s id=%s", tienda.nombre, webhook_cancelado_id)
+    except Exception as e:
+        logger.error("No se pudo auto-registrar el webhook order/cancelled TN para %s: %s", tienda.nombre, e)
 
 
 @api_view(['POST'])

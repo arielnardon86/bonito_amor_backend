@@ -345,6 +345,23 @@ class TiendaNubeService:
             data = {"stock": quantity}
         return self._put(f"products/{product_id}/variants/{variant_id}", data)
 
+    def update_variant_precio(self, product_id, variant_id, precio):
+        """Actualiza el precio de una variante ya publicada en TN."""
+        return self._put(f"products/{product_id}/variants/{variant_id}", {"price": str(precio)})
+
+    def update_product_datos(self, product_id, nombre=None, descripcion=None):
+        """Actualiza nombre y/o descripción de un producto ya publicado en TN.
+        Solo manda los campos que vienen con valor, para no pisar el otro con
+        algo vacío cuando la edición local no lo tocó."""
+        data = {}
+        if nombre is not None:
+            data["name"] = {"es": nombre}
+        if descripcion is not None:
+            data["description"] = {"es": descripcion}
+        if not data:
+            return None
+        return self._put(f"products/{product_id}", data)
+
     # ── Webhooks ─────────────────────────────────────────────────────────────
 
     def register_webhook(self, event, url):
@@ -417,3 +434,52 @@ def sincronizar_stock_producto(producto):
             logger.warning("No se pudo sincronizar stock a Tienda Nube para producto %s: %s", producto.nombre, e)
     except Exception as e:
         logger.warning("No se pudo sincronizar stock a Tienda Nube para producto %s: %s", producto.nombre, e)
+
+
+def sincronizar_datos_producto(producto, precio_cambio=False, nombre_cambio=False, descripcion_cambio=False):
+    """
+    Empuja a Tienda Nube los campos de un producto que cambiaron en una edición
+    local (precio y/o nombre/descripción), si está vinculado y la integración
+    está conectada. Mismo criterio best-effort y de desvinculación ante 404
+    confirmado que sincronizar_stock_producto -- no puede tirar abajo una
+    edición de producto si Tienda Nube falla o el producto ya no existe ahí.
+
+    precio_cambio va a la variante (PUT .../variants/{id}); nombre/descripción
+    van al producto padre en TN (PUT .../products/{id}) -- en TN el nombre y la
+    descripción son del producto, no de cada variante individual.
+    """
+    if not (precio_cambio or nombre_cambio or descripcion_cambio):
+        return
+    tienda = producto.tienda
+    # El nombre/descripción viven en el producto de TN -- el "padre" de una
+    # familia de variantes tiene tn_product_id pero NO tn_variant_id (no es él
+    # mismo una variante vendible), así que no se puede exigir tn_variant_id acá
+    # como hace sincronizar_stock_producto. El precio sí es por variante: se
+    # valida tn_variant_id puntualmente antes de mandarlo.
+    if not producto.tn_product_id:
+        return
+    if not tienda.tn_access_token or not tienda.tn_store_id or not tienda.tn_sync_habilitado:
+        return
+    try:
+        tn = TiendaNubeService(tienda)
+        if precio_cambio and producto.tn_variant_id:
+            tn.update_variant_precio(producto.tn_product_id, producto.tn_variant_id, producto.precio)
+        if nombre_cambio or descripcion_cambio:
+            tn.update_product_datos(
+                producto.tn_product_id,
+                nombre=producto.nombre if nombre_cambio else None,
+                descripcion=producto.descripcion if descripcion_cambio else None,
+            )
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            logger.warning(
+                "Producto/variante de %s ya no existe en Tiendanube (404) -- desvinculando", producto.nombre
+            )
+            producto.tn_product_id = None
+            producto.tn_variant_id = None
+            producto.tn_sincronizado = False
+            producto.save(update_fields=['tn_product_id', 'tn_variant_id', 'tn_sincronizado'])
+        else:
+            logger.warning("No se pudieron sincronizar datos a Tienda Nube para producto %s: %s", producto.nombre, e)
+    except Exception as e:
+        logger.warning("No se pudieron sincronizar datos a Tienda Nube para producto %s: %s", producto.nombre, e)
