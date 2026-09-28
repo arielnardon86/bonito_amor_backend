@@ -428,18 +428,24 @@ def _resolver_tienda_por_slug(request):
 def _decodificar_barcode_peso_variable(codigo):
     """
     Decodifica un código de barras EAN-13 de "peso variable" impreso por balanzas
-    con etiquetadora (confirmado contra etiquetas reales de una Systel Cuora Max,
-    formato configurable en la balanza -- este es el que tiene configurado esta
-    tienda, no es un estándar universal):
+    con etiquetadora, formato estándar "tipo báscula" (prefijo 20-29) usado por
+    Systel Cuora Max y la mayoría de las balanzas del rubro en Argentina:
 
-        dígito 1        = "2" fijo (prefijo GS1 de circulación restringida / uso interno)
-        dígitos 2-6     = código PLU del producto (5 dígitos, con ceros a la izquierda)
-        dígitos 7-12    = peso en GRAMOS (6 dígitos, con ceros a la izquierda)
+        dígitos 1-2     = prefijo "20" (rango GS1 de circulación restringida / uso interno)
+        dígitos 3-7     = código PLU del producto (5 dígitos, con ceros a la izquierda)
+        dígitos 8-12    = peso en GRAMOS (5 dígitos, con ceros a la izquierda)
         dígito 13       = dígito verificador EAN-13 estándar sobre los primeros 12
+
+    (Nota: una versión anterior de esta función asumía 1 dígito de prefijo + PLU
+    de 5 dígitos + peso de 6 dígitos -- un supuesto nunca contrastado contra una
+    etiqueta real. Se corrigió a 2+5+5 tras un caso real reportado: etiqueta con
+    PLU 7123 y PESO 1,030kg impresos, código de barras 2007123010303 -- con el
+    split viejo daba PLU "712" (no encontraba el producto) y un peso absurdo de
+    301kg; con el split de acá da PLU "7123" y 1030g, exacto.)
 
     Devuelve (plu: str, peso_gramos: int) si el código matchea el patrón Y el
     dígito verificador cierra, o None si no (para no confundir un código de barras
-    de producto normal -- que también podría arrancar con "2" por azar -- con uno
+    de producto normal -- que también podría arrancar con "20" por azar -- con uno
     de peso variable: exigir el checksum válido reduce muchísimo los falsos positivos).
     """
     if not codigo or len(codigo) != 13 or not codigo.isdigit() or codigo[0] != '2':
@@ -451,8 +457,8 @@ def _decodificar_barcode_peso_variable(codigo):
     if verificador_esperado != int(codigo[12]):
         return None
 
-    plu = str(int(codigo[1:6]))  # sin ceros a la izquierda, para matchear codigo_interno tal cual se carga
-    peso_gramos = int(codigo[6:12])
+    plu = str(int(codigo[2:7]))  # sin ceros a la izquierda, para matchear codigo_interno tal cual se carga
+    peso_gramos = int(codigo[7:12])
     return plu, peso_gramos
 
 
