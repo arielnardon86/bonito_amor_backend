@@ -4906,6 +4906,16 @@ class TiendaViewSet(viewsets.ModelViewSet):
 
                     if not producto or match_descartado:
                         # 3) Crear nuevo producto
+                        # Código de barras: usar el SKU de TN si viene y no choca con uno ya
+                        # cargado localmente; si no, generar uno (igual que ya hacen tanto el
+                        # alta manual en Gestión de Productos como vincular_tienda_nube). Sin
+                        # esto el producto quedaba sin código de barras -- al imprimir su
+                        # etiqueta, el fallback a "PROD-{id}" arma un código mucho más largo
+                        # (CODE128 en vez de EAN13) que se ve angosto/estirado en la hoja.
+                        if sku and not Producto.objects.filter(tienda=tienda, codigo_barras=sku).exists():
+                            codigo_barras_nuevo = sku
+                        else:
+                            codigo_barras_nuevo = _generar_codigo_barras_unico(tienda)
                         nuevo = Producto.objects.create(
                             tienda          = tienda,
                             nombre          = nombre_var,
@@ -4913,6 +4923,7 @@ class TiendaViewSet(viewsets.ModelViewSet):
                             stock           = stock_tn,
                             talle           = talle_val,
                             variante2       = variante2_val,
+                            codigo_barras   = codigo_barras_nuevo,
                             tn_product_id   = tn_product_id,
                             tn_variant_id   = tn_variant_id,
                             tn_sincronizado = True,
