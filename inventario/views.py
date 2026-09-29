@@ -9056,6 +9056,168 @@ class ClienteViewSet(viewsets.ModelViewSet):
             'movimientos': MovimientoCuentaCorrienteSerializer(movimientos, many=True).data,
         })
 
+    def _resumen_mensual_cliente(self, cliente):
+        """
+        Agrupa por mes calendario los consumos (ventas no anuladas, cualquier medio
+        de pago -- mismo universo que la tabla "Consumos") y los pagos (créditos de
+        cuenta corriente cuyo concepto arranca con "Cobro cuenta corriente", para no
+        contar como pago una reversión por anulación de venta). Mismo criterio que
+        el resumen mensual ya armado en el frontend (ClienteDetalle.js) -- se
+        duplica acá en vez de reusarlo porque uno corre en el navegador sobre JSON
+        y el otro arma un PDF en el servidor.
+        Devuelve una lista de dicts ordenada de mes más reciente a más viejo.
+        """
+        MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+                    'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+        por_mes = {}
+
+        def _bucket(fecha):
+            key = (fecha.year, fecha.month)
+            if key not in por_mes:
+                por_mes[key] = {
+                    'key': key,
+                    'label': f"{MESES_ES[fecha.month - 1].capitalize()} de {fecha.year}",
+                    'consumos': Decimal('0.00'),
+                    'pagos': Decimal('0.00'),
+                }
+            return por_mes[key]
+
+        for venta in Venta.objects.filter(cliente=cliente, anulada=False):
+            _bucket(venta.fecha_venta)['consumos'] += Decimal(str(venta.total))
+        for mov in cliente.movimientos_cuenta_corriente.filter(tipo='CREDITO', concepto__startswith='Cobro cuenta corriente'):
+            _bucket(mov.fecha)['pagos'] += Decimal(str(mov.monto))
+
+        return sorted(por_mes.values(), key=lambda m: m['key'], reverse=True)
+
+    def _construir_pdf_resumen_cuenta(self, cliente):
+        """
+        Genera el PDF de resumen de cuenta corriente de un cliente: saldo
+        adeudado actual + el desglose mes a mes de consumos y pagos (mismo
+        cálculo que el resumen mensual en pantalla). Pensado para clientes que
+        usan mucho Cuenta Corriente con clientes habituales, para poder
+        entregarles un comprobante del estado de cuenta. Devuelve un BytesIO.
+        """
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'ResumenTitle', parent=styles['Heading1'], fontSize=16,
+            textColor=colors.HexColor('#000000'), spaceAfter=12, alignment=1
+        )
+        subtitle_style = ParagraphStyle(
+            'ResumenSubtitle', parent=styles['Heading2'], fontSize=14,
+            textColor=colors.HexColor('#000000'), spaceAfter=8, alignment=1
+        )
+        normal_style = styles['Normal']
+        normal_style.fontSize = 10
+        normal_style.textColor = colors.HexColor('#000000')
+        saldo_style = ParagraphStyle(
+            'ResumenSaldo', parent=styles['Normal'], fontSize=13,
+            textColor=colors.HexColor('#000000'), spaceAfter=4, spaceBefore=4,
+        )
+
+        story = []
+        tienda = cliente.tienda
+
+        tiene_logo = False
+        if tienda and tienda.logo:
+            try:
+                match_logo = re.match(r'^data:image/\w+;base64,(.+)$', tienda.logo)
+                logo_b64 = match_logo.group(1) if match_logo else tienda.logo
+                logo_image = Image(BytesIO(base64.b64decode(logo_b64)), width=30 * mm, height=20 * mm, kind='proportional')
+                logo_image.hAlign = 'CENTER'
+                story.append(logo_image)
+                story.append(Spacer(1, 8))
+                tiene_logo = True
+            except Exception:
+                pass
+
+        nombre_tienda = tienda.nombre if tienda else 'N/A'
+        if tiene_logo:
+            nombre_tienda_style = ParagraphStyle(
+                'ResumenNombreTiendaChico', parent=styles['Normal'], fontSize=10,
+                textColor=colors.HexColor('#555555'), spaceAfter=12, alignment=1
+            )
+            story.append(Paragraph(nombre_tienda, nombre_tienda_style))
+        else:
+            story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
+
+        story.append(Paragraph('RESUMEN DE CUENTA', subtitle_style))
+        story.append(Paragraph(f"<b>Fecha de emisión:</b> {timezone.now().strftime('%d/%m/%Y %H:%M')}", normal_style))
+        story.append(Spacer(1, 12))
+
+        story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
+        story.append(Paragraph(f"<b>Nombre:</b> {cliente.nombre_razon_social}", normal_style))
+        if cliente.cuit_cuil:
+            story.append(Paragraph(f"<b>CUIT/CUIL:</b> {cliente.cuit_cuil}", normal_style))
+        story.append(Spacer(1, 16))
+
+        saldo_pendiente = calcular_saldo_pendiente(cliente)
+        color_saldo = '#c0392b' if saldo_pendiente > 0 else '#1a6a40'
+        story.append(Paragraph(
+            f'<b>Saldo adeudado actual: <font color="{color_saldo}">${saldo_pendiente:.2f}</font></b>',
+            saldo_style,
+        ))
+        tiene_deuda_vencida, fecha_vencimiento = obtener_deuda_vencida_info(cliente)
+        if tiene_deuda_vencida:
+            texto_vencida = "Deuda vencida"
+            if fecha_vencimiento:
+                texto_vencida += f" desde el {fecha_vencimiento.strftime('%d/%m/%Y')}"
+            story.append(Paragraph(f'<font color="#c0392b">⚠ {texto_vencida}.</font>', normal_style))
+        story.append(Spacer(1, 16))
+
+        resumen_mensual = self._resumen_mensual_cliente(cliente)
+        story.append(Paragraph("<b>RESUMEN MENSUAL</b>", normal_style))
+        story.append(Spacer(1, 6))
+        if not resumen_mensual:
+            story.append(Paragraph("Sin movimientos registrados.", normal_style))
+        else:
+            data = [['Mes', 'Consumos', 'Pagos', 'Saldo del mes']]
+            for mes in resumen_mensual:
+                saldo_mes = mes['consumos'] - mes['pagos']
+                data.append([
+                    mes['label'],
+                    f"${mes['consumos']:.2f}",
+                    f"${mes['pagos']:.2f}",
+                    f"${saldo_mes:.2f}",
+                ])
+            table = Table(data, colWidths=[50 * mm, 40 * mm, 40 * mm, 40 * mm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ]))
+            story.append(table)
+
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("<i>Documento no válido como comprobante fiscal.</i>", normal_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+
+    @action(detail=True, methods=['get'], url_path='pdf-resumen-cuenta', url_name='pdf-resumen-cuenta')
+    def pdf_resumen_cuenta(self, request, pk=None):
+        """Descarga el resumen de cuenta corriente del cliente en PDF (saldo
+        adeudado + desglose mensual de consumos y pagos)."""
+        if not REPORTLAB_AVAILABLE:
+            return Response(
+                {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        cliente = self.get_object()
+        buffer = self._construir_pdf_resumen_cuenta(cliente)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="resumen_cuenta_{cliente.id}.pdf"'
+        return response
+
     @action(detail=False, methods=['get'])
     def deuda_vencida(self, request):
         """Clientes con saldo pendiente y al menos una venta a Cuenta Corriente vencida (para la alerta)."""
