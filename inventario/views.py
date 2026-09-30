@@ -1123,8 +1123,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 if costo_raw is None or str(costo_raw).strip() == '':
                     raise ValueError("Falta 'Costo'.")
                 costo = Decimal(str(costo_raw))
-                if costo <= 0:
-                    raise ValueError("El costo debe ser mayor a 0.")
+                if costo < 0:
+                    raise ValueError("El costo no puede ser negativo.")
 
                 if cantidad_raw is None or str(cantidad_raw).strip() == '':
                     cantidad = 0
