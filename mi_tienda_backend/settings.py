@@ -337,11 +337,6 @@ TIENDA_SUSCRIPCIONES_NOMBRE = os.environ.get('TIENDA_SUSCRIPCIONES_NOMBRE', 'Tot
 TIENDANUBE_APP_ID = os.environ.get('TIENDANUBE_APP_ID', '')
 TIENDANUBE_CLIENT_SECRET = os.environ.get('TIENDANUBE_CLIENT_SECRET', '')
 
-# ── Anthropic (Claude) ────────────────────────────────────────────────────────
-# Usada por importacion_ia_service.py para extraer líneas de productos de la
-# foto/PDF de una factura de compra (ver ProductoViewSet.importacion_ia).
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-
 # ── Email — Zoho Mail (info@totalstock.com.ar) ───────────────────────────────
 # En Render configurar:
 #   EMAIL_HOST_PASSWORD  → contraseña de aplicación de Zoho
