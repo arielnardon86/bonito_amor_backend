@@ -721,15 +721,19 @@ class FacturacionService:
                     total = total_con_iva  # El total ya es correcto (incluye IVA y descuentos/recargos aplicados)
                     logger.info(f"Cálculos de IVA (redondeados a 2 decimales): Subtotal={subtotal}, IVA={impuesto_iva}, Total={total}")
                 
-                # Mapear condición de IVA a código AFIP
-                # Códigos AFIP: 1=RI, 4=EX, 5=CF, 6=MT, 0=NR
+                # Mapear condición de IVA a código CondicionIVAReceptorId de ARCA (tabla
+                # oficial FEParamGetCondicionIvaReceptor, vigente desde RG 5616 -- códigos
+                # válidos: 1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16. 'NR' (No Responsable) se
+                # sacó de las opciones del frontend: no tiene equivalente 1:1 confirmado en
+                # esta tabla y el código 0 que se usaba antes no es un valor válido (ARCA
+                # lo rechazaría). Si de todos modos llega un valor viejo/desconocido, cae
+                # al default de Consumidor Final en vez de mandar un código inválido.
                 condicion_iva = cliente_data.get('cliente_condicion_iva', 'CF')
                 condicion_iva_codigo_map = {
                     'RI': 1,  # Responsable Inscripto
                     'EX': 4,  # Exento
                     'CF': 5,  # Consumidor Final
                     'MT': 6,  # Monotributo
-                    'NR': 0,  # No Responsable
                 }
                 condicion_iva_codigo = condicion_iva_codigo_map.get(condicion_iva, 5)  # Por defecto CF
                 
@@ -1498,8 +1502,9 @@ class FacturacionService:
                 impuesto_iva_nc = (monto_nc - subtotal_nc).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 total_nc        = monto_nc
 
-            # Condición IVA del receptor
-            condicion_iva_codigo_map = {'RI': 1, 'EX': 4, 'CF': 5, 'MT': 6, 'NR': 0}
+            # Condición IVA del receptor -- mismo mapeo/criterio que en _emitir_afip()
+            # más arriba ('NR' sin código válido confirmado, se saca del mapa).
+            condicion_iva_codigo_map = {'RI': 1, 'EX': 4, 'CF': 5, 'MT': 6}
             condicion_iva_codigo = condicion_iva_codigo_map.get(factura.cliente_condicion_iva, 5)
 
             nro_doc_cliente = re.sub(r'[^0-9]', '', factura.cliente_cuit or '')
