@@ -16,7 +16,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Exists, Case, When
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -9134,10 +9134,18 @@ def detalle_transacciones_cliente(cliente, desde=None, hasta=None):
         ventas_qs = ventas_qs.filter(fecha_venta__date__lte=hasta)
         pagos_qs = pagos_qs.filter(fecha__date__lte=hasta)
 
-    consumos = [
-        {'fecha': v.fecha_venta, 'detalle': v.metodo_pago or '—', 'monto': Decimal(str(v.total))}
-        for v in ventas_qs.order_by('-fecha_venta')
-    ]
+    consumos = []
+    for v in ventas_qs.order_by('-fecha_venta').prefetch_related('detalles__producto'):
+        items = [
+            f"{d.cantidad}x {d.producto.nombre if d.producto else 'Producto eliminado'}"
+            for d in v.detalles.all() if not d.anulado_individualmente
+        ]
+        consumos.append({
+            'fecha': v.fecha_venta,
+            'detalle': v.metodo_pago or '—',
+            'productos': ', '.join(items) if items else '—',
+            'monto': Decimal(str(v.total)),
+        })
     pagos = [
         {'fecha': m.fecha, 'detalle': m.concepto, 'monto': Decimal(str(m.monto))}
         for m in pagos_qs.order_by('-fecha')
@@ -9145,45 +9153,65 @@ def detalle_transacciones_cliente(cliente, desde=None, hasta=None):
     return consumos, pagos
 
 
-def _tabla_detalle_pdf(story, titulo, filas, columna_detalle, normal_style, col_widths):
-    """Agrega al `story` del PDF una tabla de detalle itemizado (Fecha /
-    columna_detalle / Monto), o un aviso de "sin movimientos" si `filas` viene
-    vacío. Compartido entre consumos y pagos en construir_pdf_resumen_cuenta
-    para no duplicar el armado de la tabla dos veces."""
+def _tabla_detalle_pdf(story, titulo, filas, columnas, normal_style, col_widths):
+    """
+    Agrega al `story` del PDF una tabla de detalle itemizado, o un aviso de
+    "sin movimientos" si `filas` viene vacío. `columnas` es una lista de
+    (header, key, alineacion) -- alineacion 'LEFT'/'RIGHT'. Las columnas de
+    texto largo (ej. productos) van envueltas en Paragraph para que el texto
+    haga wrap dentro de la celda en vez de desbordar la tabla.
+    """
     story.append(Paragraph(f"<b>{titulo}</b>", normal_style))
     story.append(Spacer(1, 6))
     if not filas:
         story.append(Paragraph("Sin movimientos registrados.", normal_style))
         return
-    data = [['Fecha', columna_detalle, 'Monto']]
+    cell_style = ParagraphStyle('DetalleCell', parent=normal_style, fontSize=9, leading=11)
+    data = [[header for header, _key, _align in columnas]]
     for fila in filas:
-        data.append([fila['fecha'].strftime('%d/%m/%Y'), fila['detalle'], f"${fila['monto']:.2f}"])
-    table = Table(data, colWidths=col_widths)
-    table.setStyle(TableStyle([
+        row = []
+        for _header, key, _align in columnas:
+            if key == 'fecha':
+                valor = fila['fecha'].strftime('%d/%m/%Y')
+            elif key == 'monto':
+                valor = f"${fila['monto']:.2f}"
+            else:
+                valor = fila[key]
+            row.append(Paragraph(str(valor), cell_style))
+        data.append(row)
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    estilo = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 10),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ('ALIGN', (0, 0), (1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -1), 9),
-    ]))
+    ]
+    for i, (_header, _key, align) in enumerate(columnas):
+        estilo.append(('ALIGN', (i, 0), (i, -1), align))
+    table.setStyle(TableStyle(estilo))
     story.append(table)
 
 
-def construir_pdf_resumen_cuenta(cliente):
+MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+            'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+
+def construir_pdf_resumen_cuenta(cliente, anio=None, mes=None):
     """
     Genera el PDF de resumen de cuenta corriente de un cliente: saldo
     adeudado actual + el desglose mes a mes de consumos y pagos (totales) +
     el detalle transacción por transacción de ambos, con su fecha puntual --
     para que el cliente pueda verificar cada consumo y cada pago, no solo el
-    total. Pensado para clientes que usan mucho Cuenta Corriente con clientes
-    habituales (comprobante del estado de cuenta) y para adjuntar en el mail
-    de aviso de deuda vencida/próxima a vencer. Devuelve un BytesIO.
+    total. Si vienen `anio`/`mes` (ambos, int), el resumen mensual y el
+    detalle itemizado quedan acotados a ESE mes puntual (el botón "Descargar
+    resumen de cuenta" de cada fila en Gestión de Clientes) -- si no vienen,
+    trae el historial completo (usado también al adjuntar el PDF en el mail
+    de aviso de deuda vencida/próxima a vencer). Devuelve un BytesIO.
     """
+    mes_puntual = anio is not None and mes is not None
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
     styles = getSampleStyleSheet()
@@ -9229,7 +9257,11 @@ def construir_pdf_resumen_cuenta(cliente):
     else:
         story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
 
-    story.append(Paragraph('RESUMEN DE CUENTA', subtitle_style))
+    if mes_puntual:
+        titulo_periodo = f"RESUMEN DE CUENTA — {MESES_ES[mes - 1].upper()} DE {anio}"
+    else:
+        titulo_periodo = 'RESUMEN DE CUENTA'
+    story.append(Paragraph(titulo_periodo, subtitle_style))
     story.append(Paragraph(f"<b>Fecha de emisión:</b> {timezone.now().strftime('%d/%m/%Y %H:%M')}", normal_style))
     story.append(Spacer(1, 12))
 
@@ -9254,18 +9286,20 @@ def construir_pdf_resumen_cuenta(cliente):
     story.append(Spacer(1, 16))
 
     resumen_mensual = resumen_mensual_cliente(cliente)
+    if mes_puntual:
+        resumen_mensual = [m for m in resumen_mensual if m['key'] == (anio, mes)]
     story.append(Paragraph("<b>RESUMEN MENSUAL</b>", normal_style))
     story.append(Spacer(1, 6))
     if not resumen_mensual:
         story.append(Paragraph("Sin movimientos registrados.", normal_style))
     else:
         data = [['Mes', 'Consumos', 'Pagos', 'Saldo del mes']]
-        for mes in resumen_mensual:
-            saldo_mes = mes['consumos'] - mes['pagos']
+        for fila_mes in resumen_mensual:
+            saldo_mes = fila_mes['consumos'] - fila_mes['pagos']
             data.append([
-                mes['label'],
-                f"${mes['consumos']:.2f}",
-                f"${mes['pagos']:.2f}",
+                fila_mes['label'],
+                f"${fila_mes['consumos']:.2f}",
+                f"${fila_mes['pagos']:.2f}",
                 f"${saldo_mes:.2f}",
             ])
         table = Table(data, colWidths=[50 * mm, 40 * mm, 40 * mm, 40 * mm])
@@ -9285,14 +9319,28 @@ def construir_pdf_resumen_cuenta(cliente):
 
     # Detalle transacción por transacción (con fecha puntual de cada una), no
     # solo el total agrupado por mes de arriba -- para que el cliente pueda
-    # verificar cada consumo y cada pago individualmente.
-    consumos, pagos = detalle_transacciones_cliente(cliente)
+    # verificar cada consumo y cada pago individualmente. Si el PDF es de un
+    # mes puntual, el detalle queda acotado a ese mes también (si no, quedaría
+    # mostrando TODO el historial debajo de un resumen de un solo mes).
+    desde = hasta = None
+    if mes_puntual:
+        import calendar
+        desde = date(anio, mes, 1)
+        hasta = date(anio, mes, calendar.monthrange(anio, mes)[1])
+    consumos, pagos = detalle_transacciones_cliente(cliente, desde=desde, hasta=hasta)
     story.append(Spacer(1, 20))
-    _tabla_detalle_pdf(story, 'DETALLE DE CONSUMOS', consumos, 'Método de pago', normal_style,
-                        col_widths=[35 * mm, 75 * mm, 40 * mm])
+    _tabla_detalle_pdf(
+        story, 'DETALLE DE CONSUMOS', consumos,
+        columnas=[('Fecha', 'fecha', 'LEFT'), ('Método de pago', 'detalle', 'LEFT'),
+                  ('Productos', 'productos', 'LEFT'), ('Monto', 'monto', 'RIGHT')],
+        normal_style=normal_style, col_widths=[22 * mm, 30 * mm, 78 * mm, 25 * mm],
+    )
     story.append(Spacer(1, 16))
-    _tabla_detalle_pdf(story, 'DETALLE DE PAGOS', pagos, 'Concepto', normal_style,
-                        col_widths=[35 * mm, 75 * mm, 40 * mm])
+    _tabla_detalle_pdf(
+        story, 'DETALLE DE PAGOS', pagos,
+        columnas=[('Fecha', 'fecha', 'LEFT'), ('Concepto', 'detalle', 'LEFT'), ('Monto', 'monto', 'RIGHT')],
+        normal_style=normal_style, col_widths=[30 * mm, 90 * mm, 35 * mm],
+    )
 
     story.append(Spacer(1, 20))
     story.append(Paragraph("<i>Documento no válido como comprobante fiscal.</i>", normal_style))
@@ -9360,18 +9408,36 @@ class ClienteViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='pdf-resumen-cuenta', url_name='pdf-resumen-cuenta')
     def pdf_resumen_cuenta(self, request, pk=None):
-        """Descarga el resumen de cuenta corriente del cliente en PDF (saldo
+        """
+        Descarga el resumen de cuenta corriente del cliente en PDF (saldo
         adeudado + desglose mensual de consumos y pagos + detalle transacción
-        por transacción con fecha)."""
+        por transacción con fecha). Con `anio`+`mes` (query params) el PDF
+        queda acotado a ese mes puntual, tanto el resumen mensual como el
+        detalle itemizado -- sin esos params, trae el historial completo.
+        """
         if not REPORTLAB_AVAILABLE:
             return Response(
                 {"error": "reportlab no está instalado. Instala con: pip install reportlab"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         cliente = self.get_object()
-        buffer = construir_pdf_resumen_cuenta(cliente)
+
+        anio_param = request.query_params.get('anio')
+        mes_param = request.query_params.get('mes')
+        anio = mes = None
+        sufijo_archivo = ''
+        if anio_param and mes_param:
+            try:
+                anio, mes = int(anio_param), int(mes_param)
+                if not (1 <= mes <= 12):
+                    raise ValueError
+            except ValueError:
+                return Response({'error': "'anio'/'mes' inválidos."}, status=400)
+            sufijo_archivo = f"_{anio}-{mes:02d}"
+
+        buffer = construir_pdf_resumen_cuenta(cliente, anio=anio, mes=mes)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="resumen_cuenta_{cliente.id}.pdf"'
+        response['Content-Disposition'] = f'attachment; filename="resumen_cuenta_{cliente.id}{sufijo_archivo}.pdf"'
         return response
 
     @action(detail=False, methods=['get'])
