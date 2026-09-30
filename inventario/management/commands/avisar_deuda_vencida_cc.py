@@ -15,7 +15,10 @@ Lógica (igual para los dos casos, solo cambia la fecha objetivo y el texto del 
      objetivo (hoy, o hoy + 10 días).
   2. Agrupa por cliente (puede tener más de una venta que vence el mismo día).
   3. Si el cliente todavía tiene saldo pendiente > 0 y tiene email cargado, le envía
-     un mail con el saldo total a pagar.
+     un mail con el saldo total a pagar, el detalle de consumos y pagos DE ESTE MES
+     (para que el saldo se entienda, no sea solo un número suelto), y adjunta el PDF
+     de resumen de cuenta completo (desglose mensual + detalle transacción por
+     transacción con fecha de todo el historial).
 
 El saldo informado es el saldo pendiente TOTAL de la cuenta corriente (el libro de
 movimientos es un saldo corrido, no por comprobante), no solo el importe de la venta
@@ -25,13 +28,36 @@ que vence en la fecha objetivo.
 import logging
 from datetime import timedelta
 from django.core.management.base import BaseCommand
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage
 from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 DIAS_ANTICIPACION_AVISO_PREVIO = 10
+
+
+def _texto_detalle_mes(consumos, pagos):
+    """Arma el bloque de texto plano con los consumos y pagos del mes en curso,
+    cada uno con su fecha, para que el saldo informado no sea un número suelto
+    sino algo que el cliente pueda verificar. `consumos`/`pagos` vienen de
+    detalle_transacciones_cliente() (más reciente primero)."""
+    lineas = ["Consumos de este mes:"]
+    if not consumos:
+        lineas.append("  (sin consumos este mes)")
+    else:
+        for c in consumos:
+            lineas.append(f"  - {c['fecha'].strftime('%d/%m/%Y')}: {c['detalle']} — ${c['monto']:.2f}")
+
+    lineas.append("")
+    lineas.append("Pagos de este mes:")
+    if not pagos:
+        lineas.append("  (sin pagos este mes)")
+    else:
+        for p in pagos:
+            lineas.append(f"  - {p['fecha'].strftime('%d/%m/%Y')}: {p['detalle']} — ${p['monto']:.2f}")
+
+    return "\n".join(lineas)
 
 
 class Command(BaseCommand):
@@ -48,6 +74,9 @@ class Command(BaseCommand):
                 "Te recordamos que hoy vence el plazo acordado para cancelar tu cuenta "
                 "corriente en {tienda}.\n\n"
                 "Saldo pendiente: ${saldo:.2f}\n\n"
+                "{detalle_mes}\n\n"
+                "Adjuntamos el resumen de cuenta completo en PDF, con el detalle de "
+                "todos tus consumos y pagos.\n\n"
                 "Por favor, acercate a abonar o contactanos para coordinar el pago.\n\n"
                 "— {tienda}"
             ),
@@ -62,6 +91,9 @@ class Command(BaseCommand):
                 "({fecha_vencimiento}) vence el plazo acordado para cancelar tu cuenta "
                 "corriente en {tienda}.\n\n"
                 "Saldo pendiente: ${saldo:.2f}\n\n"
+                "{detalle_mes}\n\n"
+                "Adjuntamos el resumen de cuenta completo en PDF, con el detalle de "
+                "todos tus consumos y pagos.\n\n"
                 "Por favor, acercate a abonar o contactanos para coordinar el pago.\n\n"
                 "— {tienda}"
             ),
@@ -76,6 +108,12 @@ class Command(BaseCommand):
     def _avisar(self, fecha_objetivo, asunto_tpl, cuerpo_tpl, etiqueta):
         from inventario.models import Venta
         from inventario.serializers import calcular_saldo_pendiente
+        from inventario.views import (
+            detalle_transacciones_cliente, construir_pdf_resumen_cuenta, REPORTLAB_AVAILABLE,
+        )
+
+        hoy = timezone.now().date()
+        primer_dia_mes = hoy.replace(day=1)
 
         ventas = Venta.objects.filter(
             metodo_pago='Cuenta Corriente',
@@ -104,6 +142,8 @@ class Command(BaseCommand):
                 ))
                 continue
 
+            consumos_mes, pagos_mes = detalle_transacciones_cliente(cliente, desde=primer_dia_mes, hasta=hoy)
+
             tienda_nombre = cliente.tienda.nombre
             asunto = asunto_tpl.format(tienda=tienda_nombre)
             cuerpo = cuerpo_tpl.format(
@@ -111,15 +151,24 @@ class Command(BaseCommand):
                 tienda=tienda_nombre,
                 saldo=saldo,
                 fecha_vencimiento=fecha_objetivo.strftime('%d/%m/%Y'),
+                detalle_mes=_texto_detalle_mes(consumos_mes, pagos_mes),
             )
             try:
-                send_mail(
+                email = EmailMessage(
                     subject=asunto,
-                    message=cuerpo,
+                    body=cuerpo,
                     from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'Total Stock <info@totalstock.com.ar>'),
-                    recipient_list=[cliente.email],
-                    fail_silently=False,
+                    to=[cliente.email],
                 )
+                if REPORTLAB_AVAILABLE:
+                    try:
+                        pdf_buffer = construir_pdf_resumen_cuenta(cliente)
+                        email.attach(f'resumen_cuenta_{cliente.id}.pdf', pdf_buffer.getvalue(), 'application/pdf')
+                    except Exception as e:
+                        # No bloquea el envío del mail -- el cliente igual se entera por
+                        # el cuerpo del mail, aunque esta vez se quede sin el PDF adjunto.
+                        logger.error("No se pudo generar el PDF de resumen de cuenta para cliente %s: %s", cliente.id, e)
+                email.send(fail_silently=False)
                 enviados += 1
                 self.stdout.write(self.style.SUCCESS(
                     f"{cliente.nombre_razon_social} ({cliente.email}): aviso enviado ({etiqueta}). Saldo: ${saldo:.2f}"
