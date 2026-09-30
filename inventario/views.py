@@ -425,6 +425,57 @@ def _resolver_tienda_por_slug(request):
     return Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).first()
 
 
+def _resumen_ventas_dia(tienda, fecha_desde, fecha_hasta=None):
+    """
+    Calcula el resumen de ventas (total facturable, cantidad, unidades) de una
+    tienda en el día `fecha_desde`. Si `fecha_hasta` (datetime) viene, corta ahí
+    en vez de tomar el día completo -- sirve para comparar "lo vendido hasta esta
+    misma hora" de dos días distintos, en vez de un día completo contra uno a
+    medias. Mismo criterio en todos lados que usan este resumen (WidgetVentasHoyAPIView,
+    VentaViewSet.monitor_hoy): excluye Notas de Crédito/Pendiente, resta la
+    diferencia a favor del cliente en cambios con diferencia, e ignora ventas que
+    ya tienen su propia Nota de Crédito (para no duplicar el ajuste).
+    """
+    ventas_qs = Venta.objects.filter(
+        tienda=tienda, anulada=False, fecha_venta__date=fecha_desde
+    ).exclude(metodo_pago__in=['Nota de Crédito', 'Pendiente'])
+    if fecha_hasta is not None:
+        ventas_qs = ventas_qs.filter(fecha_venta__lte=fecha_hasta)
+
+    if CambioDevolucion is not None:
+        ventas_list = list(ventas_qs.prefetch_related('cambio_devolucion_diferencia', 'nota_credito_origen'))
+    else:
+        ventas_list = list(ventas_qs)
+
+    total = Decimal('0.00')
+    cantidad_ventas = 0
+    ventas_incluidas_ids = []
+    for venta in ventas_list:
+        if CambioDevolucion is not None and list(venta.nota_credito_origen.all()):
+            continue
+        monto = venta.total
+        if CambioDevolucion is not None:
+            dif = list(venta.cambio_devolucion_diferencia.all())
+            if dif:
+                monto = dif[0].monto_diferencia
+        total += monto or Decimal('0.00')
+        cantidad_ventas += 1
+        ventas_incluidas_ids.append(venta.id)
+
+    unidades_vendidas = DetalleVenta.objects.filter(
+        venta_id__in=ventas_incluidas_ids, anulado_individualmente=False
+    ).aggregate(total=Sum('cantidad'))['total'] or 0
+
+    ticket_promedio = (total / cantidad_ventas) if cantidad_ventas > 0 else Decimal('0.00')
+
+    return {
+        'total': total,
+        'cantidad_ventas': cantidad_ventas,
+        'unidades_vendidas': unidades_vendidas,
+        'ticket_promedio': ticket_promedio,
+    }
+
+
 def _decodificar_barcode_peso_variable(codigo):
     """
     Decodifica un código de barras EAN-13 de "peso variable" impreso por balanzas
@@ -5774,6 +5825,43 @@ class VentaViewSet(viewsets.ModelViewSet):
             
         return queryset
 
+    @action(detail=False, methods=['get'], url_path='monitor-hoy')
+    def monitor_hoy(self, request):
+        """
+        Datos para el panel "Monitor en vivo" de Punto de Venta: ventas de hoy y
+        variación contra el total del mismo momento ayer (misma hora, no el día
+        completo -- si son las 12:00, compara contra lo vendido ayer hasta las
+        12:00, no contra el día de ayer entero, que todavía no es comparable).
+        Reutiliza el mismo criterio de cálculo que WidgetVentasHoyAPIView.
+        """
+        tienda = _resolver_tienda_por_slug(request)
+        if not tienda:
+            return Response({'error': 'Tienda no encontrada o no autorizada.'}, status=404)
+
+        ahora = timezone.localtime()
+        hoy = ahora.date()
+        ayer = hoy - timedelta(days=1)
+        hasta_ayer = timezone.make_aware(datetime.combine(ayer, ahora.time()))
+
+        resumen_hoy = _resumen_ventas_dia(tienda, fecha_desde=hoy, fecha_hasta=None)
+        resumen_ayer = _resumen_ventas_dia(tienda, fecha_desde=ayer, fecha_hasta=hasta_ayer)
+
+        total_hoy = resumen_hoy['total']
+        total_ayer = resumen_ayer['total']
+        if total_ayer > 0:
+            variacion_pct = float((total_hoy - total_ayer) / total_ayer * 100)
+        else:
+            variacion_pct = None if total_hoy == 0 else 100.0
+
+        return Response({
+            'total_ventas_hoy': str(total_hoy),
+            'variacion_pct': variacion_pct,
+            'cantidad_ventas': resumen_hoy['cantidad_ventas'],
+            'unidades_vendidas': resumen_hoy['unidades_vendidas'],
+            'ticket_promedio': str(resumen_hoy['ticket_promedio']),
+            'actualizado': ahora.isoformat(),
+        })
+
     @action(detail=False, methods=['get'], permission_classes=[IsAdminOrSuperUser], url_path='exportar-multitienda')
     def exportar_multitienda(self, request):
         """
@@ -7510,43 +7598,15 @@ class WidgetVentasHoyAPIView(APIView):
             return Response({'error': 'Token inválido.'}, status=status.HTTP_404_NOT_FOUND)
 
         hoy = timezone.localdate()
-        ventas_qs = Venta.objects.filter(
-            tienda=tienda, anulada=False, fecha_venta__date=hoy
-        ).exclude(metodo_pago__in=['Nota de Crédito', 'Pendiente'])
-
-        if CambioDevolucion is not None:
-            ventas_list = list(ventas_qs.prefetch_related('cambio_devolucion_diferencia', 'nota_credito_origen'))
-        else:
-            ventas_list = list(ventas_qs)
-
-        total = Decimal('0.00')
-        cantidad_ventas = 0
-        ventas_incluidas_ids = []
-        for venta in ventas_list:
-            if CambioDevolucion is not None and list(venta.nota_credito_origen.all()):
-                continue
-            monto = venta.total
-            if CambioDevolucion is not None:
-                dif = list(venta.cambio_devolucion_diferencia.all())
-                if dif:
-                    monto = dif[0].monto_diferencia
-            total += monto or Decimal('0.00')
-            cantidad_ventas += 1
-            ventas_incluidas_ids.append(venta.id)
-
-        unidades_vendidas = DetalleVenta.objects.filter(
-            venta_id__in=ventas_incluidas_ids, anulado_individualmente=False
-        ).aggregate(total=Sum('cantidad'))['total'] or 0
-
-        ticket_promedio = (total / cantidad_ventas) if cantidad_ventas > 0 else Decimal('0.00')
+        resumen = _resumen_ventas_dia(tienda, fecha_desde=hoy)
 
         return Response({
             'tienda_nombre': tienda.nombre,
             'tienda_logo': tienda.logo,
-            'total_ventas_hoy': str(total),
-            'cantidad_ventas': cantidad_ventas,
-            'unidades_vendidas': unidades_vendidas,
-            'ticket_promedio': str(ticket_promedio),
+            'total_ventas_hoy': str(resumen['total']),
+            'cantidad_ventas': resumen['cantidad_ventas'],
+            'unidades_vendidas': resumen['unidades_vendidas'],
+            'ticket_promedio': str(resumen['ticket_promedio']),
             'actualizado': timezone.now().isoformat(),
         })
 
