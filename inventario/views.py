@@ -5832,8 +5832,15 @@ class VentaViewSet(viewsets.ModelViewSet):
         variación contra el total del mismo momento ayer (misma hora, no el día
         completo -- si son las 12:00, compara contra lo vendido ayer hasta las
         12:00, no contra el día de ayer entero, que todavía no es comparable).
-        Reutiliza el mismo criterio de cálculo que WidgetVentasHoyAPIView.
+        Reutiliza el mismo criterio de cálculo que WidgetVentasHoyAPIView. Solo
+        Administrador (is_superuser): ve el monto total vendido de la tienda, no
+        algo que un supervisor/cajero deba ver -- el botón ya está oculto para
+        ellos en el frontend, esto lo hace valer también si alguien pega el
+        endpoint directo.
         """
+        if not request.user.is_superuser:
+            return Response({'error': 'No tenés permisos para ver el Monitor en vivo.'}, status=403)
+
         tienda = _resolver_tienda_por_slug(request)
         if not tienda:
             return Response({'error': 'Tienda no encontrada o no autorizada.'}, status=404)
