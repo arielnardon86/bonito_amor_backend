@@ -8595,6 +8595,33 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                 })
             return Response({'count': len(resultados), 'results': resultados})
 
+        @action(detail=True, methods=['post'], url_path='marcar-diferencia-resuelta')
+        def marcar_diferencia_resuelta(self, request, pk=None):
+            """
+            Saca el aviso de "diferencia pendiente sin venta" para este cambio,
+            después de que un admin la resolvió por fuera del sistema (cargó la
+            venta a mano desde Punto de Venta). No hay forma de vincular esa venta
+            cargada aparte automáticamente -- esto solo apaga el aviso, a criterio
+            del admin que confirma que ya se cobró. Mismo permiso que ve el aviso.
+            """
+            if not request.user.is_superuser and not request.user.is_supervisor:
+                return Response({"error": "No tenés permisos para esta acción."}, status=status.HTTP_403_FORBIDDEN)
+
+            cambio_devolucion = self.get_object()
+            if not cambio_devolucion.diferencia_pendiente:
+                return Response({"error": "Este cambio/devolución no tiene una diferencia pendiente."}, status=status.HTTP_400_BAD_REQUEST)
+
+            cambio_devolucion.diferencia_pendiente = False
+            cambio_devolucion.save(update_fields=['diferencia_pendiente'])
+            _registrar_accion(
+                tienda=cambio_devolucion.tienda,
+                usuario=request.user,
+                accion='cambio_devolucion',
+                detalle=f'Diferencia pendiente marcada como resuelta a mano (${cambio_devolucion.monto_diferencia}) · Cambio #{str(cambio_devolucion.id)[:8]}',
+                objeto_id=cambio_devolucion.id,
+            )
+            return Response({"status": "Diferencia marcada como resuelta."})
+
         def update(self, request, *args, **kwargs):
             cambio_devolucion = self.get_object()
             
