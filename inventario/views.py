@@ -6765,7 +6765,14 @@ class HistorialAccionViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not user.is_superuser:
             return HistorialAccion.objects.none()
-        qs = HistorialAccion.objects.select_related('usuario').filter(tienda=user.tienda)
+        # Prioriza tienda_slug (selectedStoreSlug del frontend) igual que el resto
+        # de la app -- antes quedaba fijo en user.tienda, así que un superuser
+        # operando sobre una tienda autorizada (no la propia) veía el historial
+        # de su propia tienda en vez de la que tenía seleccionada.
+        tienda = _resolver_tienda_por_slug(self.request)
+        if not tienda:
+            return HistorialAccion.objects.none()
+        qs = HistorialAccion.objects.select_related('usuario').filter(tienda=tienda)
         fecha_desde = self.request.query_params.get('fecha_desde')
         fecha_hasta = self.request.query_params.get('fecha_hasta')
         usuario_id  = self.request.query_params.get('usuario_id')
