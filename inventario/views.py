@@ -8557,7 +8557,44 @@ class CambioDevolucionViewSet(viewsets.ModelViewSet):
                 "monto_diferencia": cambio_devolucion.monto_diferencia,
                 "message": "Esta venta puede ser completada desde el flujo normal de ventas."
             })
-        
+
+        @action(detail=False, methods=['get'], url_path='diferencias-pendientes-sin-venta')
+        def diferencias_pendientes_sin_venta(self, request):
+            """
+            Cambios/devoluciones que quedaron con diferencia_pendiente=True pero sin
+            venta_diferencia_pendiente asociada: el POST a /api/cambios-devoluciones/
+            (anula los ítems devueltos, restaura stock, marca la diferencia) se
+            completó bien, pero el POST siguiente a /api/ventas/ que registra el
+            cobro de esa diferencia falló o nunca se hizo -- la plata nunca quedó
+            registrada como venta, aunque el cambio en sí ya es irreversible. No hay
+            forma de reconstruir qué productos se llevó el cliente (solo vivían en
+            el carrito del navegador), así que esto no se "arregla" solo: hay que
+            revisar cada caso y cargar la venta a mano.
+            """
+            qs = self.get_queryset().filter(
+                diferencia_pendiente=True, venta_diferencia_pendiente__isnull=True,
+            )
+            resultados = []
+            for cd in qs:
+                try:
+                    prods = ', '.join(
+                        d.detalle_venta_original.producto.nombre
+                        for d in cd.detalles.all()
+                        if d.detalle_venta_original and d.detalle_venta_original.producto
+                    )
+                except Exception:
+                    prods = '—'
+                resultados.append({
+                    'id': str(cd.id),
+                    'fecha': cd.fecha_creacion,
+                    'tienda_nombre': cd.tienda.nombre if cd.tienda else None,
+                    'usuario_username': cd.usuario.username if cd.usuario else None,
+                    'monto_diferencia': str(cd.monto_diferencia),
+                    'productos_devueltos': prods,
+                    'venta_original_id': str(cd.venta_original_id) if cd.venta_original_id else None,
+                })
+            return Response({'count': len(resultados), 'results': resultados})
+
         def update(self, request, *args, **kwargs):
             cambio_devolucion = self.get_object()
             
