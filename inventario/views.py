@@ -570,10 +570,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
         # Solo productos raíz (sin padre): las variantes vienen anidadas en 'variantes'.
         # Esto evita que variantes ocupen slots de paginación y desplacen el padre a la pág 2.
         # Sin .distinct(): no hay ningún join en esta base que pueda duplicar filas
-        # (select_related de tienda es un M:1, prefetch_related es una query aparte),
-        # así que era puro costo de sort/hash en cada carga -- notable en catálogos
-        # grandes (ver bug de lentitud de búsqueda en Punto de Venta con 40k+ productos).
-        queryset = Producto.objects.select_related('tienda').prefetch_related('variantes').filter(producto_padre__isnull=True)
+        # (select_related de tienda/rubro/proveedor son M:1, prefetch_related es una
+        # query aparte), así que era puro costo de sort/hash en cada carga -- notable
+        # en catálogos grandes (ver bug de lentitud de búsqueda en Punto de Venta con
+        # 40k+ productos). rubro/proveedor están acá (no solo tienda) porque
+        # ProductoSerializer.get_rubro_nombre/get_proveedor_nombre/get_proveedor_detalle
+        # acceden a esas FK -- sin select_related, cada producto de la página dispara
+        # dos consultas aparte (N+1), notable con catálogos grandes como el de una
+        # ferretería con muchos rubros/proveedores distintos.
+        queryset = Producto.objects.select_related('tienda', 'rubro', 'proveedor').prefetch_related('variantes').filter(producto_padre__isnull=True)
         tienda_slug = self.request.query_params.get('tienda_slug', None)
 
         rubro_id = self.request.query_params.get('rubro_id', None)
