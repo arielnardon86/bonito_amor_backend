@@ -5575,10 +5575,18 @@ class VentaViewSet(viewsets.ModelViewSet):
             tiendas_ids = _get_tiendas_ids_usuario(user)
             if not tiendas_ids:
                 return Venta.objects.none()
-            # Usuarios staff (no supervisor): solo pueden buscar por ID, no listar todas las ventas
+            # Usuarios staff (no supervisor): solo pueden buscar por ID, no listar todas las
+            # ventas. No alcanza con chequear que 'id' venga no-vacío: un string cualquiera
+            # (ej. tipeado a mano, no escaneado) no matchea ninguna rama de la búsqueda de
+            # más abajo (EAN13 de 13 dígitos, o UUID/prefijo de al menos 8 caracteres) y el
+            # queryset quedaba sin acotar -- devolvía TODAS las ventas de la tienda. Acá se
+            # valida que el valor efectivamente vaya a disparar alguna de esas ramas antes
+            # de dejarlo pasar.
             if user.is_staff and not user.is_supervisor:
-                venta_id = self.request.query_params.get('id', None)
-                if not venta_id:
+                venta_id = (self.request.query_params.get('id', None) or '').strip()
+                es_ean13 = len(venta_id) == 13 and venta_id.isdigit()
+                es_id_parcial = len(venta_id.replace('-', '')) >= 8
+                if not (es_ean13 or es_id_parcial):
                     return Venta.objects.none()
             queryset = queryset.filter(tienda__pk__in=tiendas_ids)
         elif tienda_slug:
