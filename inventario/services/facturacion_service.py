@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 from django.conf import settings
 
@@ -1222,6 +1222,107 @@ class FacturacionService:
             return 1
         except:
             return None
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Diagnóstico de certificados (sin tocar la red)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def verificar_certificados(self) -> Dict:
+        """
+        Chequeo local de que el certificado y la clave privada AFIP/ARCA
+        cargados son válidos, coinciden entre sí y no están vencidos --
+        sin autenticar contra AFIP ni emitir nada. Pensado para el botón
+        "Verificar configuración" del panel de administración, que detecta
+        al instante los dos motivos de falla más comunes (cert/clave de
+        intentos distintos, certificado vencido) antes de que el dueño de
+        tienda gaste un intento de facturacion_test (factura real de $1).
+
+        Deliberadamente duplica la normalización/decode de certificados que
+        ya usan _emitir_afip/_setup_wsfev1_afip/_setup_padron_afip en vez de
+        compartir un helper común, para no arriesgar esos caminos ya
+        funcionando si algo acá cambia.
+
+        Returns:
+            dict con: presentes, coinciden, vencido, dias_para_vencer,
+            fecha_vencimiento, error.
+        """
+        resultado = {
+            'presentes': False,
+            'coinciden': None,
+            'vencido': None,
+            'dias_para_vencer': None,
+            'fecha_vencimiento': None,
+            'error': None,
+        }
+
+        if not self.tienda.certificado_afip or not self.tienda.clave_privada_afip:
+            resultado['error'] = 'Certificado y/o clave privada no cargados.'
+            return resultado
+
+        resultado['presentes'] = True
+
+        try:
+            cert_b64 = self.tienda.certificado_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+            key_b64  = self.tienda.clave_privada_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+
+            for hdr in ('-----BEGINCERTIFICATE-----', '-----ENDCERTIFICATE-----',
+                        '-----BEGIN CERTIFICATE-----', '-----END CERTIFICATE-----'):
+                cert_b64 = cert_b64.replace(hdr, '')
+            for hdr in ('-----BEGINPRIVATEKEY-----', '-----ENDPRIVATEKEY-----',
+                        '-----BEGIN PRIVATE KEY-----', '-----END PRIVATE KEY-----',
+                        '-----BEGINRSAPRIVATEKEY-----', '-----ENDRSAPRIVATEKEY-----',
+                        '-----BEGIN RSA PRIVATE KEY-----', '-----END RSA PRIVATE KEY-----'):
+                key_b64 = key_b64.replace(hdr, '')
+
+            cert_data = base64.b64decode(cert_b64, validate=True)
+            key_data  = base64.b64decode(key_b64, validate=True)
+
+            from cryptography import x509
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
+            from cryptography.hazmat.primitives.asymmetric import rsa
+
+            # El certificado/clave pueden venir en PEM o DER -- probar ambos,
+            # igual que el resto del archivo.
+            try:
+                cert_obj = x509.load_pem_x509_certificate(cert_data, default_backend())
+            except Exception:
+                cert_obj = x509.load_der_x509_certificate(cert_data, default_backend())
+
+            try:
+                key_obj = serialization.load_pem_private_key(key_data, password=None, backend=default_backend())
+            except Exception:
+                key_obj = serialization.load_der_private_key(key_data, password=None, backend=default_backend())
+
+            # ¿Coinciden? Comparar la clave pública del certificado contra la
+            # que se deriva de la clave privada -- es el chequeo que detecta
+            # el error más común (subir el .crt de un CSR distinto al que
+            # generó la clave privada guardada).
+            cert_pub = cert_obj.public_key()
+            key_pub  = key_obj.public_key()
+            if isinstance(cert_pub, rsa.RSAPublicKey) and isinstance(key_pub, rsa.RSAPublicKey):
+                resultado['coinciden'] = (
+                    cert_pub.public_numbers().n == key_pub.public_numbers().n and
+                    cert_pub.public_numbers().e == key_pub.public_numbers().e
+                )
+            else:
+                cert_pub_bytes = cert_pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+                key_pub_bytes  = key_pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+                resultado['coinciden'] = cert_pub_bytes == key_pub_bytes
+
+            try:
+                vencimiento = cert_obj.not_valid_after_utc  # cryptography >= 42
+            except AttributeError:
+                vencimiento = cert_obj.not_valid_after.replace(tzinfo=timezone.utc)
+            dias = (vencimiento - datetime.now(timezone.utc)).days
+            resultado['fecha_vencimiento']  = vencimiento.date().isoformat()
+            resultado['dias_para_vencer']   = dias
+            resultado['vencido']            = dias < 0
+
+        except Exception as e:
+            resultado['error'] = f'No se pudieron leer los certificados: {e}'
+
+        return resultado
 
     # ──────────────────────────────────────────────────────────────────────────
     # Notas de Crédito

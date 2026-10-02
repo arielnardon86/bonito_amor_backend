@@ -2,6 +2,7 @@
 # BONITO_AMOR/backend/inventario/views.py
 import base64
 import logging
+import os
 import secrets
 import re
 import threading
@@ -2546,6 +2547,143 @@ class TiendaViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
     
+    @action(detail=True, methods=['get'], url_path='facturacion/diagnostico')
+    def facturacion_diagnostico(self, request, pk=None):
+        """
+        Diagnóstico de la configuración de facturación AFIP/ARCA de la
+        tienda SIN emitir ningún comprobante real (a diferencia de
+        facturacion_test, que emite una factura de $1). Corre una batería
+        de chequeos EN ORDEN -- igual que "npx facturas check" del SDK
+        facturas-sdk.dev -- y se detiene en el primer paso que falla, para
+        que el dueño de tienda vea un solo problema concreto a la vez en
+        vez de tener que interpretar el texto crudo de una excepción SOAP
+        de AFIP después de gastar un intento de factura real.
+        """
+        tienda = self.get_object()
+        pasos = []
+
+        def agregar_paso(id_, titulo, ok, detalle='', ayuda=''):
+            pasos.append({'id': id_, 'titulo': titulo, 'ok': ok, 'detalle': detalle, 'ayuda': ayuda})
+
+        if tienda.tipo_facturacion != 'AFIP':
+            agregar_paso(
+                'config', 'Tipo de facturación', False,
+                'La tienda no tiene configurado el tipo de facturación AFIP.',
+                'Completá el paso 1 del wizard (CUIT, punto de venta, tipo de facturación).',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+
+        # 1) Datos de configuración básicos -- chequeo puramente local.
+        faltantes = []
+        if not tienda.cuit:
+            faltantes.append('CUIT')
+        if not tienda.punto_venta:
+            faltantes.append('punto de venta')
+        if not tienda.certificado_afip:
+            faltantes.append('certificado')
+        if not tienda.clave_privada_afip:
+            faltantes.append('clave privada')
+        if faltantes:
+            agregar_paso(
+                'config', 'Datos de configuración', False,
+                f"Falta cargar: {', '.join(faltantes)}.",
+                'Completá los pasos anteriores del wizard antes de verificar.',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+        agregar_paso('config', 'Datos de configuración', True,
+                     'CUIT, punto de venta, certificado y clave privada cargados.')
+
+        # 2) El certificado y la clave coinciden entre sí, y no está vencido
+        # -- también local, sin tocar AFIP.
+        facturacion_service = FacturacionService(tienda)
+        verif = facturacion_service.verificar_certificados()
+
+        if verif.get('error'):
+            agregar_paso(
+                'cert_clave', 'Certificado y clave privada', False,
+                verif['error'],
+                'Volvé a generar el CSR (paso 2) y subí el certificado que te dio AFIP para ESE CSR (paso 4) -- no mezcles certificados/claves de intentos distintos.',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+
+        if verif.get('coinciden') is False:
+            agregar_paso(
+                'cert_clave', 'Certificado y clave privada', False,
+                'El certificado cargado no corresponde a la clave privada generada.',
+                'Es el error más común: el certificado que subiste no fue emitido para el CSR que generó la clave privada guardada acá. Volvé a hacer el paso 2 (generar CSR) y el paso 4 (subir certificado) sin saltear ninguno, en ese orden.',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+
+        if verif.get('vencido'):
+            agregar_paso(
+                'cert_clave', 'Certificado y clave privada', False,
+                f"El certificado está vencido desde el {verif.get('fecha_vencimiento')}.",
+                'Generá un CSR nuevo (paso 2) y subí un certificado nuevo a AFIP (los certificados de AFIP duran 2 años).',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+
+        dias = verif.get('dias_para_vencer')
+        detalle_cert = f"Certificado y clave privada coinciden. Vence el {verif.get('fecha_vencimiento')}"
+        detalle_cert += f" (¡en {dias} días! Convendría renovarlo pronto)." if dias is not None and dias <= 30 else "."
+        agregar_paso('cert_clave', 'Certificado y clave privada', True, detalle_cert)
+
+        # 3) Login WSAA -- primer contacto real con AFIP (liviano: no emite
+        # ningún comprobante, solo pide un ticket de acceso).
+        cert_path = key_path = None
+        try:
+            wsfev1, cert_path, key_path, modo = facturacion_service._setup_wsfev1_afip()
+        except Exception as e:
+            agregar_paso(
+                'wsaa', 'Conexión y autenticación con AFIP', False, str(e),
+                'Verificá que el certificado esté autorizado para el servicio "wsfe" en el Administrador de Relaciones de Clave Fiscal de AFIP, con el alias correcto, y que el ambiente (testing/producción) coincida con el del certificado.',
+            )
+            return Response({'ok': False, 'pasos': pasos})
+
+        agregar_paso(
+            'wsaa', 'Conexión y autenticación con AFIP', True,
+            f"Login exitoso contra AFIP ({'homologación/testing' if modo == 'testing' else 'producción'}).",
+        )
+
+        # 4) El punto de venta configurado existe en AFIP y no está bloqueado.
+        try:
+            puntos = wsfev1.ParamGetPtosVenta()
+            pto_buscado = str(tienda.punto_venta)
+            encontrado = None
+            for linea in puntos:
+                partes = linea.split('|')
+                if not partes or partes[0].strip() != pto_buscado:
+                    continue
+                encontrado = dict(p.split(':', 1) for p in partes[1:] if ':' in p)
+                break
+
+            if not encontrado:
+                agregar_paso(
+                    'punto_venta', 'Punto de venta habilitado', False,
+                    f"El punto de venta {tienda.punto_venta} no figura habilitado para este CUIT en AFIP.",
+                    'Creá o habilitá el punto de venta en AFIP → Administración de puntos de venta y domicilios, como tipo "Web Services" (no "Factura en línea").',
+                )
+            elif (encontrado.get('Bloqueado') or 'N').strip().upper() == 'S':
+                agregar_paso(
+                    'punto_venta', 'Punto de venta habilitado', False,
+                    f"El punto de venta {tienda.punto_venta} está bloqueado en AFIP.",
+                    'Revisá su estado en AFIP → Administración de puntos de venta y domicilios.',
+                )
+            else:
+                agregar_paso('punto_venta', 'Punto de venta habilitado', True,
+                             f"Punto de venta {tienda.punto_venta} habilitado y activo.")
+        except Exception as e:
+            agregar_paso('punto_venta', 'Punto de venta habilitado', False,
+                         f"No se pudo consultar los puntos de venta: {e}")
+        finally:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except Exception: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except Exception: pass
+
+        return Response({'ok': all(p['ok'] for p in pasos), 'pasos': pasos})
+
     # ========== ARCA: ESTADO, CONFIGURAR, CARGAR CERTIFICADO ==========
 
     @action(detail=True, methods=['get'], url_path='facturacion/estado')
