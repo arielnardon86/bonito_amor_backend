@@ -914,14 +914,46 @@ class FacturacionService:
                     error_msg = f"Error al solicitar CAE: {str(e)}"
                     logger.error(f"❌ {error_msg}")
                     _loguear_xml_request_arca(wsfev1)
-                    if 'junk after document element' in str(e).lower():
-                        error_msg += " (Problema al parsear XML de respuesta. Esto puede indicar certificados inválidos o formato incorrecto)"
-                    if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
-                        error_msg += f" | Excepción AFIP: {wsfev1.Excepcion}"
-                    if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
-                        error_msg += f" | Errores: {wsfev1.Errores}"
-                    return False, {}, error_msg
-                
+
+                    # Reconciliación: la excepción pudo haber ocurrido DESPUÉS de
+                    # que AFIP ya autorizara este comprobante (timeout de red en
+                    # el camino de vuelta, respuesta SOAP perdida o malformada,
+                    # etc.) -- si simplemente devolvemos error acá, el usuario
+                    # reintenta desde la UI y terminamos con DOS comprobantes
+                    # reales emitidos para la misma venta. Antes de rendirnos,
+                    # le preguntamos a AFIP si el número que acabábamos de pedir
+                    # (nuevo_numero) quedó autorizado: si CompConsultar devuelve
+                    # CAE para ese número, no hubo error real, solo no nos
+                    # enteramos a tiempo -- seguimos el flujo normal de abajo
+                    # (que ya lee wsfev1.Resultado/CAE/Vencimiento, quedaron
+                    # poblados por CompConsultar igual que por CAESolicitar).
+                    recuperado = False
+                    try:
+                        cae_recuperado = _llamar_wsfev1_con_reintento(
+                            wsfev1.CompConsultar, tipo_comprobante, punto_venta, nuevo_numero
+                        )
+                        if cae_recuperado and wsfev1.CAE:
+                            recuperado = True
+                            logger.warning(
+                                f"⚠️ Reconciliación: el comprobante {nuevo_numero} SÍ fue "
+                                f"autorizado por AFIP (CAE {wsfev1.CAE}) a pesar del error de "
+                                f"red original. Recuperando sus datos en vez de reportar error."
+                            )
+                    except Exception as recover_error:
+                        logger.info(
+                            f"Reconciliación: AFIP confirma que el comprobante {nuevo_numero} "
+                            f"no fue autorizado ({recover_error}); el error original era real."
+                        )
+
+                    if not recuperado:
+                        if 'junk after document element' in str(e).lower():
+                            error_msg += " (Problema al parsear XML de respuesta. Esto puede indicar certificados inválidos o formato incorrecto)"
+                        if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
+                            error_msg += f" | Excepción AFIP: {wsfev1.Excepcion}"
+                        if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
+                            error_msg += f" | Errores: {wsfev1.Errores}"
+                        return False, {}, error_msg
+
                 logger.info(f"Resultado de autorización: {wsfev1.Resultado}")
                 
                 if wsfev1.Resultado == 'A':  # Autorizado
@@ -1877,11 +1909,36 @@ class FacturacionService:
                 error_msg = f"Error al solicitar CAE para NC: {e}"
                 logger.error(f"❌ {error_msg}")
                 _loguear_xml_request_arca(wsfev1)
-                if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
-                    error_msg += f" | {wsfev1.Excepcion}"
-                if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
-                    error_msg += f" | {wsfev1.Errores}"
-                return False, {}, error_msg
+
+                # Reconciliación (mismo criterio que en _emitir_afip más arriba):
+                # antes de reportar error, confirmar con AFIP si la NC que
+                # acabábamos de pedir (nuevo_numero_nc) quedó autorizada a pesar
+                # del error de red -- evita que un reintento desde la UI genere
+                # una segunda NC real para el mismo monto.
+                recuperado = False
+                try:
+                    cae_recuperado = _llamar_wsfev1_con_reintento(
+                        wsfev1.CompConsultar, tipo_nc, punto_venta, nuevo_numero_nc
+                    )
+                    if cae_recuperado and wsfev1.CAE:
+                        recuperado = True
+                        logger.warning(
+                            f"⚠️ Reconciliación: la NC {nuevo_numero_nc} SÍ fue autorizada "
+                            f"por AFIP (CAE {wsfev1.CAE}) a pesar del error de red original. "
+                            f"Recuperando sus datos en vez de reportar error."
+                        )
+                except Exception as recover_error:
+                    logger.info(
+                        f"Reconciliación: AFIP confirma que la NC {nuevo_numero_nc} no fue "
+                        f"autorizada ({recover_error}); el error original era real."
+                    )
+
+                if not recuperado:
+                    if hasattr(wsfev1, 'Excepcion') and wsfev1.Excepcion:
+                        error_msg += f" | {wsfev1.Excepcion}"
+                    if hasattr(wsfev1, 'Errores') and wsfev1.Errores:
+                        error_msg += f" | {wsfev1.Errores}"
+                    return False, {}, error_msg
 
             if wsfev1.Resultado == 'A':
                 cae           = str(wsfev1.CAE)

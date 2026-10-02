@@ -23,7 +23,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db.models import DecimalField 
 from django.db import close_old_connections, models, transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, Http404
 from django.core.cache import cache
 from io import BytesIO
 
@@ -6126,91 +6126,97 @@ class VentaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def emitir_factura(self, request, pk=None):
         """Emitir una factura electrónica para una venta"""
-        venta = get_object_or_404(Venta, pk=pk)
-        
-        # Validaciones
-        if venta.anulada:
-            return Response(
-                {"error": "No se puede emitir factura para una venta anulada."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if venta.facturada:
-            return Response(
-                {"error": "Esta venta ya tiene una factura emitida."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Verificar que la tienda tenga facturación configurada
-        if venta.tienda.tipo_facturacion == 'NINGUNA':
-            return Response(
-                {"error": "La tienda no tiene configurado un sistema de facturación."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Validar permisos
-        user = request.user
-        if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
-            return Response(
-                {"error": "No tienes permiso para emitir facturas de esta tienda."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Validar datos del cliente
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Validar datos del cliente ANTES de tomar el lock de la venta: no
+        # depende de su estado, así que no hace falta mantenerla bloqueada
+        # mientras se resuelve un 400 de validación.
         serializer = EmitirFacturaSerializer(data=request.data)
         if not serializer.is_valid():
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"❌ Error de validación en emitir_factura: {serializer.errors}")
             logger.error(f"Datos recibidos: {request.data}")
             return Response(
                 {"error": "Error de validación", "detalles": serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        cliente_data = serializer.validated_data
-        
-        try:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"=== Iniciando emisión de factura ===")
-            logger.info(f"Venta ID: {venta.id}")
-            logger.info(f"Tienda: {venta.tienda.nombre}")
-            logger.info(f"Tipo facturación: {venta.tienda.tipo_facturacion}")
-            logger.info(f"Datos del cliente: {cliente_data}")
-            
-            # Emitir y persistir (crea/actualiza el registro Factura, marca
-            # venta.facturada si tuvo éxito) -- mismo helper que usa el webhook
-            # de Tienda Nube, para que ambos caminos queden sincronizados.
-            logger.info(f"⚠️ Llamando a facturacion_service.emitir_factura...")
-            exito, factura, error = _emitir_y_persistir_factura(venta, cliente_data)
-            logger.info(f"Resultado: exito={exito}, error={error}")
 
-            if not exito:
+        cliente_data = serializer.validated_data
+        user = request.user
+
+        try:
+            # select_for_update() bloquea la fila de Venta hasta que termine la
+            # transacción -- evita que dos requests casi simultáneos (doble
+            # click, dos pestañas) pasen ambos el chequeo "venta.facturada" en
+            # False y terminen pidiéndole a AFIP dos números de comprobante
+            # reales para la misma venta (factura duplicada ante AFIP, no solo
+            # un registro duplicado acá). Mismo patrón que ya usan CierreCaja y
+            # Cliente en este archivo.
+            with transaction.atomic():
+                venta = get_object_or_404(Venta.objects.select_for_update(), pk=pk)
+
+                if venta.anulada:
+                    return Response(
+                        {"error": "No se puede emitir factura para una venta anulada."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if venta.facturada:
+                    return Response(
+                        {"error": "Esta venta ya tiene una factura emitida."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if venta.tienda.tipo_facturacion == 'NINGUNA':
+                    return Response(
+                        {"error": "La tienda no tiene configurado un sistema de facturación."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if not user.is_superuser and venta.tienda_id not in _get_tiendas_ids_usuario(user):
+                    return Response(
+                        {"error": "No tienes permiso para emitir facturas de esta tienda."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+                logger.info(f"=== Iniciando emisión de factura ===")
+                logger.info(f"Venta ID: {venta.id}")
+                logger.info(f"Tienda: {venta.tienda.nombre}")
+                logger.info(f"Tipo facturación: {venta.tienda.tipo_facturacion}")
+                logger.info(f"Datos del cliente: {cliente_data}")
+
+                # Emitir y persistir (crea/actualiza el registro Factura, marca
+                # venta.facturada si tuvo éxito) -- mismo helper que usa el webhook
+                # de Tienda Nube, para que ambos caminos queden sincronizados.
+                logger.info(f"⚠️ Llamando a facturacion_service.emitir_factura...")
+                exito, factura, error = _emitir_y_persistir_factura(venta, cliente_data)
+                logger.info(f"Resultado: exito={exito}, error={error}")
+
+                if not exito:
+                    return Response(
+                        {
+                            "error": error,
+                            "factura_id": str(factura.id),
+                            "estado": "ERROR"
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Serializar y retornar factura
+                factura_serializer = FacturaSerializer(factura)
+
                 return Response(
                     {
-                        "error": error,
-                        "factura_id": str(factura.id),
-                        "estado": "ERROR"
+                        "message": "Factura emitida exitosamente",
+                        "factura": factura_serializer.data
                     },
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_201_CREATED
                 )
 
-            # Serializar y retornar factura
-            factura_serializer = FacturaSerializer(factura)
-
-            return Response(
-                {
-                    "message": "Factura emitida exitosamente",
-                    "factura": factura_serializer.data
-                },
-                status=status.HTTP_201_CREATED
-            )
-
+        except Http404:
+            raise
         except Exception as e:
-            import logging
             import traceback
-            logger = logging.getLogger(__name__)
             logger.error(f"❌ Excepción no capturada en emitir_factura: {str(e)}")
             logger.error(traceback.format_exc())
             return Response(
