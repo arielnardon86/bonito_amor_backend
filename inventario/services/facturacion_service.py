@@ -31,17 +31,20 @@ try:
     import configparser as _configparser
     if not hasattr(_configparser, 'SafeConfigParser'):
         _configparser.SafeConfigParser = _configparser.ConfigParser
-    # A13, no A4/A5: el Administrador de Relaciones de Clave Fiscal de AFIP
+    # A4 y A13, no A5: el Administrador de Relaciones de Clave Fiscal de AFIP
     # no ofrece "WS SR PADRON A5" como servicio autorizable para la gran
     # mayoría de las cuentas (confirmado en producción con el error
-    # "coe.notAuthorized"), y en el caso que motivó este código tampoco dejó
-    # adherir a A4 -- solo A13 estaba disponible para adherir. pyafipws no
-    # trae una clase para A13 (solo A4/A5), así que se implementó una propia
-    # en ws_sr_padron_a13.py siguiendo el manual oficial de AFIP. OJO: A13 NO
-    # incluye condición IVA (ver ws_sr_padron_a13.py), a diferencia de A4/A5.
+    # "coe.notAuthorized"), y según la cuenta tampoco siempre deja adherir a
+    # A4 -- algunas solo pueden adherir A13. Como distintos clientes van a
+    # tener adherido uno u otro (A4 trae condición IVA, A13 no), consultar_padron()
+    # prueba A4 primero y cae a A13 si no está autorizado, en vez de fijar uno
+    # solo. pyafipws trae A4 pero no A13, así que A13 se implementó a mano en
+    # ws_sr_padron_a13.py siguiendo el manual oficial de AFIP.
+    from pyafipws.ws_sr_padron import WSSrPadronA4
     from .ws_sr_padron_a13 import WSSrPadronA13
     WS_SR_PADRON_AVAILABLE = True
 except ImportError:
+    WSSrPadronA4 = None
     WSSrPadronA13 = None
     WS_SR_PADRON_AVAILABLE = False
 
@@ -1583,15 +1586,36 @@ class FacturacionService:
                 except: pass
             raise RuntimeError(f"Error al preparar conexión AFIP: {e}")
 
-    def _setup_padron_afip(self):
+    # Variantes del servicio de Padrón que probamos, en orden de preferencia:
+    # A4 trae condición IVA (clave para Responsables Inscriptos), A13 solo
+    # identidad y domicilio. No todas las cuentas de AFIP pueden adherir a
+    # A4 (el Administrador de Relaciones a veces solo deja A13), así que
+    # consultar_padron() prueba A4 primero y cae a A13 si ese servicio no
+    # está autorizado para el certificado -- en vez de fijar uno solo.
+    _PADRON_VARIANTES = {
+        'a4': {
+            'clase': lambda: WSSrPadronA4(),
+            'wsaa_service': 'ws_sr_padron_a4',
+            'wsdl_testing': 'https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA4?wsdl',
+            'wsdl_prod':    'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA4?wsdl',
+            'cache_suffix': '_padron_a4',
+            'nombre_log':   'A4',
+        },
+        'a13': {
+            'clase': lambda: WSSrPadronA13(),
+            'wsaa_service': 'ws_sr_padron_a13',
+            'wsdl_testing': 'https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA13?wsdl',
+            'wsdl_prod':    'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA13?wsdl',
+            'cache_suffix': '_padron_a13',
+            'nombre_log':   'A13',
+        },
+    }
+
+    def _setup_padron_afip(self, variante: str = 'a13'):
         """
-        Autentica con WSAA (servicio ws_sr_padron_a13) y devuelve un
-        WSSrPadronA13 (implementación propia, ver ws_sr_padron_a13.py) listo
-        para consultar. Se usa A13 porque el Administrador de Relaciones de
-        Clave Fiscal de AFIP no deja adherir a "WS SR PADRON A5" para la gran
-        mayoría de las cuentas, y en el caso que motivó este código tampoco
-        dejó adherir a A4 -- solo A13 estaba disponible. OJO: A13 no incluye
-        condición IVA (solo identidad y domicilio), a diferencia de A4/A5.
+        Autentica con WSAA y devuelve un cliente de Padrón (A4 de pyafipws, o
+        A13 -- implementación propia, ver ws_sr_padron_a13.py) listo para
+        consultar, según `variante` ('a4' o 'a13'). Ver _PADRON_VARIANTES.
 
         Mismo patrón de certificados/autenticación que
         _setup_wsfev1_afip de arriba -- se duplica a propósito en vez de
@@ -1610,6 +1634,7 @@ class FacturacionService:
         import hashlib
         import time
 
+        cfg = self._PADRON_VARIANTES[variante]
         cert_path = None
         key_path = None
 
@@ -1714,14 +1739,14 @@ class FacturacionService:
                 else "https://wsaa.afip.gov.ar/ws/services/LoginCms"
             )
 
-            logger.info(f"=== Preparando Padrón A13 — modo={modo}, CUIT={self.tienda.cuit} ===")
+            logger.info(f"=== Preparando Padrón {cfg['nombre_log']} — modo={modo}, CUIT={self.tienda.cuit} ===")
 
             # ── Cache compartido por CUIT -- propio de este servicio (distinto
             # del de wsfe: cada servicio de AFIP tiene su propio ticket). Sufijo
-            # '_padron_a13' (no solo '_padron') para no reutilizar por error un
-            # TA cacheado de un intento viejo contra ws_sr_padron_a5 -- son
+            # por variante (no solo '_padron') para no reutilizar por error un
+            # TA cacheado de un intento viejo contra otra variante -- son
             # servicios distintos ante AFIP, un TA de uno no sirve para el otro.
-            cuit_hash    = hashlib.md5((self.tienda.cuit + '_padron_a13').encode()).hexdigest()[:8]
+            cuit_hash    = hashlib.md5((self.tienda.cuit + cfg['cache_suffix']).encode()).hexdigest()[:8]
             shared_cache = os.path.join(tempfile.gettempdir(), f"pyafipws_cache_shared_{cuit_hash}")
             os.makedirs(shared_cache, exist_ok=True)
 
@@ -1754,7 +1779,7 @@ class FacturacionService:
 
             for intento in range(3):
                 try:
-                    ta = wsaa.Autenticar("ws_sr_padron_a13", cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
+                    ta = wsaa.Autenticar(cfg['wsaa_service'], cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
                     if ta:
                         break
                     raise Exception(wsaa.Excepcion or "Error desconocido al autenticar")
@@ -1786,14 +1811,11 @@ class FacturacionService:
                 if m:
                     ta_clean = m.group(1)
 
-            # ── Padrón A13 connect ─────────────────────────────────────────
-            padron = WSSrPadronA13()
+            # ── Padrón connect ──────────────────────────────────────────────
+            padron = cfg['clase']()
             padron.LanzarExcepciones = True
 
-            padron_url = (
-                "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA13?wsdl" if modo == 'testing'
-                else "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA13?wsdl"
-            )
+            padron_url = cfg['wsdl_testing'] if modo == 'testing' else cfg['wsdl_prod']
 
             try:
                 padron.Conectar(cache="", wsdl=padron_url)
@@ -1809,7 +1831,7 @@ class FacturacionService:
                 raise RuntimeError(f"Error al establecer ticket de acceso: {e}")
 
             padron.Cuit = self.tienda.cuit.replace('-', '')
-            logger.info(f"✅ Padrón A13 listo — CUIT={padron.Cuit}")
+            logger.info(f"✅ Padrón {cfg['nombre_log']} listo — CUIT={padron.Cuit}")
 
             return padron, cert_path, key_path
 
@@ -1830,17 +1852,65 @@ class FacturacionService:
                 except: pass
             raise RuntimeError(f"Error al preparar conexión Padrón AFIP: {e}")
 
+    def _intentar_consulta_padron(self, variante: str, cuit_limpio: str):
+        """
+        Intenta la consulta de Padrón con una única variante ('a4' o 'a13').
+        Devuelve (True, datos_dict) en éxito o (False, error_str) si falló --
+        nunca lanza, para que consultar_padron() pueda probar la siguiente
+        variante sin anidar try/except por cada llamador.
+        """
+        cert_path = key_path = None
+        try:
+            padron, cert_path, key_path = self._setup_padron_afip(variante)
+            ok = padron.Consultar(cuit_limpio)
+            if not ok or not padron.denominacion:
+                return False, "No se encontraron datos para ese CUIT en el Padrón de AFIP."
+
+            datos = {
+                'nombre': padron.denominacion,
+                'domicilio': padron.direccion or '',
+                'localidad': padron.localidad or '',
+                'provincia': padron.provincia or '',
+            }
+            # Solo A4 expone cat_iva (condición frente al IVA); WSSrPadronA13
+            # no tiene ese atributo -- getattr con default evita el
+            # AttributeError en vez de tener que chequear la variante acá.
+            cat_iva = getattr(padron, 'cat_iva', None)
+            if cat_iva:
+                cat_iva_a_condicion = {1: 'RI', 4: 'EX', 5: 'CF', 6: 'MT'}
+                datos['condicion_iva'] = cat_iva_a_condicion.get(cat_iva, 'CF')
+
+            return True, datos
+        except RuntimeError as e:
+            logger.warning(f"Consulta Padrón {variante.upper()} AFIP falló para CUIT {cuit_limpio}: {e}")
+            return False, str(e)
+        except Exception as e:
+            logger.error(f"Error inesperado consultando Padrón {variante.upper()} AFIP (CUIT {cuit_limpio}): {e}", exc_info=True)
+            return False, str(e)
+        finally:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+
     def consultar_padron(self, cuit: str) -> Tuple[bool, Dict, Optional[str]]:
         """
-        Consulta el Padrón de AFIP/ARCA (alcance 13) por CUIT para
-        autocompletar el formulario de facturación: razón social y domicilio.
-        NO incluye condición frente al IVA -- el padrón A13 no la provee (ver
-        ws_sr_padron_a13.py); el usuario la sigue eligiendo a mano. Pensado
-        para no ser nunca un error duro desde el llamador -- si el padrón no
-        devuelve nada (CUIT no encontrado, servicio de Padrón sin autorizar
-        para este certificado, AFIP caído, etc.) el (False, {}, mensaje)
-        resultante solo debería hacer que el cajero siga completando el
-        formulario a mano, nunca bloquear la facturación en sí.
+        Consulta el Padrón de AFIP/ARCA por CUIT para autocompletar el
+        formulario de facturación: razón social, domicilio y, si el
+        certificado está adherido al servicio A4, también condición frente
+        al IVA (A13 no la provee -- ver ws_sr_padron_a13.py). No todas las
+        cuentas de AFIP pueden adherir a A4 -- algunas solo dejan A13 -- así
+        que se prueba A4 primero (más completo) y, si no está autorizado
+        para este certificado, se cae a A13 automáticamente.
+
+        Pensado para no ser nunca un error duro desde el llamador -- si
+        ninguna de las dos variantes devuelve nada (CUIT no encontrado,
+        ningún servicio de Padrón autorizado para este certificado, AFIP
+        caído, etc.) el (False, {}, mensaje) resultante solo debería hacer
+        que el cajero siga completando el formulario a mano, nunca bloquear
+        la facturación en sí.
         """
         if self.sistema != 'AFIP':
             return False, {}, "Esta tienda no tiene facturación AFIP/ARCA configurada."
@@ -1851,32 +1921,34 @@ class FacturacionService:
         if len(cuit_limpio) != 11:
             return False, {}, "CUIT inválido (debe tener 11 dígitos)."
 
-        cert_path = key_path = None
-        try:
-            padron, cert_path, key_path = self._setup_padron_afip()
-            ok = padron.Consultar(cuit_limpio)
-            if not ok or not padron.denominacion:
-                return False, {}, "No se encontraron datos para ese CUIT en el Padrón de AFIP."
+        ok, resultado = self._intentar_consulta_padron('a4', cuit_limpio)
+        if ok:
+            return True, resultado, None
+        error_a4 = resultado
 
-            return True, {
-                'nombre': padron.denominacion,
-                'domicilio': padron.direccion or '',
-                'localidad': padron.localidad or '',
-                'provincia': padron.provincia or '',
-            }, None
-        except RuntimeError as e:
-            logger.warning(f"Consulta Padrón AFIP falló para CUIT {cuit_limpio}: {e}")
-            return False, {}, str(e)
-        except Exception as e:
-            logger.error(f"Error inesperado consultando Padrón AFIP (CUIT {cuit_limpio}): {e}", exc_info=True)
-            return False, {}, str(e)
-        finally:
-            if cert_path:
-                try: os.unlink(cert_path)
-                except: pass
-            if key_path:
-                try: os.unlink(key_path)
-                except: pass
+        ok, resultado = self._intentar_consulta_padron('a13', cuit_limpio)
+        if ok:
+            return True, resultado, None
+        error_a13 = resultado
+
+        # Si AMBAS variantes fallaron específicamente por falta de
+        # autorización del certificado (no por otra razón, como un CUIT que
+        # no existe o AFIP caído), es casi seguro que este certificado no
+        # está adherido a ningún servicio de Consulta de Padrón en AFIP --
+        # un problema de configuración, no transitorio. Se lo señala con un
+        # mensaje accionable en vez del texto crudo de la excepción SOAP.
+        def _es_error_de_autorizacion(msg):
+            m = msg.lower()
+            return 'notauthorized' in m or 'no autorizado' in m
+
+        if _es_error_de_autorizacion(error_a4) and _es_error_de_autorizacion(error_a13):
+            return False, {}, (
+                "Tu certificado de ARCA no está adherido a ningún servicio de Consulta de Padrón. "
+                "Mirá el Manual de uso (menú lateral, sección Panel de Administración) para ver los "
+                "pasos para adherirlo."
+            )
+
+        return False, {}, error_a13
 
     def emitir_nota_credito(self, factura, monto: Decimal, motivo: str = '') -> Tuple[bool, Dict, Optional[str]]:
         """

@@ -10111,16 +10111,18 @@ def verificar_cuit_disponible(request):
 @api_view(['GET'])
 def consultar_padron_afip(request):
     """
-    Consulta el Padrón de AFIP/ARCA (alcance 13) por CUIT para autocompletar
-    nombre y domicilio en el formulario de "Datos del Cliente para Factura"
-    (igual que hacía el sistema anterior de algún cliente) -- requiere que la
-    tienda tenga facturación AFIP/ARCA configurada, usa su mismo certificado.
-    NO devuelve condición IVA: el padrón alcance 13 no la provee, el usuario
-    la sigue eligiendo a mano. Nunca se trata como error HTTP: ok=False (CUIT
-    no encontrado, servicio de Padrón no autorizado para este certificado,
-    AFIP caído, etc.) solo le indica al frontend que el cajero siga
-    completando el formulario a mano, como hasta ahora -- no debe bloquear la
-    facturación en sí.
+    Consulta el Padrón de AFIP/ARCA por CUIT para autocompletar nombre,
+    domicilio y, si el certificado está adherido al servicio alcance 4,
+    también condición IVA (el alcance 13 no la provee) en el formulario de
+    "Datos del Cliente para Factura" -- requiere que la tienda tenga
+    facturación AFIP/ARCA configurada, usa su mismo certificado.
+    FacturacionService.consultar_padron() prueba alcance 4 primero y cae a
+    alcance 13 automáticamente si ese servicio no está autorizado para el
+    certificado (no todas las cuentas de AFIP pueden adherir a ambos).
+    Nunca se trata como error HTTP: ok=False (CUIT no encontrado, ningún
+    servicio de Padrón autorizado para este certificado, AFIP caído, etc.)
+    solo le indica al frontend que el cajero siga completando el formulario
+    a mano, como hasta ahora -- no debe bloquear la facturación en sí.
     """
     tienda = _resolver_tienda_por_slug(request)
     if not tienda:
