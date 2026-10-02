@@ -31,10 +31,19 @@ try:
     import configparser as _configparser
     if not hasattr(_configparser, 'SafeConfigParser'):
         _configparser.SafeConfigParser = _configparser.ConfigParser
-    from pyafipws.ws_sr_padron import WSSrPadronA5
+    # A4, no A5: el catálogo de servicios de AFIP para autorizar en el
+    # Administrador de Relaciones de Clave Fiscal solo ofrece "Servicio
+    # Consulta Padron A4/A10/A13" (no A5) -- confirmado en producción (ver
+    # error "coe.notAuthorized" al intentar autenticar contra ws_sr_padron_a5
+    # con un certificado que nunca pudo autorizarse para ese servicio
+    # porque no figuraba como opción). A4 devuelve los mismos campos que
+    # necesitamos (denominacion, direccion, localidad, provincia, cat_iva) con
+    # una interfaz Python idéntica en pyafipws (WSSrPadronA5 ni siquiera
+    # existe como opción autorizable real para la mayoría de las cuentas).
+    from pyafipws.ws_sr_padron import WSSrPadronA4
     WS_SR_PADRON_AVAILABLE = True
 except ImportError:
-    WSSrPadronA5 = None
+    WSSrPadronA4 = None
     WS_SR_PADRON_AVAILABLE = False
 
 try:
@@ -1577,8 +1586,15 @@ class FacturacionService:
 
     def _setup_padron_afip(self):
         """
-        Autentica con WSAA (servicio ws_sr_padron_a5) y devuelve un WSSrPadronA5
-        listo para consultar. Mismo patrón de certificados/autenticación que
+        Autentica con WSAA (servicio ws_sr_padron_a4) y devuelve un WSSrPadronA4
+        listo para consultar. Se usa A4 y no A5 porque el Administrador de
+        Relaciones de Clave Fiscal de AFIP no ofrece "WS SR PADRON A5" como
+        servicio autorizable para la gran mayoría de las cuentas -- solo A4,
+        A10 y A13 -- y WSSrPadronA4 devuelve los mismos campos que necesitamos
+        con una interfaz Python idéntica (WSSrPadronA5 es en pyafipws una
+        subclase de WSSrPadronA4 que solo cambia el WSDL).
+
+        Mismo patrón de certificados/autenticación que
         _setup_wsfev1_afip de arriba -- se duplica a propósito en vez de
         factorizarlo en un helper compartido: es código ya probado en producción
         para emitir comprobantes, y prefiero no tocarlo para agregar esta
@@ -1699,11 +1715,14 @@ class FacturacionService:
                 else "https://wsaa.afip.gov.ar/ws/services/LoginCms"
             )
 
-            logger.info(f"=== Preparando Padrón A5 — modo={modo}, CUIT={self.tienda.cuit} ===")
+            logger.info(f"=== Preparando Padrón A4 — modo={modo}, CUIT={self.tienda.cuit} ===")
 
             # ── Cache compartido por CUIT -- propio de este servicio (distinto
-            # del de wsfe: cada servicio de AFIP tiene su propio ticket) ──────
-            cuit_hash    = hashlib.md5((self.tienda.cuit + '_padron').encode()).hexdigest()[:8]
+            # del de wsfe: cada servicio de AFIP tiene su propio ticket). Sufijo
+            # '_padron_a4' (no solo '_padron') para no reutilizar por error un
+            # TA cacheado de un intento viejo contra ws_sr_padron_a5 -- son
+            # servicios distintos ante AFIP, un TA de uno no sirve para el otro.
+            cuit_hash    = hashlib.md5((self.tienda.cuit + '_padron_a4').encode()).hexdigest()[:8]
             shared_cache = os.path.join(tempfile.gettempdir(), f"pyafipws_cache_shared_{cuit_hash}")
             os.makedirs(shared_cache, exist_ok=True)
 
@@ -1736,7 +1755,7 @@ class FacturacionService:
 
             for intento in range(3):
                 try:
-                    ta = wsaa.Autenticar("ws_sr_padron_a5", cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
+                    ta = wsaa.Autenticar("ws_sr_padron_a4", cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
                     if ta:
                         break
                     raise Exception(wsaa.Excepcion or "Error desconocido al autenticar")
@@ -1768,13 +1787,13 @@ class FacturacionService:
                 if m:
                     ta_clean = m.group(1)
 
-            # ── Padrón A5 connect ──────────────────────────────────────────
-            padron = WSSrPadronA5()
+            # ── Padrón A4 connect ──────────────────────────────────────────
+            padron = WSSrPadronA4()
             padron.LanzarExcepciones = True
 
             padron_url = (
-                "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl" if modo == 'testing'
-                else "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"
+                "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA4?wsdl" if modo == 'testing'
+                else "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA4?wsdl"
             )
 
             try:
@@ -1791,7 +1810,7 @@ class FacturacionService:
                 raise RuntimeError(f"Error al establecer ticket de acceso: {e}")
 
             padron.Cuit = self.tienda.cuit.replace('-', '')
-            logger.info(f"✅ Padrón A5 listo — CUIT={padron.Cuit}")
+            logger.info(f"✅ Padrón A4 listo — CUIT={padron.Cuit}")
 
             return padron, cert_path, key_path
 
@@ -1841,7 +1860,7 @@ class FacturacionService:
 
             # Mapeo inverso del que usa _emitir_afip para condicion_iva_codigo_map
             # (RI=1, EX=4, CF=5, MT=6) -- cat_iva ya viene clasificado así desde
-            # pyafipws (WSSrPadronA5.analizar_datos).
+            # pyafipws (WSSrPadronA4.analizar_datos).
             cat_iva_a_condicion = {1: 'RI', 4: 'EX', 5: 'CF', 6: 'MT'}
             condicion_iva = cat_iva_a_condicion.get(padron.cat_iva, 'CF')
 
