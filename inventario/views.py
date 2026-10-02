@@ -9964,6 +9964,30 @@ def verificar_cuit_disponible(request):
     return Response({'existe': existe})
 
 
+@api_view(['GET'])
+def consultar_padron_afip(request):
+    """
+    Consulta el Padrón de AFIP/ARCA por CUIT para autocompletar nombre,
+    domicilio y condición IVA en el formulario de "Datos del Cliente para
+    Factura" (igual que hacía el sistema anterior de algún cliente) -- requiere
+    que la tienda tenga facturación AFIP/ARCA configurada, usa su mismo
+    certificado. Nunca se trata como error HTTP: ok=False (CUIT no encontrado,
+    servicio de Padrón no autorizado para este certificado, AFIP caído, etc.)
+    solo le indica al frontend que el cajero siga completando el formulario a
+    mano, como hasta ahora -- no debe bloquear la facturación en sí.
+    """
+    tienda = _resolver_tienda_por_slug(request)
+    if not tienda:
+        return Response({'ok': False, 'error': 'Tienda no encontrada o no autorizada.'})
+
+    cuit = request.query_params.get('cuit', '')
+    from .services.facturacion_service import FacturacionService
+    exito, datos, error = FacturacionService(tienda).consultar_padron(cuit)
+    if not exito:
+        return Response({'ok': False, 'error': error})
+    return Response({'ok': True, **datos})
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def registro_publico(request):

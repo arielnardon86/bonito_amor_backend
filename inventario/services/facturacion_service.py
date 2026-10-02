@@ -21,6 +21,22 @@ except ImportError:
     WSFEv1 = None
     PYAFIPWS_AVAILABLE = False
 
+# Consulta a Padrón (autocompletar datos de cliente por CUIT): en un try/except
+# APARTE del de arriba a propósito -- si este import llegara a fallar, no debe
+# apagar PYAFIPWS_AVAILABLE ni dejar sin facturación a nadie, solo sin
+# autocompletado. pyafipws.ws_sr_padron usa SafeConfigParser, que Python 3.12+
+# sacó de configparser (viene deprecada desde hace años); el shim de acá es el
+# fix estándar para esto en librerías viejas que no se actualizaron todavía.
+try:
+    import configparser as _configparser
+    if not hasattr(_configparser, 'SafeConfigParser'):
+        _configparser.SafeConfigParser = _configparser.ConfigParser
+    from pyafipws.ws_sr_padron import WSSrPadronA5
+    WS_SR_PADRON_AVAILABLE = True
+except ImportError:
+    WSSrPadronA5 = None
+    WS_SR_PADRON_AVAILABLE = False
+
 try:
     import requests
     REQUESTS_AVAILABLE = True
@@ -1425,6 +1441,297 @@ class FacturacionService:
                 try: os.unlink(key_path)
                 except: pass
             raise RuntimeError(f"Error al preparar conexión AFIP: {e}")
+
+    def _setup_padron_afip(self):
+        """
+        Autentica con WSAA (servicio ws_sr_padron_a5) y devuelve un WSSrPadronA5
+        listo para consultar. Mismo patrón de certificados/autenticación que
+        _setup_wsfev1_afip de arriba -- se duplica a propósito en vez de
+        factorizarlo en un helper compartido: es código ya probado en producción
+        para emitir comprobantes, y prefiero no tocarlo para agregar esta
+        consulta de solo lectura (menor riesgo de romper la facturación real
+        por un cambio pensado para otra cosa).
+
+        Returns:
+            (padron, cert_path, key_path) en éxito.
+            Lanza RuntimeError con el mensaje de error si falla.
+            El llamador es responsable de eliminar cert_path y key_path.
+        """
+        import os
+        import tempfile
+        import hashlib
+        import time
+
+        cert_path = None
+        key_path = None
+
+        try:
+            if not self.tienda.cuit:
+                raise RuntimeError("CUIT no configurado para la tienda")
+            if not self.tienda.certificado_afip or not self.tienda.clave_privada_afip:
+                raise RuntimeError("Certificados AFIP no configurados")
+
+            # ── Decodificar certificados ──────────────────────────────────
+            try:
+                cert_b64 = self.tienda.certificado_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+                key_b64  = self.tienda.clave_privada_afip.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+
+                for hdr in ('-----BEGINCERTIFICATE-----', '-----ENDCERTIFICATE-----',
+                            '-----BEGIN CERTIFICATE-----', '-----END CERTIFICATE-----'):
+                    cert_b64 = cert_b64.replace(hdr, '')
+                for hdr in ('-----BEGINPRIVATEKEY-----', '-----ENDPRIVATEKEY-----',
+                            '-----BEGINRSAPRIVATEKEY-----', '-----ENDRSAPRIVATEKEY-----',
+                            '-----BEGIN PRIVATE KEY-----', '-----END PRIVATE KEY-----',
+                            '-----BEGIN RSA PRIVATE KEY-----', '-----END RSA PRIVATE KEY-----'):
+                    key_b64 = key_b64.replace(hdr, '')
+
+                import re as _re
+                b64_pattern = _re.compile(r'^[A-Za-z0-9+/=]+$')
+                if not b64_pattern.match(cert_b64):
+                    raise RuntimeError("El certificado AFIP no parece estar en formato base64 válido.")
+                if not b64_pattern.match(key_b64):
+                    raise RuntimeError("La clave privada AFIP no parece estar en formato base64 válido.")
+
+                try:
+                    cert_data = base64.b64decode(cert_b64, validate=True)
+                    key_data  = base64.b64decode(key_b64,  validate=True)
+                except base64.binascii.Error as e:
+                    raise RuntimeError(f"Error al decodificar certificados base64: {e}")
+
+                if not cert_data:
+                    raise RuntimeError("El certificado decodificado está vacío.")
+                if not key_data:
+                    raise RuntimeError("La clave privada decodificada está vacía.")
+
+                cert_str = cert_data.decode('utf-8', errors='ignore')
+                key_str  = key_data.decode('utf-8', errors='ignore')
+
+                if not cert_str.strip().startswith('-----BEGIN'):
+                    try:
+                        from cryptography import x509
+                        from cryptography.hazmat.backends import default_backend
+                        from cryptography.hazmat.primitives import serialization
+                        cert_obj  = x509.load_der_x509_certificate(cert_data, default_backend())
+                        cert_data = cert_obj.public_bytes(serialization.Encoding.PEM)
+                    except Exception:
+                        pass
+
+                if not key_str.strip().startswith('-----BEGIN'):
+                    try:
+                        from cryptography.hazmat.primitives import serialization
+                        from cryptography.hazmat.backends import default_backend
+                        key_obj  = serialization.load_der_private_key(key_data, password=None, backend=default_backend())
+                        key_data = key_obj.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.PKCS8,
+                            encryption_algorithm=serialization.NoEncryption(),
+                        )
+                    except Exception:
+                        pass
+
+            except RuntimeError:
+                raise
+            except UnicodeDecodeError as e:
+                raise RuntimeError(f"Certificados no están en formato base64 válido: {e}")
+            except Exception as e:
+                raise RuntimeError(f"Error al procesar certificados: {e}")
+
+            if isinstance(cert_data, str):
+                cert_data = cert_data.encode('utf-8')
+            if isinstance(key_data, str):
+                key_data = key_data.encode('utf-8')
+
+            # ── Archivos temporales ───────────────────────────────────────
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.crt') as f:
+                f.write(cert_data)
+                f.flush()
+                cert_path = f.name
+                os.chmod(cert_path, 0o600)
+
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.key') as f:
+                f.write(key_data)
+                f.flush()
+                key_path = f.name
+                os.chmod(key_path, 0o600)
+
+            modo = 'testing' if self.tienda.modo_test_afip else 'prod'
+
+            if not os.path.exists(cert_path) or os.path.getsize(cert_path) == 0:
+                raise RuntimeError("El archivo de certificado no se creó correctamente")
+            if not os.path.exists(key_path) or os.path.getsize(key_path) == 0:
+                raise RuntimeError("El archivo de clave privada no se creó correctamente")
+
+            wsaa_url = (
+                "https://wsaahomo.afip.gov.ar/ws/services/LoginCms" if modo == 'testing'
+                else "https://wsaa.afip.gov.ar/ws/services/LoginCms"
+            )
+
+            logger.info(f"=== Preparando Padrón A5 — modo={modo}, CUIT={self.tienda.cuit} ===")
+
+            # ── Cache compartido por CUIT -- propio de este servicio (distinto
+            # del de wsfe: cada servicio de AFIP tiene su propio ticket) ──────
+            cuit_hash    = hashlib.md5((self.tienda.cuit + '_padron').encode()).hexdigest()[:8]
+            shared_cache = os.path.join(tempfile.gettempdir(), f"pyafipws_cache_shared_{cuit_hash}")
+            os.makedirs(shared_cache, exist_ok=True)
+
+            def _ta_del_cache(cache_dir):
+                try:
+                    ta_files = sorted(
+                        [f for f in os.listdir(cache_dir) if f.startswith('TA-') and f.endswith('.xml')],
+                        key=lambda f: os.path.getmtime(os.path.join(cache_dir, f)),
+                        reverse=True,
+                    )
+                    for ta_file in ta_files:
+                        try:
+                            with open(os.path.join(cache_dir, ta_file), 'r', encoding='utf-8') as fh:
+                                content = fh.read()
+                            if not content.strip():
+                                continue
+                            if '<wsdl:' in content or 'targetNamespace="https://wsaahomo' in content:
+                                continue
+                            if '<loginTicketResponse' in content or '<credentials' in content:
+                                return content
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+                return None
+
+            # ── WSAA auth con reintentos ──────────────────────────────────
+            wsaa = WSAA()
+            ta   = None
+
+            for intento in range(3):
+                try:
+                    ta = wsaa.Autenticar("ws_sr_padron_a5", cert_path, key_path, cache=shared_cache, wsdl=wsaa_url)
+                    if ta:
+                        break
+                    raise Exception(wsaa.Excepcion or "Error desconocido al autenticar")
+                except Exception as auth_err:
+                    err_str = str(auth_err)
+                    if 'alreadyAuthenticated' in err_str or 'ya posee un TA valido' in err_str.lower():
+                        cached = _ta_del_cache(shared_cache)
+                        if cached:
+                            parts = cached.split('<?xml')
+                            ta = ('<?xml' + parts[1]) if len(parts) >= 2 else cached
+                            break
+                        if intento < 2:
+                            time.sleep((intento + 1) * 2)
+                            wsaa = WSAA()
+                        else:
+                            raise RuntimeError(f"Error temporal de autenticación AFIP: {err_str}")
+                    else:
+                        raise RuntimeError(f"Error al autenticar con AFIP: {err_str}")
+
+            if not ta:
+                raise RuntimeError("No se obtuvo ticket de acceso de AFIP")
+
+            ta_clean = ta.strip()
+            m = re.search(r'(<\?xml.*?</loginTicketResponse>)', ta_clean, re.DOTALL)
+            if m:
+                ta_clean = m.group(1)
+            else:
+                m = re.search(r'(<\?xml.*?</ticket>)', ta_clean, re.DOTALL)
+                if m:
+                    ta_clean = m.group(1)
+
+            # ── Padrón A5 connect ──────────────────────────────────────────
+            padron = WSSrPadronA5()
+            padron.LanzarExcepciones = True
+
+            padron_url = (
+                "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl" if modo == 'testing'
+                else "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"
+            )
+
+            try:
+                padron.Conectar(cache="", wsdl=padron_url)
+            except Exception as e:
+                raise RuntimeError(f"Error al conectar con Padrón AFIP: {e}")
+
+            if not (ta_clean.strip().startswith('<?xml') or ta_clean.strip().startswith('<')):
+                raise RuntimeError("El ticket de acceso no parece ser XML válido")
+
+            try:
+                padron.SetTicketAcceso(ta_clean)
+            except Exception as e:
+                raise RuntimeError(f"Error al establecer ticket de acceso: {e}")
+
+            padron.Cuit = self.tienda.cuit.replace('-', '')
+            logger.info(f"✅ Padrón A5 listo — CUIT={padron.Cuit}")
+
+            return padron, cert_path, key_path
+
+        except RuntimeError:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+            raise
+        except Exception as e:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
+            raise RuntimeError(f"Error al preparar conexión Padrón AFIP: {e}")
+
+    def consultar_padron(self, cuit: str) -> Tuple[bool, Dict, Optional[str]]:
+        """
+        Consulta el Padrón de AFIP/ARCA por CUIT para autocompletar el
+        formulario de facturación: razón social, domicilio y condición frente
+        al IVA (ya mapeada a nuestros códigos RI/EX/MT/CF). Pensado para no ser
+        nunca un error duro desde el llamador -- si el padrón no devuelve nada
+        (CUIT no encontrado, servicio de Padrón sin autorizar para este
+        certificado, AFIP caído, etc.) el (False, {}, mensaje) resultante solo
+        debería hacer que el cajero siga completando el formulario a mano,
+        nunca bloquear la facturación en sí.
+        """
+        if self.sistema != 'AFIP':
+            return False, {}, "Esta tienda no tiene facturación AFIP/ARCA configurada."
+        if not WS_SR_PADRON_AVAILABLE:
+            return False, {}, "El módulo de consulta a Padrón no está disponible."
+
+        cuit_limpio = re.sub(r'[^0-9]', '', cuit or '')
+        if len(cuit_limpio) != 11:
+            return False, {}, "CUIT inválido (debe tener 11 dígitos)."
+
+        cert_path = key_path = None
+        try:
+            padron, cert_path, key_path = self._setup_padron_afip()
+            ok = padron.Consultar(cuit_limpio)
+            if not ok or not padron.denominacion:
+                return False, {}, "No se encontraron datos para ese CUIT en el Padrón de AFIP."
+
+            # Mapeo inverso del que usa _emitir_afip para condicion_iva_codigo_map
+            # (RI=1, EX=4, CF=5, MT=6) -- cat_iva ya viene clasificado así desde
+            # pyafipws (WSSrPadronA5.analizar_datos).
+            cat_iva_a_condicion = {1: 'RI', 4: 'EX', 5: 'CF', 6: 'MT'}
+            condicion_iva = cat_iva_a_condicion.get(padron.cat_iva, 'CF')
+
+            return True, {
+                'nombre': padron.denominacion,
+                'domicilio': padron.direccion or '',
+                'localidad': padron.localidad or '',
+                'provincia': padron.provincia or '',
+                'condicion_iva': condicion_iva,
+            }, None
+        except RuntimeError as e:
+            logger.warning(f"Consulta Padrón AFIP falló para CUIT {cuit_limpio}: {e}")
+            return False, {}, str(e)
+        except Exception as e:
+            logger.error(f"Error inesperado consultando Padrón AFIP (CUIT {cuit_limpio}): {e}", exc_info=True)
+            return False, {}, str(e)
+        finally:
+            if cert_path:
+                try: os.unlink(cert_path)
+                except: pass
+            if key_path:
+                try: os.unlink(key_path)
+                except: pass
 
     def emitir_nota_credito(self, factura, monto: Decimal, motivo: str = '') -> Tuple[bool, Dict, Optional[str]]:
         """
