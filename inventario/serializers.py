@@ -1380,6 +1380,17 @@ class EmitirFacturaSerializer(serializers.Serializer):
         default='CF',
         required=False
     )
+    # Opcional: para emisores RI, permite elegir explícitamente entre Factura
+    # A o B en vez de que quede 100% inferido de cliente_condicion_iva. Solo
+    # A/B -- la C es exclusiva de emisores Monotributistas/Exentos y nunca se
+    # ofrece como opción (ver FacturacionService._determinar_tipo_comprobante,
+    # que además revalida server-side que A solo se use con cliente RI +
+    # CUIT cargado, sin confiar en lo que mande el frontend).
+    tipo_comprobante_solicitado = serializers.ChoiceField(
+        choices=[('A', 'Factura A'), ('B', 'Factura B')],
+        required=False,
+        allow_null=True,
+    )
 
 class EgresoCajaSerializer(serializers.ModelSerializer):
     usuario_nombre = serializers.SerializerMethodField()
