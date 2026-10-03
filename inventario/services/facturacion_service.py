@@ -1153,28 +1153,33 @@ class FacturacionService:
     
     def _determinar_tipo_comprobante(self, cliente_data: Dict) -> int:
         """
-        Determina el tipo de comprobante según la condición IVA del cliente y
-        del emisor -- salvo que cliente_data traiga un
-        'tipo_comprobante_solicitado' explícito ('A' o 'B', del selector del
-        modal de facturación cuando el emisor es RI). Ese pedido se respeta
-        SOLO si pasa la validación de AFIP para Factura A (cliente RI +
-        CUIT cargado); si no la pasa, se ignora y se emite B -- nunca se
-        confía ciegamente en lo que mandó el frontend para algo que genera
-        un comprobante fiscal real.
+        Determina el tipo de comprobante según la tabla oficial de AFIP:
+          - Factura A: Responsable Inscripto → Responsable Inscripto o Monotributista.
+          - Factura B: Responsable Inscripto → Consumidor Final o Exento.
+          - Factura C: Monotributista o Exento (como EMISOR) → cualquier receptor.
+
+        Salvo que cliente_data traiga un 'tipo_comprobante_solicitado'
+        explícito ('A' o 'B', del selector del modal de facturación cuando el
+        emisor es RI) -- ese pedido se respeta SOLO si pasa la validación de
+        AFIP para Factura A (receptor RI o Monotributista + CUIT cargado); si
+        no la pasa, se ignora y se emite B -- nunca se confía ciegamente en
+        lo que mandó el frontend para algo que genera un comprobante fiscal
+        real.
 
         AFIP: 1=Factura A, 6=Factura B, 11=Factura C
 
         Reglas:
-        - Si el EMISOR es Monotributista: SOLO puede emitir Factura C
-          (tipo_comprobante_solicitado se ignora siempre en este caso).
-        - Si el EMISOR es Responsable Inscripto:
-          - Factura A: exige cliente RI CON CUIT cargado (AFIP exige
-            DocTipo=80 para clase A; sin CUIT, AFIP la rechazaría) -- es la
-            única condición bloqueante, tanto si A se infiere como si se pide
-            explícitamente. Cumplida esa condición, A o B quedan a elección.
-          - Sin pedido explícito: Factura A si el cliente es RI con CUIT,
-            Factura B para cualquier otro caso (CF, MT, NR, EX, o RI sin CUIT).
-          Nota: RI NUNCA emite Factura C.
+        - Emisor Monotributista o Exento: SIEMPRE Factura C, para cualquier
+          receptor (tipo_comprobante_solicitado se ignora siempre en este caso
+          -- ninguno de los dos puede elegir A/B).
+        - Emisor Responsable Inscripto:
+          - Factura A: exige receptor RI o Monotributista, CON CUIT cargado
+            (AFIP exige DocTipo=80 para clase A sea cual sea esa condición;
+            sin CUIT, AFIP la rechazaría) -- es la única condición
+            bloqueante, tanto si A se infiere como si se pide explícitamente.
+            Cumplida esa condición, A o B quedan a elección.
+          - Sin pedido explícito: Factura A si el receptor es RI/MT con CUIT,
+            Factura B para cualquier otro caso (CF, EX, NR, o RI/MT sin CUIT).
         """
         condicion_iva_cliente = cliente_data.get('cliente_condicion_iva', 'CF')
         cuit_cliente = re.sub(r'[^0-9]', '', cliente_data.get('cliente_cuit') or '')
@@ -1189,19 +1194,20 @@ class FacturacionService:
             f"Tipo solicitado: {tipo_solicitado}"
         )
 
-        # REGLA ESPECIAL: Monotributistas SOLO pueden emitir Factura C
-        if condicion_iva_emisor == 'MT':
-            logger.info("Determinado: Factura C (Emisor es Monotributista - solo puede emitir Factura C)")
+        # REGLA: Monotributista o Exento como emisor -> SIEMPRE Factura C,
+        # para cualquier receptor (tabla oficial AFIP).
+        if condicion_iva_emisor in ('MT', 'EX'):
+            logger.info(f"Determinado: Factura C (Emisor {condicion_iva_emisor} - siempre Factura C)")
             return 11  # Factura C
 
         # Si el emisor es Responsable Inscripto, puede emitir A o B.
-        # Factura C (tipo 11) es SOLO para emisores Monotributistas, nunca para RI.
         if condicion_iva_emisor == 'RI':
-            puede_ser_a = condicion_iva_cliente == 'RI' and len(cuit_cliente) == 11
+            # Factura A: receptor RI o Monotributista, identificado con CUIT.
+            puede_ser_a = condicion_iva_cliente in ('RI', 'MT') and len(cuit_cliente) == 11
 
             if tipo_solicitado == 'A':
                 if puede_ser_a:
-                    logger.info("Determinado: Factura A (solicitada explícitamente, cliente RI con CUIT válido)")
+                    logger.info(f"Determinado: Factura A (solicitada explícitamente, cliente {condicion_iva_cliente} con CUIT válido)")
                     return 1
                 logger.warning(
                     f"Se pidió Factura A pero no es válida para este cliente "
@@ -1215,14 +1221,15 @@ class FacturacionService:
 
             # Sin pedido explícito: comportamiento automático de siempre.
             if puede_ser_a:
-                logger.info("Determinado: Factura A (Emisor RI y Cliente RI con CUIT)")
+                logger.info(f"Determinado: Factura A (Emisor RI y Cliente {condicion_iva_cliente} con CUIT)")
                 return 1  # Factura A
 
             logger.info(f"Determinado: Factura B (Emisor RI - Cliente {condicion_iva_cliente})")
             return 6  # Factura B
 
-        # Para otras condiciones del emisor (CF, EX, NR), usar Factura B por defecto
-        # (aunque estas condiciones rara vez emiten facturas electrónicas)
+        # Para otras condiciones del emisor (CF, NR) -- no contempladas por la
+        # tabla oficial, no deberían poder facturar electrónicamente en la
+        # práctica -- Factura B como fallback conservador.
         logger.info(f"Determinado: Factura B (Emisor {condicion_iva_emisor} - caso por defecto)")
         return 6  # Factura B
     
