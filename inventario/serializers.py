@@ -1,5 +1,6 @@
 # inventario/serializers.py - CÓDIGO COMPLETO Y CORREGIDO
 import logging
+import re
 from rest_framework import serializers
 from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, ArancelTiendaNube, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
@@ -664,7 +665,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha_venta', 'total', 'anulada',
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones',
+            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta',
             'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
@@ -736,7 +737,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
-            'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones',
+            'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -746,7 +747,20 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'monto_efectivo': {'required': False},
             'fecha_limite_pago': {'required': False, 'allow_null': True},
             'observaciones': {'required': False, 'allow_null': True, 'allow_blank': True},
+            'numero_tarjeta': {'required': False, 'allow_null': True, 'allow_blank': True},
         }
+
+    def validate_numero_tarjeta(self, value):
+        # Opcional -- si lo mandan, tiene que ser exactamente los últimos 4
+        # dígitos (nunca el número completo de la tarjeta: no hay motivo para
+        # que este sistema lo almacene ni lo imprima, es sensible y no hace
+        # falta para matchear contra el resumen de la procesadora).
+        if not value:
+            return value
+        digitos = re.sub(r'\D', '', value)
+        if len(digitos) != 4:
+            raise serializers.ValidationError('Ingresá solo los últimos 4 dígitos de la tarjeta.')
+        return digitos
 
     def validate(self, data):
         detalles_data = data.get('detalles', [])
@@ -1013,6 +1027,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             cliente=cliente_obj,
             fecha_limite_pago=validated_data.get('fecha_limite_pago'),
             observaciones=validated_data.get('observaciones') or None,
+            numero_tarjeta=validated_data.get('numero_tarjeta') or None,
         )
 
         # Cuenta Corriente: registrar el débito en el libro de movimientos del cliente.

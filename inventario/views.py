@@ -6420,7 +6420,9 @@ class VentaViewSet(viewsets.ModelViewSet):
         story.append(Paragraph(f"<b>Nº de Venta:</b> {venta.id}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
-        if venta.metodo_pago == 'Cuenta Corriente' and venta.observaciones:
+        if venta.numero_tarjeta:
+            story.append(Paragraph(f"<b>Tarjeta:</b> **** {venta.numero_tarjeta}", normal_style))
+        if venta.observaciones:
             story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
 
@@ -7712,7 +7714,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             tienda_id__in=tiendas_ids, estado='EMITIDA',
             fecha_emision__date__gte=fecha_desde, fecha_emision__date__lte=fecha_hasta,
         )
-        notas_credito = NotaCredito.objects.select_related('tienda', 'factura_origen').filter(
+        notas_credito = NotaCredito.objects.select_related('tienda', 'factura_origen', 'factura_origen__venta').filter(
             tienda_id__in=tiendas_ids, estado='EMITIDA',
             fecha_emision__date__gte=fecha_desde, fecha_emision__date__lte=fecha_hasta,
         )
@@ -7750,6 +7752,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 'total': str(f.total),
                 'cae': f.cae or '',
                 'venta_anulada_sin_nc': venta_anulada_sin_nc,
+                # Últimos 4 dígitos de la tarjeta (si la venta se pagó con
+                # tarjeta y se cargaron) -- para matchear contra el resumen
+                # de la procesadora.
+                'numero_tarjeta': (f.venta.numero_tarjeta or '') if f.venta else '',
             })
             neto_total += f.subtotal
             iva_total += f.impuesto_iva
@@ -7771,6 +7777,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 'total': str(-nc.monto),
                 'cae': nc.cae or '',
                 'venta_anulada_sin_nc': False,
+                'numero_tarjeta': (
+                    (nc.factura_origen.venta.numero_tarjeta or '')
+                    if nc.factura_origen and nc.factura_origen.venta else ''
+                ),
             })
             neto_total -= neto_nc
             iva_total -= nc.impuesto_iva
@@ -7904,7 +7914,9 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
-        if venta.metodo_pago == 'Cuenta Corriente' and venta.observaciones:
+        if venta.numero_tarjeta:
+            story.append(Paragraph(f"<b>Tarjeta:</b> **** {venta.numero_tarjeta}", normal_style))
+        if venta.observaciones:
             story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
 

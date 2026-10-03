@@ -828,10 +828,17 @@ class Venta(models.Model):
     # Solo relevante para metodo_pago='Cuenta Corriente': fecha límite acordada para cancelar la deuda.
     fecha_limite_pago = models.DateField(null=True, blank=True, help_text="Fecha límite para cancelar el pago (Cuenta Corriente).")
 
-    # Solo relevante para metodo_pago='Cuenta Corriente': ej. quién retira la mercadería.
-    # Se imprime en el recibo y en la factura (si corresponde). Largo limitado para
+    # Nota libre de la venta (cualquier método de pago), ej. quién retira la
+    # mercadería. Se imprime en el recibo y en la factura. Largo limitado para
     # no romper el formato de los PDF (recibo A4 / factura AFIP).
-    observaciones = models.CharField(max_length=120, blank=True, null=True, help_text="Observación de la venta (Cuenta Corriente), ej. quién retira la mercadería.")
+    observaciones = models.CharField(max_length=120, blank=True, null=True, help_text="Observación de la venta, ej. quién retira la mercadería.")
+
+    # Últimos 4 dígitos de la tarjeta usada para el pago (opcional). Solo
+    # tiene sentido cuando metodo_pago es una tarjeta de débito/crédito; se
+    # imprime en el recibo y la factura, y se incluye en el Subdiario de IVA
+    # para que el comercio pueda matchear cada comprobante contra el resumen
+    # que le manda el posnet/procesadora.
+    numero_tarjeta = models.CharField(max_length=4, blank=True, null=True, help_text="Últimos 4 dígitos de la tarjeta (si el pago fue con tarjeta).")
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
