@@ -653,19 +653,21 @@ class ProductoViewSet(viewsets.ModelViewSet):
         from django.db.models import Sum, F, Value, DecimalField
         from django.db.models.functions import Coalesce
 
+        # Un solo aggregate() en vez de 3 queries separadas (count + count +
+        # aggregate) -- mismos 3 números, un solo round-trip a la base.
         base_qs = self._queryset_producto_tienda(aplicar_stock_bajo=False)
-        stock_bajo_qs = base_qs.filter(
-            stock__lte=self.STOCK_BAJO_UMBRAL,
-            se_vende_por_peso=False, precio_variable=False,
+        agg = base_qs.aggregate(
+            total=Count('id'),
+            stock_bajo=Count('id', filter=Q(
+                stock__lte=self.STOCK_BAJO_UMBRAL, se_vende_por_peso=False, precio_variable=False,
+            )),
+            valorizado=Sum(F('stock') * Coalesce('costo', Value(0), output_field=DecimalField())),
         )
-        valorizado = base_qs.aggregate(
-            total=Sum(F('stock') * Coalesce('costo', Value(0), output_field=DecimalField()))
-        )['total'] or Decimal('0.00')
 
         return Response({
-            'total': base_qs.count(),
-            'stock_bajo': stock_bajo_qs.count(),
-            'valorizado': str(valorizado),
+            'total': agg['total'] or 0,
+            'stock_bajo': agg['stock_bajo'] or 0,
+            'valorizado': str(agg['valorizado'] or Decimal('0.00')),
         })
 
     def create(self, request, *args, **kwargs):
