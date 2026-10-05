@@ -840,6 +840,16 @@ class Venta(models.Model):
     # que le manda el posnet/procesadora.
     numero_tarjeta = models.CharField(max_length=4, blank=True, null=True, help_text="Últimos 4 dígitos de la tarjeta (si el pago fue con tarjeta).")
 
+    TIPO_TARJETA_CHOICES = [
+        ('VISA', 'Visa'),
+        ('MASTERCARD', 'Mastercard'),
+        ('NARANJA_X', 'Naranja X'),
+        ('AMEX', 'Amex'),
+    ]
+    # Marca de la tarjeta (opcional, igual que numero_tarjeta -- se imprime
+    # junto a este en el recibo y la factura).
+    tipo_tarjeta = models.CharField(max_length=20, choices=TIPO_TARJETA_CHOICES, blank=True, null=True, help_text="Marca de la tarjeta (si el pago fue con tarjeta).")
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)
 

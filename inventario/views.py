@@ -6420,8 +6420,10 @@ class VentaViewSet(viewsets.ModelViewSet):
         story.append(Paragraph(f"<b>Nº de Venta:</b> {venta.id}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
-        if venta.numero_tarjeta:
-            story.append(Paragraph(f"<b>Tarjeta:</b> **** {venta.numero_tarjeta}", normal_style))
+        if venta.numero_tarjeta or venta.tipo_tarjeta:
+            marca = venta.get_tipo_tarjeta_display() if venta.tipo_tarjeta else ''
+            numero = f"**** {venta.numero_tarjeta}" if venta.numero_tarjeta else ''
+            story.append(Paragraph(f"<b>Tarjeta:</b> {(marca + ' ' + numero).strip()}", normal_style))
         if venta.observaciones:
             story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
@@ -7914,8 +7916,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
-        if venta.numero_tarjeta:
-            story.append(Paragraph(f"<b>Tarjeta:</b> **** {venta.numero_tarjeta}", normal_style))
+        if venta.numero_tarjeta or venta.tipo_tarjeta:
+            marca = venta.get_tipo_tarjeta_display() if venta.tipo_tarjeta else ''
+            numero = f"**** {venta.numero_tarjeta}" if venta.numero_tarjeta else ''
+            story.append(Paragraph(f"<b>Tarjeta:</b> {(marca + ' ' + numero).strip()}", normal_style))
         if venta.observaciones:
             story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))

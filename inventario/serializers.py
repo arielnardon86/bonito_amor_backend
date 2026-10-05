@@ -665,7 +665,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha_venta', 'total', 'anulada',
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta',
+            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
             'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
@@ -737,7 +737,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje', 'recargo_monto', 
             'metodo_pago', 'monto_efectivo',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
-            'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta',
+            'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
         ]
         extra_kwargs = {
             'descuento_porcentaje': {'required': False},
@@ -748,6 +748,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'fecha_limite_pago': {'required': False, 'allow_null': True},
             'observaciones': {'required': False, 'allow_null': True, 'allow_blank': True},
             'numero_tarjeta': {'required': False, 'allow_null': True, 'allow_blank': True},
+            'tipo_tarjeta': {'required': False, 'allow_null': True, 'allow_blank': True},
         }
 
     def validate_numero_tarjeta(self, value):
@@ -1028,6 +1029,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             fecha_limite_pago=validated_data.get('fecha_limite_pago'),
             observaciones=validated_data.get('observaciones') or None,
             numero_tarjeta=validated_data.get('numero_tarjeta') or None,
+            tipo_tarjeta=validated_data.get('tipo_tarjeta') or None,
         )
 
         # Cuenta Corriente: registrar el débito en el libro de movimientos del cliente.
