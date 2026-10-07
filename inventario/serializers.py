@@ -584,9 +584,15 @@ class VentaSerializer(serializers.ModelSerializer):
         sin CAE, y el botón manual de 'Facturar' (pensado para reintentar) quedaría
         oculto creyendo que la venta ya está facturada."""
         try:
-            return obj.factura is not None and obj.factura.estado == 'EMITIDA'
+            if obj.factura is not None and obj.factura.estado == 'EMITIDA':
+                return True
         except Exception:
-            return False
+            pass
+        # No es la venta "representativa" del OneToOne pero puede estar cubierta
+        # por una factura de "consumos del mes" consolidada igual (ver
+        # ClienteViewSet.facturar_consumos_mes) -- sin este fallback, el resto de
+        # las ventas de un lote consolidado se verían "sin factura" para siempre.
+        return obj.facturas_consolidadas.filter(estado='EMITIDA').exists()
 
     def get_cambio_devolucion_nota_credito(self, obj):
         """Obtiene el cambio/devolución que generó esta nota de crédito (usa prefetch cache)"""
@@ -1408,6 +1414,33 @@ class EmitirFacturaSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+
+
+class FacturarConsumosMesSerializer(serializers.Serializer):
+    """
+    Datos para ClienteViewSet.facturar_consumos_mes: junta en UN solo
+    comprobante todas las ventas de Cuenta Corriente de ese cliente en un mes
+    puntual que todavía no estén facturadas individualmente. Mismos campos de
+    cliente que EmitirFacturaSerializer (nombre/cuit/domicilio/condición IVA/
+    tipo de factura) -- acá sí opcionales porque hay datos del Cliente ya
+    cargados en la ficha para completar lo que falte.
+    """
+    mes = serializers.IntegerField(min_value=1, max_value=12)
+    anio = serializers.IntegerField(min_value=2000, max_value=2100)
+    cliente_nombre = serializers.CharField(required=False, max_length=255, allow_blank=True)
+    cliente_cuit = serializers.CharField(required=False, max_length=13, allow_blank=True, allow_null=True)
+    cliente_domicilio = serializers.CharField(required=False, max_length=255, allow_blank=True, allow_null=True)
+    cliente_condicion_iva = serializers.ChoiceField(
+        choices=Factura.CONDICION_IVA_CHOICES,
+        default='CF',
+        required=False,
+    )
+    tipo_comprobante_solicitado = serializers.ChoiceField(
+        choices=[('A', 'Factura A'), ('B', 'Factura B')],
+        required=False,
+        allow_null=True,
+    )
+
 
 class EgresoCajaSerializer(serializers.ModelSerializer):
     usuario_nombre = serializers.SerializerMethodField()

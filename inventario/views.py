@@ -317,7 +317,7 @@ from .serializers import (
     VentaSerializer, DetalleVentaSerializer, MetodoPagoSerializer,
     CustomTokenObtainPairSerializer, VentaCreateSerializer,
     CompraSerializer, CompraCreateSerializer, CompraStockSerializer, CompraStockCreateSerializer, ArancelMetodoTiendaSerializer,
-    FacturaSerializer, EmitirFacturaSerializer,
+    FacturaSerializer, EmitirFacturaSerializer, FacturarConsumosMesSerializer,
     NotaCreditoSerializer, EmitirNotaCreditoSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer,
@@ -5165,7 +5165,15 @@ def _emitir_y_persistir_factura(venta, cliente_data):
     venta.cliente_cuit = cliente_data.get('cliente_cuit', '')
     venta.cliente_domicilio = cliente_data.get('cliente_domicilio', '')
     venta.cliente_tipo_documento = cliente_data.get('cliente_tipo_documento', '')
-    venta.save()
+    # update_fields explícito a propósito: facturar_consumos_mes le pasa acá a
+    # la venta "representativa" con su .total pisado EN MEMORIA (nunca
+    # guardado) por el total consolidado de todas las ventas del mes -- un
+    # venta.save() sin update_fields volcaría ese total falso a la base.
+    venta.save(update_fields=['facturada', 'cliente_nombre', 'cliente_cuit', 'cliente_domicilio', 'cliente_tipo_documento'])
+    # Así factura.ventas_consolidadas.count() > 1 significa de forma uniforme
+    # "esto es una factura de consumos de varios días facturados juntos" sin
+    # importar el camino por el que se emitió (ver facturar_consumos_mes).
+    factura.ventas_consolidadas.add(venta)
     return True, factura, None
 
 
@@ -7673,7 +7681,14 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
         venta_id = self.request.query_params.get('venta', None)
         if venta_id:
-            queryset = queryset.filter(venta_id=venta_id)
+            # No alcanza con venta_id=venta_id: una venta que forma parte de una
+            # factura de "consumos del mes" consolidada (ClienteViewSet.
+            # facturar_consumos_mes) puede no ser la "representativa" del
+            # OneToOne -- sin el OR por ventas_consolidadas, el botón "Ver
+            # factura" de esas ventas no encontraría nada.
+            queryset = queryset.filter(
+                models.Q(venta_id=venta_id) | models.Q(ventas_consolidadas__id=venta_id)
+            ).distinct()
 
         fecha_desde = self.request.query_params.get('fecha_desde', None)
         if fecha_desde:
@@ -7822,7 +7837,24 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Obtener detalles de la venta
         venta = factura.venta
-        detalles = venta.detalles.all()
+        # Factura de "consumos del mes" consolidada (ver
+        # ClienteViewSet.facturar_consumos_mes): venta acá es solo la
+        # "representativa" del OneToOne -- su .total real es el de ESA venta
+        # puntual, no el de la factura entera. Sin este ajuste el PDF mostraría
+        # el total de una sola de las ventas del lote, no el facturado de
+        # verdad. factura.total/subtotal/impuesto_iva ya son los correctos
+        # (los calculó AFIP sobre el total consolidado, ver el endpoint).
+        ventas_del_lote = list(factura.ventas_consolidadas.all().order_by('fecha_venta'))
+        es_consolidada = len(ventas_del_lote) > 1
+        if es_consolidada:
+            detalles = []  # no se listan productos individuales; se listan las ventas del lote más abajo
+            venta.total = factura.total
+            venta.descuento_porcentaje = Decimal('0.00')
+            venta.descuento_monto = Decimal('0.00')
+            venta.recargo_porcentaje = Decimal('0.00')
+            venta.recargo_monto = Decimal('0.00')
+        else:
+            detalles = venta.detalles.all()
         
         # Obtener el nombre de la tienda con fallback
         nombre_tienda = 'N/A'
@@ -7945,31 +7977,44 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
         subtotal_sin_iva = Decimal('0.00')
         total_iva_calculado = Decimal('0.00')
-        
-        for detalle in detalles:
-            if not detalle.anulado_individualmente:
-                producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
-                if detalle.producto:
-                    producto_nombre += _detalle_variante(detalle.producto)
-                # El precio_unitario ya tiene IVA incluido
-                precio_con_iva = Decimal(str(detalle.precio_unitario))
-                # Calcular precio sin IVA: precio_con_iva / 1.21
-                precio_sin_iva = precio_con_iva / Decimal('1.21')
-                # Calcular subtotal sin IVA
-                subtotal_item_sin_iva = precio_sin_iva * Decimal(str(detalle.cantidad))
-                # Calcular IVA del item
-                iva_item = subtotal_item_sin_iva * Decimal('0.21')
-                
-                subtotal_sin_iva += subtotal_item_sin_iva
-                total_iva_calculado += iva_item
-                
-                # Mostrar precio con IVA (el precio original del producto)
+
+        if es_consolidada:
+            # Una fila por venta del lote en vez de itemizar cada producto de
+            # cada una -- más legible para una factura "resumen del mes", y
+            # evita tener que fusionar detalles de ventas distintas.
+            for v in ventas_del_lote:
+                fecha_str = v.fecha_venta.strftime('%d/%m/%Y') if v.fecha_venta else 'N/A'
                 data.append([
-                    str(detalle.cantidad),
-                    producto_nombre,
-                    f"${precio_con_iva:.2f}",
-                    f"${detalle.subtotal:.2f}"
+                    '1',
+                    f"Consumo Cuenta Corriente del {fecha_str}",
+                    f"${v.total:.2f}",
+                    f"${v.total:.2f}",
                 ])
+        else:
+            for detalle in detalles:
+                if not detalle.anulado_individualmente:
+                    producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
+                    if detalle.producto:
+                        producto_nombre += _detalle_variante(detalle.producto)
+                    # El precio_unitario ya tiene IVA incluido
+                    precio_con_iva = Decimal(str(detalle.precio_unitario))
+                    # Calcular precio sin IVA: precio_con_iva / 1.21
+                    precio_sin_iva = precio_con_iva / Decimal('1.21')
+                    # Calcular subtotal sin IVA
+                    subtotal_item_sin_iva = precio_sin_iva * Decimal(str(detalle.cantidad))
+                    # Calcular IVA del item
+                    iva_item = subtotal_item_sin_iva * Decimal('0.21')
+
+                    subtotal_sin_iva += subtotal_item_sin_iva
+                    total_iva_calculado += iva_item
+
+                    # Mostrar precio con IVA (el precio original del producto)
+                    data.append([
+                        str(detalle.cantidad),
+                        producto_nombre,
+                        f"${precio_con_iva:.2f}",
+                        f"${detalle.subtotal:.2f}"
+                    ])
         
         # IMPORTANTE: El total de la venta YA tiene descuentos/recargos aplicados
         # No debemos recalcular descuentos/recargos aquí, solo mostrar los valores correctos
@@ -7982,11 +8027,14 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Calcular el descuento/recargo que se aplicó (para mostrarlo en el PDF)
         # El descuento/recargo se aplicó sobre el total CON IVA
-        subtotal_inicial_con_iva = sum(
+        # Consolidada: no hay detalles de producto que sumar (ver arriba) y
+        # descuento/recargo ya quedaron en 0 -- el subtotal con IVA es
+        # directamente el total facturado.
+        subtotal_inicial_con_iva = total_final if es_consolidada else sum(
             Decimal(str(d.precio_unitario)) * Decimal(str(d.cantidad))
             for d in detalles if not d.anulado_individualmente
         )
-        
+
         descuento_monto_calc = Decimal('0.00')
         recargo_monto_calc = Decimal('0.00')
         
@@ -8008,8 +8056,11 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # Agregar línea separadora antes de totales
         data.append(['', '', '', ''])  # Línea vacía
         
-        # Subtotal inicial con IVA (antes de descuentos/recargos)
-        subtotal_inicial_con_iva = sum(
+        # Subtotal inicial con IVA (antes de descuentos/recargos) -- recalculado
+        # acá de nuevo a partir de `detalles` (mismo criterio que arriba); en
+        # consolidada sigue sin haber detalles, así que se reusa el valor ya
+        # resuelto arriba en vez de recomputar $0.00.
+        subtotal_inicial_con_iva = subtotal_inicial_con_iva if es_consolidada else sum(
             Decimal(str(d.precio_unitario)) * Decimal(str(d.cantidad))
             for d in detalles if not d.anulado_individualmente
         )
@@ -8032,8 +8083,11 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             data.append(['', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
         
         # Si es una venta de diferencia de cambio/devolución, mostrar el monto devuelto
+        # (no aplica a consolidada: ahí `venta` es solo la "representativa" del
+        # lote -- este ajuste es por-venta y, si corresponde, ya está reflejado
+        # en el v.total de la línea de ese consumo puntual en la tabla de arriba)
         monto_devuelto_mostrar = Decimal('0.00')
-        if CambioDevolucion is not None:
+        if CambioDevolucion is not None and not es_consolidada:
             try:
                 cambio_diferencia = venta.cambio_devolucion_diferencia.first()
                 if cambio_diferencia:
@@ -9528,6 +9582,99 @@ class ClienteViewSet(viewsets.ModelViewSet):
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="resumen_cuenta_{cliente.id}{sufijo_archivo}.pdf"'
         return response
+
+    @action(detail=True, methods=['post'], url_path='facturar-consumos-mes', url_name='facturar-consumos-mes')
+    def facturar_consumos_mes(self, request, pk=None):
+        """
+        Emite UNA sola factura por todos los consumos de Cuenta Corriente de
+        este cliente en un mes puntual que todavía no estén facturados
+        individualmente -- para clientes a los que el comercio les factura
+        "todo junto" al cierre del mes en vez de operación por operación.
+
+        A ARCA no le interesan las ventas individuales, solo un total (ver
+        FacturacionService._emitir_afip) -- así que se reusa
+        _emitir_y_persistir_factura tal cual, pasándole la primera venta del
+        mes como "representativa" de Factura.venta (el OneToOne no se toca)
+        con su total pisado EN MEMORIA por la suma de todas (nunca
+        guardado -- ver el update_fields explícito agregado a propósito en
+        _emitir_y_persistir_factura). El conjunto real de ventas cubiertas
+        queda en factura.ventas_consolidadas.
+
+        Nota de crédito para anular/corregir UN consumo puntual de los varios
+        que se facturaron juntos: no hace falta nada especial -- Notas de
+        Crédito ya emite por cualquier monto contra cualquier factura EMITIDA,
+        sin importar cómo se armó esa factura.
+        """
+        cliente = self.get_object()
+        tienda = cliente.tienda
+
+        serializer = FacturarConsumosMesSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'error': 'Datos inválidos', 'detalles': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        datos = serializer.validated_data
+        mes, anio = datos['mes'], datos['anio']
+
+        if tienda.tipo_facturacion == 'NINGUNA':
+            return Response({'error': 'La tienda no tiene configurado un sistema de facturación.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        if not user.is_superuser and tienda.id not in _get_tiendas_ids_usuario(user):
+            return Response({'error': 'No tenés permiso para facturar consumos de esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
+
+        with transaction.atomic():
+            # select_for_update(): mismo motivo que en VentaViewSet.emitir_factura
+            # -- evita que dos clicks casi simultáneos arranquen cada uno su
+            # propia factura consolidada tomando el mismo lote de ventas.
+            ventas = list(
+                Venta.objects.select_for_update().filter(
+                    cliente=cliente, tienda=tienda, anulada=False, facturada=False,
+                    fecha_venta__year=anio, fecha_venta__month=mes,
+                ).order_by('fecha_venta')
+            )
+            if not ventas:
+                return Response(
+                    {'error': f'No hay consumos pendientes de facturar para {mes:02d}/{anio}.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            total_consolidado = sum((v.total for v in ventas), Decimal('0.00'))
+            venta_representativa = ventas[0]
+            venta_representativa.total = total_consolidado
+
+            cliente_data = {
+                'cliente_nombre': datos.get('cliente_nombre') or cliente.nombre_razon_social,
+                'cliente_cuit': datos.get('cliente_cuit') or cliente.cuit_cuil or None,
+                'cliente_domicilio': datos.get('cliente_domicilio') or cliente.direccion or None,
+                'cliente_condicion_iva': datos.get('cliente_condicion_iva', 'CF'),
+            }
+            if datos.get('tipo_comprobante_solicitado'):
+                cliente_data['tipo_comprobante_solicitado'] = datos['tipo_comprobante_solicitado']
+
+            exito, factura, error = _emitir_y_persistir_factura(venta_representativa, cliente_data)
+
+            # Se registra igual qué ventas se intentaron agrupar, haya salido
+            # bien o mal -- útil para diagnosticar un reintento.
+            factura.ventas_consolidadas.set(ventas)
+
+            if not exito:
+                return Response({'error': error, 'factura_id': str(factura.id)}, status=status.HTTP_400_BAD_REQUEST)
+
+            # _emitir_y_persistir_factura ya marcó facturada=True en la
+            # representativa; falta propagarlo al resto del lote.
+            ids_resto = [v.id for v in ventas[1:]]
+            if ids_resto:
+                Venta.objects.filter(id__in=ids_resto).update(
+                    facturada=True,
+                    cliente_nombre=cliente_data['cliente_nombre'],
+                    cliente_cuit=cliente_data.get('cliente_cuit') or '',
+                    cliente_domicilio=cliente_data.get('cliente_domicilio') or '',
+                )
+
+        return Response({
+            'message': f'Factura consolidada emitida -- {len(ventas)} consumo(s) de {mes:02d}/{anio}.',
+            'factura': FacturaSerializer(factura).data,
+            'ventas': VentaSerializer(ventas, many=True, context={'request': request}).data,
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'])
     def deuda_vencida(self, request):

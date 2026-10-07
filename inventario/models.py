@@ -1020,7 +1020,20 @@ class Factura(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Venta "representativa" -- para una factura de una sola venta (el caso de
+    # siempre) es esa misma venta; para una factura de "consumos del mes"
+    # consolidados (varias ventas de cuenta corriente en un solo comprobante)
+    # es la primera cronológicamente, solo para no romper el OneToOne ni todo
+    # el código existente que ya espera poder leer factura.venta directo (PDF,
+    # Subdiario de IVA, impresión). El conjunto REAL de ventas cubiertas por
+    # este comprobante está en ventas_consolidadas.
     venta = models.OneToOneField(Venta, on_delete=models.CASCADE, related_name='factura')
+    # Todas las ventas que cubre este comprobante -- para una factura normal
+    # (1 venta) tiene un solo elemento, igual a `venta`; para una factura de
+    # "consumos del mes" tiene todas las ventas de cuenta corriente de ese
+    # cliente/mes que se facturaron juntas. Separado de `venta` para no tener
+    # que volver nullable ni tocar el OneToOne existente.
+    ventas_consolidadas = models.ManyToManyField(Venta, related_name='facturas_consolidadas', blank=True)
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='facturas')
     
     # Números de factura
