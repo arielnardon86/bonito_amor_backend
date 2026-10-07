@@ -9637,6 +9637,22 @@ class ClienteViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # Si YA hay algún consumo de este mes facturado -- individualmente
+            # (botón "Facturar" por venta) o en una consolidada previa -- no se
+            # arma otra: terminaríamos con 2+ comprobantes para el mismo
+            # período, justo lo que esta función busca evitar. El frontend ya
+            # deshabilita el botón en ese caso (ver ClienteDetalle.js), esto
+            # es el mismo resguardo para quien pegue directo a la API.
+            ya_facturadas_del_mes = Venta.objects.filter(
+                cliente=cliente, tienda=tienda, anulada=False, facturada=True,
+                fecha_venta__year=anio, fecha_venta__month=mes,
+            ).exists()
+            if ya_facturadas_del_mes:
+                return Response(
+                    {'error': f'Ya hay consumos de {mes:02d}/{anio} facturados (individualmente o en otra factura consolidada). No se puede generar otra factura consolidada para no duplicar comprobantes del mismo período.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             total_consolidado = sum((v.total for v in ventas), Decimal('0.00'))
             venta_representativa = ventas[0]
             venta_representativa.total = total_consolidado
