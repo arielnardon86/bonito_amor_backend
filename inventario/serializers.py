@@ -671,7 +671,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha_venta', 'total', 'anulada',
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
-            'metodo_pago', 'metodo_pago_nombre', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
+            'metodo_pago', 'metodo_pago_nombre', 'monto_efectivo', 'vuelto', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
             'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
@@ -714,7 +714,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
     # dígitos en total" aunque el monto real sea chico — se ve como un número gigante
     # pero no lo es. Se redondea acá, antes de que el campo lo valide.
     _CAMPOS_MONETARIOS_A_REDONDEAR = [
-        'descuento_monto', 'recargo_monto', 'monto_efectivo',
+        'descuento_monto', 'recargo_monto', 'monto_efectivo', 'vuelto',
         'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado',
     ]
 
@@ -741,7 +741,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'fecha_venta',
             'descuento_porcentaje', 'descuento_monto', 
             'recargo_porcentaje', 'recargo_monto', 
-            'metodo_pago', 'monto_efectivo',
+            'metodo_pago', 'monto_efectivo', 'vuelto',
             'tienda_slug', 'detalles', 'arancel_aplicado_id', 'arancel_total_ml', 'costo_envio_ml', 'arancel_combinado', 'cambio_devolucion_id',
             'presupuesto_id', 'cliente_id', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
         ]
@@ -751,6 +751,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             'recargo_porcentaje': {'required': False},
             'recargo_monto': {'required': False},
             'monto_efectivo': {'required': False},
+            'vuelto': {'required': False, 'allow_null': True},
             'fecha_limite_pago': {'required': False, 'allow_null': True},
             'observaciones': {'required': False, 'allow_null': True, 'allow_blank': True},
             'numero_tarjeta': {'required': False, 'allow_null': True, 'allow_blank': True},
@@ -1023,6 +1024,7 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             tienda=validated_data['tienda'],
             metodo_pago=validated_data['metodo_pago'],
             monto_efectivo=monto_efectivo,
+            vuelto=validated_data.get('vuelto'),
             descuento_porcentaje=validated_data.get('descuento_porcentaje', Decimal('0.00')),
             descuento_monto=validated_data.get('descuento_monto', Decimal('0.00')),
             recargo_porcentaje=validated_data.get('recargo_porcentaje', Decimal('0.00')),

@@ -6505,6 +6505,10 @@ class VentaViewSet(viewsets.ModelViewSet):
         story.append(Spacer(1, 20))
 
         story.append(Paragraph(f"<b>Método de pago:</b> {venta.metodo_pago or 'N/A'}", normal_style))
+        if venta.vuelto and venta.vuelto > 0:
+            recibido = Decimal(str(venta.monto_efectivo or 0)) + Decimal(str(venta.vuelto))
+            story.append(Paragraph(f"<b>Efectivo recibido:</b> ${recibido:.2f}", normal_style))
+            story.append(Paragraph(f"<b>Vuelto:</b> ${Decimal(str(venta.vuelto)):.2f}", normal_style))
         story.append(Spacer(1, 12))
         story.append(Paragraph("<i>¡Gracias por su compra!</i>", normal_style))
 

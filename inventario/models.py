@@ -775,6 +775,17 @@ class Venta(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True,
         help_text="Monto pagado en efectivo. Para pagos combinados es solo la parte en efectivo."
     )
+    # Solo informativo/para el recibo -- el neto que entra a la caja ya es
+    # monto_efectivo (el total de la venta), así que vuelto NO se resta de
+    # ahí ni en ningún cálculo de cierre de caja: si el cliente entrega
+    # $5000 por una compra de $3800, a la caja entran $5000 y salen $1200 de
+    # vuelto, neto $3800 -- exactamente lo que monto_efectivo ya representaba
+    # antes de este campo. Ver PuntoVenta.js (cálculo) y _construir_pdf_recibo
+    # / ReciboImpresion.js (impresión).
+    vuelto = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Vuelto entregado en una venta en efectivo (informativo, no afecta el neto de caja)."
+    )
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='ventas')
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
