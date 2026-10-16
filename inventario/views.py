@@ -6901,6 +6901,69 @@ class CompraViewSet(viewsets.ModelViewSet):
         close_old_connections()
         return super().list(request, *args, **kwargs)
 
+    # Categorías y formato "Categoria — Detalle" del campo libre `proveedor`
+    # -- definidos y usados hoy solo del lado del frontend (RegistroCompras.js,
+    # CATEGORIAS/buildConcepto/parseConcepto). Se replican acá nada más que
+    # para el desglose por categoría de total_mes, sin tocar el modelo.
+    _CATEGORIAS = ['Alquiler', 'Servicios', 'Impuestos', 'Sueldos', 'Otros']
+
+    @classmethod
+    def _categoria_de(cls, proveedor):
+        proveedor = (proveedor or '').strip()
+        if not proveedor:
+            return None
+        for cat in cls._CATEGORIAS:
+            if proveedor == cat or proveedor.startswith(f'{cat} — '):
+                return cat
+        return None
+
+    @action(detail=False, methods=['get'], url_path='total-mes')
+    def total_mes(self, request):
+        """Total de egresos del mes en curso (o del mes/año pasado por query
+        params) para la tienda -- independiente de la paginación o los
+        filtros de fecha que tenga aplicados el listado en el frontend
+        (RegistroCompras.js: antes mostraba la suma de solo los 10 egresos de
+        la página actual, no el total real del mes)."""
+        user = request.user
+        tienda_slug = request.query_params.get('tienda_slug')
+        queryset = Compra.objects.all()
+        if user.is_superuser:
+            if tienda_slug:
+                queryset = queryset.filter(tienda__nombre=tienda_slug)
+        elif user.tienda:
+            queryset = queryset.filter(tienda=user.tienda)
+        else:
+            return Response({'total': 0.0, 'cantidad': 0, 'por_categoria': []})
+
+        hoy = timezone.localdate()
+        try:
+            anio = int(request.query_params.get('anio') or hoy.year)
+            mes = int(request.query_params.get('mes') or hoy.month)
+        except (TypeError, ValueError):
+            anio, mes = hoy.year, hoy.month
+        queryset = queryset.filter(fecha_compra__year=anio, fecha_compra__month=mes)
+
+        totales_por_categoria = {}
+        total = Decimal('0.00')
+        cantidad = 0
+        for proveedor, monto in queryset.values_list('proveedor', 'total'):
+            monto = monto or Decimal('0.00')
+            total += monto
+            cantidad += 1
+            cat = self._categoria_de(proveedor) or 'Otros'
+            totales_por_categoria[cat] = totales_por_categoria.get(cat, Decimal('0.00')) + monto
+
+        return Response({
+            'total': float(total),
+            'cantidad': cantidad,
+            'mes': mes,
+            'anio': anio,
+            'por_categoria': [
+                {'categoria': cat, 'total': float(monto)}
+                for cat, monto in sorted(totales_por_categoria.items(), key=lambda kv: kv[1], reverse=True)
+            ],
+        })
+
 
 class CompraStockViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
