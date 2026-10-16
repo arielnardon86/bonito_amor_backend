@@ -50,7 +50,12 @@ class ClientesSaaSListView(APIView):
     permission_classes = [EsOperadorPlataforma]
 
     def get(self, request):
-        tiendas = Tienda.objects.exclude(nombre=_tienda_facturacion_nombre()).order_by('nombre')
+        # select_related de suscripcion/plan: info_suscripcion() accede a
+        # tienda.suscripcion y sus.plan por cada tienda -- sin esto, cada
+        # acceso dispara su propia query (N+1).
+        tiendas = Tienda.objects.exclude(nombre=_tienda_facturacion_nombre()) \
+            .select_related('suscripcion', 'suscripcion__plan', 'hereda_suscripcion_de') \
+            .order_by('nombre')
         hoy = timezone.localdate()
 
         pagos_por_tienda = {}
@@ -60,6 +65,10 @@ class ClientesSaaSListView(APIView):
         resultado = []
         for tienda in tiendas:
             info = info_suscripcion(tienda)
+            # El logo (base64) no se muestra en este panel -- pesa mucho y
+            # multiplicado por todas las tiendas hacía lenta la carga de la
+            # lista para nada.
+            info.pop('logo', None)
             pagos_tienda = pagos_por_tienda.get(tienda.id, [])
             ultimo_pago = pagos_tienda[0] if pagos_tienda else None
             resultado.append({
