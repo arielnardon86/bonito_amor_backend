@@ -237,11 +237,16 @@ class Command(BaseCommand):
             # reintenta varias veces primero (el panel de MP lo muestra como
             # "Atrasado — intento N de 4"), y durante todo ese período el
             # preapproval sigue con status='authorized'. pending_charge_quantity
-            # > 0 es la señal de que MP todavía tiene un cobro sin resolver -- no
-            # confirmado 100% contra un payload real de un caso "atrasado" (de
-            # ahí el log del summarized completo más abajo), así que se lee de
-            # forma defensiva.
+            # resultó NO ser confiable para detectar esto: confirmado contra un
+            # payload real de una tienda que en el dashboard de MP se veía como
+            # "Atrasado — intento 3 de 4", pending_charge_quantity vino `null`
+            # (se lee `or 0`, así que nunca se habría detectado el atraso). El
+            # campo que sí refleja ese estado en ese mismo payload es
+            # summarized.semaphore = "yellow" (verde = al día). Se deja
+            # cobros_pendientes como señal secundaria por si algún otro caso sí
+            # lo popula.
             cobros_pendientes = resumen.get('pending_charge_quantity') or 0
+            semaforo = resumen.get('semaphore')
 
             if estado_mp == 'cancelled' and sus.estado != 'cancelada':
                 # MP la canceló (o nunca llegó a autorizarla) pero acá seguía con acceso.
@@ -275,7 +280,7 @@ class Command(BaseCommand):
             # de gracia/pausada, no le saca el acceso a la tienda, solo prende o
             # apaga el aviso que ve el usuario al iniciar sesión -- por eso se
             # actualiza en los dos sentidos acá, todos los días.
-            nuevo_atrasado = cobros_pendientes > 0
+            nuevo_atrasado = cobros_pendientes > 0 or semaforo in ('yellow', 'red')
             if sus.pago_atrasado != nuevo_atrasado:
                 if nuevo_atrasado:
                     self.stdout.write(self.style.WARNING(
