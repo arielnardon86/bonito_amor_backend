@@ -212,9 +212,14 @@ def cancelar_suscripcion(suscripcion):
 
 
 def pausar_suscripcion(suscripcion):
-    """Pausa la suscripción (sin cobros, sin acceso)."""
+    """Pausa la suscripción (sin cobros, sin acceso). fecha_pausada es lo que
+    usa el cron (procesar_gracia_suscripciones) para cancelarla sola a los 30
+    días si nadie la reactiva -- se pisa cada vez que se llama (ej. si ya
+    estaba pausada y se vuelve a pausar), así el contador de 30 días siempre
+    arranca desde la pausa más reciente."""
     suscripcion.estado = "pausada"
-    suscripcion.save(update_fields=["estado"])
+    suscripcion.fecha_pausada = tz.now()
+    suscripcion.save(update_fields=["estado", "fecha_pausada"])
     logger.info("Suscripción pausada: %s", suscripcion.id)
 
 

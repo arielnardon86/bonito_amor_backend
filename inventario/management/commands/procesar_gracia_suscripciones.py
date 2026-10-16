@@ -12,10 +12,16 @@ Lógica (MP cobra el día 10 de cada mes):
      renovar_suscripcion(). Si MP la cancelló y acá seguimos con acceso, se
      cancela. Corre ANTES del resto para no mandar a gracia/pausa a una
      tienda que en realidad está pagando bien (solo perdimos su webhook).
+  0.5. Suscripciones en 'pending' hace más de DIAS_LIMITE_PENDING (el cliente
+     nunca completó la autorización en MP) → pausar directo, sin pasar por
+     gracia (nunca llegó a pagar, no hay nada "en gracia" que esperar).
   1. Suscripciones en trial/activa cuyo fecha_proximo_cobro ya pasó y no llegó
      webhook de pago → iniciar gracia (5 días).
   2. Suscripciones ya en gracia → avanzar contador y avisar.
   3. Si llevan DIAS_GRACIA días en gracia → pausar (sin pérdida de datos).
+  4. Suscripciones en 'pausada' hace más de DIAS_LIMITE_PAUSADA sin que nadie
+     las reactive → cancelar (arranca la cuenta regresiva de DIAS_RETENCION
+     días del paso 0.1 de la corrida siguiente, que ya borra canceladas viejas).
 
 Nota: los webhooks de MP son la fuente primaria. Este comando es el safety net
 para cuando un webhook no llega o llega tarde.
@@ -35,6 +41,8 @@ class Command(BaseCommand):
     help = "Procesa período de gracia de suscripciones con cobros pendientes."
 
     DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
+    DIAS_LIMITE_PENDING = 7   # 'pending' sin completar el pago en MP → pausar
+    DIAS_LIMITE_PAUSADA = 30  # 'pausada' sin reactivar → cancelar
 
     # fecha_proximo_cobro se guarda como medianoche del día 10 (_proximo_dia_10
     # en suscripcion_service.py), pero MP no cobra instantáneo a las 00:00 -- lo
@@ -61,6 +69,8 @@ class Command(BaseCommand):
         from inventario.services.suscripcion_service import (
             iniciar_periodo_gracia,
             pausar_suscripcion,
+            cancelar_suscripcion,
+            cancelar_preaprobacion_mp,
         )
 
         ahora = timezone.now()
@@ -90,6 +100,25 @@ class Command(BaseCommand):
                 logger.info("Tienda eliminada por cancelación: %s", nombre)
             except Exception as e:
                 logger.error("Error eliminando tienda %s: %s", nombre, e)
+
+        # 0.5. 'pending' hace más de DIAS_LIMITE_PENDING (nunca completó la
+        #      autorización en MP) → pausar directo, sin pasar por gracia --
+        #      no hay ningún pago previo del que "estar en gracia".
+        limite_pending = ahora - timedelta(days=self.DIAS_LIMITE_PENDING)
+        pendientes_vencidas = Suscripcion.objects.filter(
+            estado='pending',
+            fecha_inicio__lt=limite_pending,
+        ).select_related('plan', 'tienda')
+
+        for sus in pendientes_vencidas:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Pausando por pago nunca confirmado: {sus.tienda.nombre} "
+                    f"({sus.plan.nombre}) — pendiente desde el {sus.fecha_inicio:%d/%m/%Y}"
+                )
+            )
+            pausar_suscripcion(sus)
+            self._enviar_aviso_pending_pausada(sus)
 
         # 1. Suscripciones trial/activa con fecha_proximo_cobro vencida hace más
         #    de MARGEN_VERIFICACION_COBRO (no apenas pasó la medianoche del día
@@ -133,6 +162,42 @@ class Command(BaseCommand):
                     f"— {dias_restantes} día(s) restante(s)"
                 )
                 self._enviar_aviso(sus, dia=dias_en_gracia + 1)
+
+        # 4. 'pausada' hace más de DIAS_LIMITE_PAUSADA sin que nadie la
+        #    reactive → cancelar. Deja que el paso 0.1 de la corrida siguiente
+        #    (30 días post-cancelación) termine de borrar sus datos -- así una
+        #    tienda suspendida y abandonada ya no queda viva para siempre.
+        limite_pausada = ahora - timedelta(days=self.DIAS_LIMITE_PAUSADA)
+        pausadas_vencidas = Suscripcion.objects.filter(
+            estado='pausada',
+            fecha_pausada__isnull=False,
+            fecha_pausada__lt=limite_pausada,
+        ).select_related('plan', 'tienda')
+
+        for sus in pausadas_vencidas:
+            dias_pausada = (ahora - sus.fecha_pausada).days
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Cancelando por suspensión prolongada: {sus.tienda.nombre} "
+                    f"({dias_pausada} días pausada sin reactivar)"
+                )
+            )
+            # Esta baja la inicia nuestro sistema por inactividad, no MP -- si
+            # todavía queda un preapproval vivo del lado de MP (ej. nunca llegó
+            # a agotar sus propios reintentos), hay que cancelarlo nosotros o
+            # podría seguir intentando cobrarle la tarjeta a un cliente que ya
+            # vamos a borrar. Best-effort: un error acá no debe frenar la baja
+            # local (ver mismo criterio que el resto del comando).
+            if sus.mp_preapproval_id:
+                try:
+                    cancelar_preaprobacion_mp(sus.mp_preapproval_id)
+                except Exception as e:
+                    logger.warning(
+                        "No se pudo cancelar preapproval %s en MP para %s (se cancela igual localmente): %s",
+                        sus.mp_preapproval_id, sus.tienda.nombre, e,
+                    )
+            cancelar_suscripcion(sus)
+            self._enviar_aviso_pausada_cancelada(sus)
 
         self.stdout.write(self.style.SUCCESS("procesar_gracia_suscripciones completado."))
 
@@ -289,3 +354,57 @@ class Command(BaseCommand):
             logger.info("Aviso enviado a %s (día %s)", email_destino, dia)
         except Exception as e:
             logger.warning("No se pudo enviar aviso a %s: %s", email_destino, e)
+
+    def _enviar_aviso_pending_pausada(self, sus):
+        """Email cuando se pausa una suscripción que nunca llegó a completar
+        el pago en MP (estado 'pending' vencido, ver paso 0.5 de handle)."""
+        email_destino = sus.tienda.email
+        if not email_destino:
+            return
+        try:
+            send_mail(
+                subject="🚫 Total Stock: tu cuenta fue suspendida (pago sin confirmar)",
+                message=(
+                    f"Hola,\n\n"
+                    f"Nunca llegamos a confirmar el pago de tu suscripción "
+                    f"({sus.plan.get_nombre_display()}) para la tienda {sus.tienda.nombre}, "
+                    f"así que tu cuenta fue suspendida.\n\n"
+                    f"Tus datos están intactos. Para reactivar tu cuenta, "
+                    f"completá la suscripción en Mercado Pago o contactanos.\n\n"
+                    f"— El equipo de Total Stock"
+                ),
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@totalstock.com.ar'),
+                recipient_list=[email_destino],
+                fail_silently=True,
+            )
+            logger.info("Aviso de pausa por pending vencido enviado a %s", email_destino)
+        except Exception as e:
+            logger.warning("No se pudo enviar aviso de pausa (pending) a %s: %s", email_destino, e)
+
+    def _enviar_aviso_pausada_cancelada(self, sus):
+        """Email cuando se cancela automáticamente una suscripción que llevaba
+        demasiado tiempo pausada sin que nadie la reactivara (ver paso 4 de
+        handle). A partir de acá arranca la cuenta regresiva de
+        DIAS_RETENCION días antes de borrar los datos de la tienda."""
+        email_destino = sus.tienda.email
+        if not email_destino:
+            return
+        try:
+            send_mail(
+                subject="🗑️ Total Stock: tu cuenta suspendida fue cancelada",
+                message=(
+                    f"Hola,\n\n"
+                    f"Tu cuenta de {sus.tienda.nombre} estuvo suspendida más de "
+                    f"{self.DIAS_LIMITE_PAUSADA} días sin que se reactivara, así que fue cancelada.\n\n"
+                    f"Tus datos se conservan {self.DIAS_RETENCION} días más por si querés "
+                    f"recuperar la cuenta -- después de eso se eliminan de forma permanente. "
+                    f"Contactanos si querés reactivarla.\n\n"
+                    f"— El equipo de Total Stock"
+                ),
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@totalstock.com.ar'),
+                recipient_list=[email_destino],
+                fail_silently=True,
+            )
+            logger.info("Aviso de cancelación por pausa prolongada enviado a %s", email_destino)
+        except Exception as e:
+            logger.warning("No se pudo enviar aviso de cancelación (pausada) a %s: %s", email_destino, e)

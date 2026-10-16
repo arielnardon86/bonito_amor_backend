@@ -1552,6 +1552,12 @@ class Suscripcion(models.Model):
     fecha_fin_trial     = models.DateTimeField(null=True, blank=True)
     fecha_proximo_cobro = models.DateTimeField(null=True, blank=True)
     fecha_inicio_gracia = models.DateTimeField(null=True, blank=True)
+    # Cuándo pasó a 'pausada' (ver pausar_suscripcion) -- separado de
+    # fecha_inicio_gracia porque también se pausa directo desde 'pending' sin
+    # pasar por gracia (ver procesar_gracia_suscripciones: pendiente de pago
+    # hace más de 7 días). Es lo que usa el cron para saber cuánto lleva
+    # pausada y cancelarla sola a los 30 días sin reactivar.
+    fecha_pausada       = models.DateTimeField(null=True, blank=True)
     fecha_cancelacion   = models.DateTimeField(null=True, blank=True)
 
     # Excepción puntual: reemplaza sus.plan.max_productos SOLO para esta
