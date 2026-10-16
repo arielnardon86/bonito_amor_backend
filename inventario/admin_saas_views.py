@@ -71,9 +71,18 @@ class ClientesSaaSListView(APIView):
             info.pop('logo', None)
             pagos_tienda = pagos_por_tienda.get(tienda.id, [])
             ultimo_pago = pagos_tienda[0] if pagos_tienda else None
+            # mp_payer_email vive en la Suscripcion PROPIA de esta tienda, no
+            # en info_suscripcion() (que para una tienda con hereda_suscripcion_de
+            # devuelve el estado de la tienda principal) -- siempre el email con
+            # el que ESTA tienda se suscribió, no el de la que hereda.
+            try:
+                mp_payer_email = tienda.suscripcion.mp_payer_email or None
+            except Exception:
+                mp_payer_email = None
             resultado.append({
                 'tienda_id': str(tienda.id),
                 **info,
+                'mp_payer_email': mp_payer_email,
                 'requiere_eleccion_plan': tienda.requiere_eleccion_plan,
                 'hereda_suscripcion_de': tienda.hereda_suscripcion_de.nombre if tienda.hereda_suscripcion_de_id else None,
                 'ultimo_pago_manual': _serializar_pago(ultimo_pago) if ultimo_pago else None,
