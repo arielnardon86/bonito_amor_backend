@@ -330,6 +330,15 @@ MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
 # suscripción de cada cliente de Total Stock -- ver mp_webhook_suscripcion.
 TIENDA_SUSCRIPCIONES_NOMBRE = os.environ.get('TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
 
+# Emails con acceso al panel de administración de clientes SaaS (/clientes-saas
+# en el frontend, inventario/admin_saas_views.py). is_superuser NO alcanza acá:
+# registro_publico le da is_superuser=True a TODOS los dueños de tienda que se
+# registran (son dueños de su propia tienda, no de Total Stock), así que ese
+# flag no distingue "dueño de su tienda" de "Ariel/operador de la plataforma".
+PLATFORM_ADMIN_EMAILS = [
+    e.strip().lower() for e in os.environ.get('PLATFORM_ADMIN_EMAILS', 'info@highduo.com').split(',') if e.strip()
+]
+
 # ── Tienda Nube / Nuvemshop ───────────────────────────────────────────────────
 # Hay una sola app de Total Stock registrada en el Panel de Partners de Tienda
 # Nube: el App ID y Client Secret son globales para toda la plataforma, no algo

@@ -4,7 +4,7 @@ from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
 from django.utils.html import format_html
 from django.utils import timezone
-from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda, Factura, Plan, Suscripcion
+from .models import User, Tienda, Categoria, Producto, Venta, DetalleVenta, MetodoPago, ArancelMetodoTienda, Factura, Plan, Suscripcion, PagoManualSuscripcion
 
 # Configuración para el modelo de Usuario personalizado
 @admin.register(User)
@@ -12,13 +12,18 @@ class CustomUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (
         ('Permisos del sistema', {'fields': ('is_supervisor', 'cierre_caja_habilitado')}),
         ('Tiendas', {'fields': ('tienda', 'tiendas_autorizadas')}),
+        ('Total Stock (equipo interno)', {
+            'fields': ('es_operador_plataforma',),
+            'description': 'Exclusivo del equipo de Total Stock -- nunca tildar en la cuenta de un dueño de tienda. Da acceso al panel de Clientes SaaS (/clientes-saas), que lista TODOS los clientes de la plataforma.',
+        }),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
         ('Permisos del sistema', {'fields': ('is_supervisor', 'cierre_caja_habilitado')}),
         ('Tiendas', {'fields': ('tienda', 'tiendas_autorizadas')}),
+        ('Total Stock (equipo interno)', {'fields': ('es_operador_plataforma',)}),
     )
-    list_display = ('username', 'email', 'is_staff', 'is_superuser', 'is_supervisor', 'cierre_caja_habilitado', 'tienda', 'date_joined')
-    list_filter = ('is_staff', 'is_superuser', 'is_supervisor', 'cierre_caja_habilitado', 'tienda')
+    list_display = ('username', 'email', 'is_staff', 'is_superuser', 'is_supervisor', 'es_operador_plataforma', 'cierre_caja_habilitado', 'tienda', 'date_joined')
+    list_filter = ('is_staff', 'is_superuser', 'is_supervisor', 'es_operador_plataforma', 'cierre_caja_habilitado', 'tienda')
     search_fields = ('username', 'email', 'tienda__nombre')
     filter_horizontal = ('tiendas_autorizadas',)
 
@@ -565,6 +570,22 @@ class SuscripcionAdmin(admin.ModelAdmin):
             color, obj.get_estado_display()
         )
     estado_badge.short_description = 'Estado'
+
+
+@admin.register(PagoManualSuscripcion)
+class PagoManualSuscripcionAdmin(admin.ModelAdmin):
+    """Respaldo de lectura/carga en Django Admin para el historial de pagos
+    de suscripción que Ariel cobra por fuera de Mercado Pago -- el panel
+    dedicado (/clientes-saas en el frontend) es el uso normal del día a día."""
+    list_display  = ('tienda_nombre', 'mes', 'anio', 'monto', 'fecha_pago', 'registrado_por')
+    list_filter   = ('anio', 'mes')
+    search_fields = ('tienda__nombre', 'nota')
+    readonly_fields = ('id', 'fecha_creacion')
+
+    def tienda_nombre(self, obj):
+        return obj.tienda.nombre
+    tienda_nombre.short_description = 'Tienda'
+    tienda_nombre.admin_order_field = 'tienda__nombre'
 
 
 # Agregar inline de suscripción a TiendaAdmin

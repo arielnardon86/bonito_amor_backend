@@ -13,6 +13,15 @@ class User(AbstractUser):
     tiendas_autorizadas = models.ManyToManyField('Tienda', blank=True, related_name='usuarios_autorizados')
     cierre_caja_habilitado = models.BooleanField(default=False, help_text="Habilita el control de turnos y cierre de caja para este usuario")
     is_supervisor = models.BooleanField(default=False, help_text="Supervisor: puede ver ventas completas, agregar productos y ver cierres de caja")
+    # Marcado a mano desde Django Admin (no alcanza con is_superuser: registro_publico
+    # le da is_superuser=True a TODOS los dueños de tienda al registrarse -- son
+    # dueños de su propia tienda, no de Total Stock). Único gate del panel de
+    # administración de clientes SaaS, /clientes-saas en el frontend (ver
+    # inventario/admin_saas_views.py) -- NO tildar en cuentas de clientes.
+    es_operador_plataforma = models.BooleanField(
+        default=False,
+        help_text="Acceso al panel de administración de clientes SaaS (/clientes-saas). Exclusivo del equipo de Total Stock -- nunca tildar en una cuenta de un dueño de tienda."
+    )
 
     class Meta:
         verbose_name = "Usuario"
@@ -1606,13 +1615,47 @@ class Suscripcion(models.Model):
         return True
 
 
+class PagoManualSuscripcion(models.Model):
+    """
+    Historial de pagos de suscripción que Ariel cobra por fuera de Mercado
+    Pago (tiendas legacy que le pagan directo) -- a diferencia del cobro vía
+    MP, que queda registrado solo como Venta/Factura contra la tienda interna
+    TIENDA_SUSCRIPCIONES_NOMBRE (ver _facturar_cobro_suscripcion en views.py),
+    acá no hay ningún registro hoy: es el panel de administración de clientes
+    SaaS (/admin/clientes-saas, solo superusuario) el único lugar donde se
+    carga y consulta.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='pagos_manuales_suscripcion')
+    mes = models.IntegerField()
+    anio = models.IntegerField()
+    monto = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    fecha_pago = models.DateField(default=timezone.now, help_text="Fecha en la que efectivamente se cobró (no la de carga).")
+    nota = models.CharField(max_length=255, blank=True, null=True)
+    registrado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='pagos_manuales_registrados')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Pago manual de suscripción"
+        verbose_name_plural = "Pagos manuales de suscripción"
+        ordering = ['-anio', '-mes']
+        # Un solo pago registrado por tienda y mes -- volver a marcar el mismo
+        # mes actualiza el existente (ver vista), no crea uno duplicado.
+        constraints = [
+            models.UniqueConstraint(fields=['tienda', 'mes', 'anio'], name='unique_pago_manual_tienda_mes_anio'),
+        ]
+
+    def __str__(self):
+        return f"{self.tienda.nombre} — {self.mes:02d}/{self.anio}"
+
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'ArancelTiendaNube', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
-    'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion',
+    'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion', 'PagoManualSuscripcion',
     'Cliente', 'MovimientoCuentaCorriente', 'Rubro',
     'Presupuesto', 'DetallePresupuesto',
 ]

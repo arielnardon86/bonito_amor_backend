@@ -43,6 +43,9 @@ from inventario.views import (
     password_reset_request, password_reset_confirm, update_email,
     enviar_comunicado,
 )
+from inventario.admin_saas_views import (
+    ClientesSaaSListView, PagosManualesTiendaView, PagoManualDeleteView,
+)
 # Importación condicional de CambioDevolucionViewSet
 try:
     from inventario.views import CambioDevolucionViewSet
@@ -134,6 +137,9 @@ urlpatterns += [
     # Recupero de contraseña
     path('api/auth/password-reset/', password_reset_request, name='password-reset-request'),
     path('api/admin/enviar-comunicado/', enviar_comunicado, name='enviar-comunicado'),
+    path('api/admin-saas/clientes/', ClientesSaaSListView.as_view(), name='admin-saas-clientes'),
+    path('api/admin-saas/clientes/<uuid:tienda_id>/pagos-manuales/', PagosManualesTiendaView.as_view(), name='admin-saas-pagos-manuales'),
+    path('api/admin-saas/pagos-manuales/<uuid:pago_id>/', PagoManualDeleteView.as_view(), name='admin-saas-pago-manual-delete'),
     path('api/auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),
     path('api/auth/update-email/', update_email, name='update-email'),
 ]

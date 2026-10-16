@@ -1648,6 +1648,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
         token['is_supervisor'] = user.is_supervisor
+        # NO confundir con is_superuser: TODOS los dueños de tienda se
+        # registran con is_superuser=True (ver registro_publico) -- esto es
+        # estrictamente Ariel/el operador de la plataforma (ver
+        # User.es_operador_plataforma), gate real del panel /clientes-saas.
+        token['es_operador_plataforma'] = user.es_operador_plataforma
         token['cierre_caja_habilitado'] = user.cierre_caja_habilitado
         tienda_tiene_cierre = (
             user.__class__.objects.filter(tienda=user.tienda, cierre_caja_habilitado=True).exists()
