@@ -10776,6 +10776,7 @@ def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
             metodo_pago='Mercado Pago',
             mp_authorized_payment_id=payment_id,
             origen_mp_suscripcion=True,
+            tienda_cliente=tienda_cliente,
             cliente_nombre=tienda_cliente.nombre,
             cliente_cuit=tienda_cliente.cuit or '',
         )

@@ -193,7 +193,7 @@ def verificar_feature(tienda, feature: str) -> tuple[bool, dict]:
 
 # ── Info de suscripción para el frontend ─────────────────────────────────────
 
-def info_suscripcion(tienda) -> dict:
+def info_suscripcion(tienda, incluir_logo=True) -> dict:
     """
     Devuelve un dict con el estado actual del plan de la tienda.
     Usado por el endpoint de perfil / panel de administración.
@@ -206,6 +206,13 @@ def info_suscripcion(tienda) -> dict:
     sincronizadas. `legacy` se fuerza a False (si no, el frontend la trataría como
     siempre-activa sin mirar el estado) y nombre/logo/cuit quedan los propios de
     esta tienda, no los de la tienda de la que depende.
+
+    incluir_logo=False evita acceder a tienda.logo (base64, pesado): usarlo
+    cuando el caller no muestra el logo (ej. el panel de Clientes SaaS, que
+    lista todas las tiendas de una) para no pagar esa lectura/deserialización
+    por cada fila. Si el queryset de origen ya difirió el campo (.defer('logo')),
+    acceder a tienda.logo con incluir_logo=True dispararía una query extra por
+    tienda -- por eso ambos deben ir siempre de la mano.
     """
     # Una sola vuelta, nunca encadenada: _info_suscripcion_propia() nunca mira
     # hereda_suscripcion_de, así que aunque la tienda referenciada también lo
@@ -213,10 +220,11 @@ def info_suscripcion(tienda) -> dict:
     # tal cual, sin seguir la cadena.
     principal = tienda.hereda_suscripcion_de
     if principal and principal.pk != tienda.pk:
-        info = _info_suscripcion_propia(principal)
+        info = _info_suscripcion_propia(principal, incluir_logo=incluir_logo)
         info['legacy'] = False
         info['nombre'] = tienda.nombre
-        info['logo'] = tienda.logo
+        if incluir_logo:
+            info['logo'] = tienda.logo
         info['cuit'] = tienda.cuit or ''
         # Cantidad de productos/usuarios: los propios de ESTA tienda, no los de
         # la principal (los límites de todos modos no se aplican -- ver docstring
@@ -228,10 +236,10 @@ def info_suscripcion(tienda) -> dict:
             info['cantidad_usuarios'] = User.objects.filter(tienda=tienda).count()
         return info
 
-    return _info_suscripcion_propia(tienda)
+    return _info_suscripcion_propia(tienda, incluir_logo=incluir_logo)
 
 
-def _info_suscripcion_propia(tienda) -> dict:
+def _info_suscripcion_propia(tienda, incluir_logo=True) -> dict:
     """Calcula info_suscripcion mirando únicamente la Suscripcion propia de la
     tienda (nunca hereda_suscripcion_de) -- separado para que info_suscripcion()
     pueda usarlo sobre OTRA tienda sin arriesgarse a encadenar herencias."""
@@ -239,7 +247,9 @@ def _info_suscripcion_propia(tienda) -> dict:
     legacy = _es_legacy(sus)
     forzar_eleccion = legacy and tienda.requiere_eleccion_plan
 
-    datos_tienda = {'nombre': tienda.nombre, 'logo': tienda.logo, 'cuit': tienda.cuit or ''}
+    datos_tienda = {'nombre': tienda.nombre, 'cuit': tienda.cuit or ''}
+    if incluir_logo:
+        datos_tienda['logo'] = tienda.logo
 
     if sus is None:
         if forzar_eleccion:

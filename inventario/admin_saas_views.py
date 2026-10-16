@@ -10,14 +10,19 @@ en views.py) -- son dueños de SU tienda, no de Total Stock, así que ese flag
 no sirve acá. es_operador_plataforma es un campo editable a mano desde Django
 Admin (fieldset "Total Stock (equipo interno)" en CustomUserAdmin).
 """
+from datetime import date
+from decimal import Decimal
+
 from django.conf import settings
+from django.db.models import Sum
+from django.db.models.functions import ExtractMonth, ExtractYear
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Tienda, PagoManualSuscripcion
+from .models import Tienda, PagoManualSuscripcion, Venta
 from .plan_enforcement import info_suscripcion
 from .services.suscripcion_service import obtener_preaprobacion
 
@@ -54,22 +59,38 @@ class ClientesSaaSListView(APIView):
         # select_related de suscripcion/plan: info_suscripcion() accede a
         # tienda.suscripcion y sus.plan por cada tienda -- sin esto, cada
         # acceso dispara su propia query (N+1).
+        # defer('logo', ...): este panel no muestra el logo, pero sin el defer
+        # Django lo trae igual (SELECT * de por sí incluye ese TextField en
+        # base64, pesado) para cada tienda y cada hereda_suscripcion_de -- de
+        # la mano con incluir_logo=False más abajo, que evita acceder a
+        # tienda.logo (si se accediera con el campo diferido, dispararía una
+        # query extra por fila en vez de ahorrar nada).
         tiendas = Tienda.objects.exclude(nombre=_tienda_facturacion_nombre()) \
             .select_related('suscripcion', 'suscripcion__plan', 'hereda_suscripcion_de') \
+            .defer('logo', 'hereda_suscripcion_de__logo') \
             .order_by('nombre')
         hoy = timezone.localdate()
+        inicio_mes = hoy.replace(day=1)
 
         pagos_por_tienda = {}
         for pago in PagoManualSuscripcion.objects.filter(tienda__in=tiendas).select_related('registrado_por').order_by('-anio', '-mes'):
             pagos_por_tienda.setdefault(pago.tienda_id, []).append(pago)
 
+        # Una sola consulta agregada para todas las tiendas (no una por fila):
+        # lo que Mercado Pago efectivamente cobró este mes, según el libro de
+        # cobros (Venta con origen_mp_suscripcion=True, ver _facturar_cobro_
+        # suscripcion en views.py), agrupado por tienda_cliente.
+        cobrado_mp_por_tienda = {
+            row['tienda_cliente_id']: row['total']
+            for row in Venta.objects.filter(
+                origen_mp_suscripcion=True, anulada=False,
+                tienda_cliente__in=tiendas, fecha_venta__date__gte=inicio_mes,
+            ).values('tienda_cliente_id').annotate(total=Sum('total'))
+        }
+
         resultado = []
         for tienda in tiendas:
-            info = info_suscripcion(tienda)
-            # El logo (base64) no se muestra en este panel -- pesa mucho y
-            # multiplicado por todas las tiendas hacía lenta la carga de la
-            # lista para nada.
-            info.pop('logo', None)
+            info = info_suscripcion(tienda, incluir_logo=False)
             pagos_tienda = pagos_por_tienda.get(tienda.id, [])
             ultimo_pago = pagos_tienda[0] if pagos_tienda else None
             # mp_payer_email vive en la Suscripcion PROPIA de esta tienda, no
@@ -88,6 +109,7 @@ class ClientesSaaSListView(APIView):
                 'hereda_suscripcion_de': tienda.hereda_suscripcion_de.nombre if tienda.hereda_suscripcion_de_id else None,
                 'ultimo_pago_manual': _serializar_pago(ultimo_pago) if ultimo_pago else None,
                 'pago_manual_mes_actual': any(p.mes == hoy.month and p.anio == hoy.year for p in pagos_tienda),
+                'cobrado_mp_mes_actual': str(cobrado_mp_por_tienda[tienda.id]) if tienda.id in cobrado_mp_por_tienda else None,
             })
         return Response(resultado)
 
@@ -174,3 +196,63 @@ class DiagnosticoMPView(APIView):
             },
             'mp_crudo': datos_mp,
         })
+
+
+class RecaudacionSaaSView(APIView):
+    """GET: recaudación mensual de Total Stock -- lo cobrado por Mercado Pago
+    (Venta con origen_mp_suscripcion=True, el "libro de cobros" que ya crea
+    _facturar_cobro_suscripcion en views.py) más lo cargado a mano
+    (PagoManualSuscripcion), mes a mes. Para el panel de resumen y el
+    histórico de meses anteriores -- no hace falta golpear la API de MP en
+    vivo, los montos ya quedaron asentados cuando se cobraron.
+
+    ?meses=N controla cuántos meses hacia atrás trae (default 12, incluyendo
+    el actual, que puede estar parcial si todavía no vencieron todos los
+    días de cobro del mes)."""
+    permission_classes = [EsOperadorPlataforma]
+
+    def get(self, request):
+        try:
+            meses = int(request.query_params.get('meses', 12))
+        except (TypeError, ValueError):
+            meses = 12
+        meses = max(1, min(meses, 36))
+
+        hoy = timezone.localdate()
+        periodos = []
+        anio, mes = hoy.year, hoy.month
+        for _ in range(meses):
+            periodos.append((anio, mes))
+            mes -= 1
+            if mes == 0:
+                mes, anio = 12, anio - 1
+
+        primer_anio, primer_mes = periodos[-1]
+        inicio = date(primer_anio, primer_mes, 1)
+
+        mp_por_periodo = {
+            (row['anio'], row['mes']): row['total']
+            for row in Venta.objects.filter(
+                origen_mp_suscripcion=True, anulada=False, fecha_venta__date__gte=inicio,
+            ).annotate(anio=ExtractYear('fecha_venta'), mes=ExtractMonth('fecha_venta'))
+            .values('anio', 'mes').annotate(total=Sum('total'))
+        }
+        manual_por_periodo = {
+            (row['anio'], row['mes']): row['total']
+            for row in PagoManualSuscripcion.objects.filter(anio__gte=primer_anio)
+            .values('anio', 'mes').annotate(total=Sum('monto'))
+        }
+
+        historial = []
+        for anio, mes in periodos:
+            total_mp = mp_por_periodo.get((anio, mes)) or Decimal('0')
+            total_manual = manual_por_periodo.get((anio, mes)) or Decimal('0')
+            historial.append({
+                'anio': anio,
+                'mes': mes,
+                'total_mp': str(total_mp),
+                'total_manual': str(total_manual),
+                'total': str(total_mp + total_manual),
+            })
+
+        return Response({'historial': historial})

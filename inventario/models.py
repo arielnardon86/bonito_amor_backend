@@ -843,7 +843,19 @@ class Venta(models.Model):
     # (ver settings.TIENDA_SUSCRIPCIONES_NOMBRE y mp_webhook_suscripcion).
     origen_mp_suscripcion = models.BooleanField(default=False, help_text="True si la venta representa el cobro de una suscripción de un cliente de Total Stock")
     mp_authorized_payment_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID del pago autorizado de Mercado Pago (para evitar duplicados)")
-    
+    # Solo tiene sentido cuando origen_mp_suscripcion=True -- la tienda CLIENTE
+    # de Total Stock cuyo pago de suscripción generó este cobro. No confundir
+    # con `tienda` (arriba), que para estas ventas es siempre la tienda interna
+    # de facturación (settings.TIENDA_SUSCRIPCIONES_NOMBRE), nunca la cliente.
+    # Antes de este campo solo se guardaba cliente_nombre/cliente_cuit como
+    # texto (para la factura) -- no servía para agrupar de forma confiable por
+    # tienda en el panel de Clientes SaaS (ver admin_saas_views.py).
+    tienda_cliente = models.ForeignKey(
+        Tienda, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='cobros_suscripcion_recibidos',
+        help_text="Tienda cliente de Total Stock a la que corresponde este cobro de suscripción (solo si origen_mp_suscripcion=True).",
+    )
+
     # Campos para facturación
     facturada = models.BooleanField(default=False, help_text="Indica si esta venta ha sido facturada")
     
@@ -892,6 +904,7 @@ class Venta(models.Model):
             models.Index(fields=['tienda', 'fecha_venta'], name='venta_tienda_fecha_idx'),
             models.Index(fields=['tienda', 'anulada'], name='venta_tienda_anulada_idx'),
             models.Index(fields=['usuario'], name='venta_usuario_idx'),
+            models.Index(fields=['tienda_cliente', 'fecha_venta'], name='venta_tienda_cliente_fecha_idx'),
         ]
         constraints = [
             models.UniqueConstraint(
