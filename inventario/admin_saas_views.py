@@ -7,8 +7,8 @@ a mano el pago de las tiendas legacy que pagan por fuera de MP.
 Acceso gateado por User.es_operador_plataforma, NO por is_superuser: TODOS
 los dueños de tienda se registran con is_superuser=True (ver registro_publico
 en views.py) -- son dueños de SU tienda, no de Total Stock, así que ese flag
-no sirve acá. es_operador_plataforma valida además contra un allowlist de
-emails explícito (settings.PLATFORM_ADMIN_EMAILS).
+no sirve acá. es_operador_plataforma es un campo editable a mano desde Django
+Admin (fieldset "Total Stock (equipo interno)" en CustomUserAdmin).
 """
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 
 from .models import Tienda, PagoManualSuscripcion
 from .plan_enforcement import info_suscripcion
+from .services.suscripcion_service import obtener_preaprobacion
 
 
 class EsOperadorPlataforma(permissions.BasePermission):
@@ -137,3 +138,39 @@ class PagoManualDeleteView(APIView):
         pago = get_object_or_404(PagoManualSuscripcion, id=pago_id)
         pago.delete()
         return Response(status=204)
+
+
+class DiagnosticoMPView(APIView):
+    """GET: devuelve crudo lo que MP contesta para el preapproval de esta
+    tienda -- diagnóstico puntual para cuando el panel no coincide con lo que
+    se ve en el dashboard de MP (ej. pago_atrasado no se marca aunque en MP
+    figure "Atrasado"). El campo que usa la reconciliación diaria
+    (resumen.pending_charge_quantity, ver _reconciliar_con_mp en
+    procesar_gracia_suscripciones.py) nunca se confirmó contra un payload
+    real de un caso atrasado -- esto es para ver qué manda MP de verdad."""
+    permission_classes = [EsOperadorPlataforma]
+
+    def get(self, request, tienda_id):
+        tienda = get_object_or_404(Tienda, id=tienda_id)
+        try:
+            sus = tienda.suscripcion
+        except Exception:
+            return Response({'error': 'Esta tienda no tiene suscripción propia (es legacy o hereda de otra).'}, status=400)
+
+        if not sus.mp_preapproval_id:
+            return Response({'error': 'Esta suscripción no tiene mp_preapproval_id vinculado.'}, status=400)
+
+        try:
+            datos_mp = obtener_preaprobacion(sus.mp_preapproval_id)
+        except Exception as e:
+            return Response({'error': f'Error consultando MP: {e}'}, status=502)
+
+        return Response({
+            'tienda': tienda.nombre,
+            'local': {
+                'estado': sus.estado,
+                'pago_atrasado': sus.pago_atrasado,
+                'mp_preapproval_id': sus.mp_preapproval_id,
+            },
+            'mp_crudo': datos_mp,
+        })
