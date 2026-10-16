@@ -5283,6 +5283,19 @@ def _procesar_orden_tiendanube(tienda, order, order_id):
             cliente_nombre=order.get('contact_name') or order.get('billing_name') or '',
         )
 
+        # Si la venta es en efectivo, atribuirla a la caja que esté abierta en
+        # la tienda en este momento -- mismo criterio ("efectivo" en el
+        # nombre) que usa todo el arqueo de caja más abajo (CierreCajaViewSet).
+        # Esa plata físicamente cae en el cajón que esté abierto en ese
+        # momento. Si hay 0 o 2+ cajas abiertas no hay forma de saber a cuál
+        # -- queda sin asignar (caja_asignada=None) para que un cajero o
+        # supervisor la sume a mano (ver asignar_ventas_tn_pendientes).
+        if 'efectivo' in gateway_name.lower():
+            cajas_abiertas = list(CierreCaja.objects.filter(tienda=tienda, estado='ABIERTO'))
+            if len(cajas_abiertas) == 1:
+                venta.caja_asignada = cajas_abiertas[0]
+                venta.save(update_fields=['caja_asignada'])
+
         productos_orden = order.get('products', [])
         for item in productos_orden:
             sku      = item.get('sku') or ''
@@ -8997,10 +9010,17 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         from django.db.models import Case, When, F, Value
         from django.db.models import DecimalField as _Dec
         CambioDevolucion_cls, _ = _get_cambio_devolucion_models()
+        # Q(usuario=..., fecha_venta__gte=apertura) cubre las ventas mostrador de
+        # este cajero durante su turno; Q(caja_asignada=cierre) suma el efectivo
+        # de Tienda Nube atribuido a esta caja (ver _procesar_orden_tiendanube /
+        # asignar_ventas_tn_pendientes) -- esas ventas tienen usuario='tiendanube'
+        # y su fecha_venta es la del pedido en TN (puede ser de horas antes de
+        # que se abriera esta caja), así que el filtro de fecha_venta__gte NO se
+        # le aplica: va DENTRO del primer Q, no como filtro general, para no
+        # excluir por fecha algo que ya se asignó a mano.
         ventas_qs_cierre = Venta.objects.filter(
+            Q(usuario=cierre.usuario, fecha_venta__gte=cierre.fecha_apertura) | Q(caja_asignada=cierre),
             tienda=cierre.tienda,
-            usuario=cierre.usuario,
-            fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
         ).exclude(metodo_pago__in=['Nota de Crédito', 'Pendiente'])
         if CambioDevolucion_cls is not None:
@@ -9074,10 +9094,12 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
     def ventas_efectivo(self, request, pk=None):
         from django.db.models import Q
         cierre = self.get_object()
+        # Ver comentario equivalente en cerrar(): fecha_venta__gte va DENTRO del
+        # Q de usuario, no como filtro general -- una venta de TN asignada a
+        # mano puede tener fecha_venta de antes de que se abriera esta caja.
         qs = Venta.objects.filter(
+            Q(usuario=cierre.usuario, fecha_venta__gte=cierre.fecha_apertura) | Q(caja_asignada=cierre),
             tienda=cierre.tienda,
-            usuario=cierre.usuario,
-            fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
         ).filter(
             # ventas nuevas con efectivo > 0, o ventas antiguas con metodo efectivo
@@ -9086,7 +9108,10 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
         )
 
         if cierre.fecha_cierre:
-            qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
+            # Mismo motivo que arriba: una venta de TN asignada a esta caja no se
+            # recorta por este tope superior, su fecha_venta es independiente del
+            # horario del turno.
+            qs = qs.filter(Q(fecha_venta__lte=cierre.fecha_cierre) | Q(caja_asignada=cierre))
 
         return Response(list(
             qs.values('id', 'fecha_venta', 'total', 'monto_efectivo', 'cliente_nombre', 'metodo_pago')
@@ -9096,10 +9121,11 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
     def ventas_resumen(self, request, pk=None):
         """Retorna todas las ventas del turno agrupadas por método de pago, más el detalle individual."""
         cierre = self.get_object()
+        # Ver comentario equivalente en cerrar()/ventas_efectivo(): fecha_venta__gte
+        # va DENTRO del Q de usuario, no como filtro general.
         qs = Venta.objects.filter(
+            Q(usuario=cierre.usuario, fecha_venta__gte=cierre.fecha_apertura) | Q(caja_asignada=cierre),
             tienda=cierre.tienda,
-            usuario=cierre.usuario,
-            fecha_venta__gte=cierre.fecha_apertura,
             anulada=False,
         ).exclude(
             # Las notas de crédito son saldo a favor del cliente (no ingreso real)
@@ -9107,7 +9133,7 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             metodo_pago__in=['Nota de Crédito', 'Pendiente']
         )
         if cierre.fecha_cierre:
-            qs = qs.filter(fecha_venta__lte=cierre.fecha_cierre)
+            qs = qs.filter(Q(fecha_venta__lte=cierre.fecha_cierre) | Q(caja_asignada=cierre))
 
         # Para efectivo puro, mostrar monto_efectivo (cash real) en lugar del total del producto.
         # Esto evita que ventas de cambio/devolución inflen el total mostrado por método.
@@ -9168,6 +9194,64 @@ class CierreCajaViewSet(viewsets.ModelViewSet):
             'ventas': ventas,
             'total_ventas_efectivo': float(total_ventas_efectivo),
         })
+
+    @action(detail=False, methods=['get'], url_path='pendientes-tiendanube')
+    def pendientes_tiendanube(self, request):
+        """Ventas de Tienda Nube en efectivo que no se pudieron atribuir sola a
+        ninguna caja al llegar el webhook (había 0 o 2+ cajas abiertas en la
+        tienda en ese momento, ver _procesar_orden_tiendanube) -- la UI de Caja
+        usa esto para avisarle al cajero/supervisor que hay plata de TN para
+        sumar a mano antes de cerrar."""
+        tienda_slug = request.query_params.get('tienda')
+        if not tienda_slug:
+            return Response({'error': 'Falta el parámetro tienda.'}, status=400)
+        qs = Venta.objects.filter(
+            tienda__nombre=tienda_slug,
+            origen_tiendanube=True,
+            caja_asignada__isnull=True,
+            anulada=False,
+            metodo_pago__icontains='efectivo',
+        )
+        total = qs.aggregate(total=Sum('total'))['total'] or Decimal('0.00')
+        return Response({
+            'cantidad': qs.count(),
+            'total': float(total),
+            'ventas': list(qs.values('id', 'fecha_venta', 'total', 'tn_order_number').order_by('fecha_venta')),
+        })
+
+    @action(detail=True, methods=['post'], url_path='asignar-ventas-tn-pendientes')
+    def asignar_ventas_tn_pendientes(self, request, pk=None):
+        """Suma a ESTA caja (tiene que seguir abierta) las ventas de Tienda Nube
+        en efectivo que quedaron sin asignar -- lo puede hacer el cajero dueño
+        de la caja (ej. al cerrar, si reconoce que esa plata de TN la cobró él)
+        o un supervisor/superusuario autorizado en la tienda. Sin esto, esa
+        plata nunca entra al arqueo de ninguna caja (ver pendientes_tiendanube)."""
+        cierre = self.get_object()
+        if cierre.estado != 'ABIERTO':
+            return Response({'error': 'Esta caja ya está cerrada -- abrí una nueva caja para sumar esta plata ahí.'}, status=400)
+
+        user = request.user
+        es_dueno = cierre.usuario_id == user.id
+        es_supervisor_autorizado = user.is_superuser or (
+            getattr(user, 'is_supervisor', False) and cierre.tienda_id in _get_tiendas_ids_usuario(user)
+        )
+        if not (es_dueno or es_supervisor_autorizado):
+            return Response({'error': 'No tenés permiso para asignar ventas a esta caja.'}, status=403)
+
+        # Opcional: lista puntual de ventas a asignar (ej. el cajero reconoce
+        # solo algunas); si no viene, se asignan TODAS las pendientes de la tienda.
+        venta_ids = request.data.get('venta_ids')
+        qs = Venta.objects.filter(
+            tienda=cierre.tienda,
+            origen_tiendanube=True,
+            caja_asignada__isnull=True,
+            anulada=False,
+            metodo_pago__icontains='efectivo',
+        )
+        if venta_ids:
+            qs = qs.filter(id__in=venta_ids)
+        actualizadas = qs.update(caja_asignada=cierre)
+        return Response({'asignadas': actualizadas})
 
 
 class EgresoCajaViewSet(viewsets.ModelViewSet):

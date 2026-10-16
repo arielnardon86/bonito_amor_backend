@@ -818,6 +818,17 @@ class Venta(models.Model):
     origen_tiendanube = models.BooleanField(default=False, help_text="True si la venta provino del webhook de Tienda Nube")
     tn_order_id = models.CharField(max_length=50, blank=True, null=True, help_text="ID interno (order.id) de la orden en Tienda Nube -- usado solo para detectar duplicados, no se lo mostramos al comerciante (ver tn_order_number)")
     tn_order_number = models.CharField(max_length=20, blank=True, null=True, help_text="Número de pedido (order.number) tal cual lo ve el comerciante en Tienda Nube -- para mostrar en vez de tn_order_id")
+    # Solo para ventas en efectivo de origen Tienda Nube (usuario='tiendanube',
+    # nunca abre caja propia) -- a qué CierreCaja se le atribuye ese efectivo
+    # para que el arqueo no dé diferencia. Se completa sola al llegar el webhook
+    # si había UNA sola caja abierta en la tienda en ese momento; si había 0 o
+    # 2+, queda en null ("pendiente") hasta que un cajero o supervisor la
+    # asigne a mano (ver CierreCajaViewSet.asignar_ventas_tn_pendientes).
+    caja_asignada = models.ForeignKey(
+        'CierreCaja', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ventas_tiendanube_asignadas',
+        help_text="Caja a la que se le atribuye el efectivo de esta venta de Tienda Nube.",
+    )
     # Cobro de suscripción de un cliente de Total Stock (no una venta real de la
     # tienda) -- se registra en la tienda interna designada para autofacturarse
     # (ver settings.TIENDA_SUSCRIPCIONES_NOMBRE y mp_webhook_suscripcion).
