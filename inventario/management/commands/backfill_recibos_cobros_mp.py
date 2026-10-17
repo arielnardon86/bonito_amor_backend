@@ -21,11 +21,15 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.utils import timezone
 
 
 def _payment_id_backfill(cobro):
-    return f"backfill-cobro-mp-{cobro.id}"
+    # mp_authorized_payment_id es CharField(max_length=50) -- "backfill-cobro-
+    # mp-<uuid con guiones>" (54 chars) se pasaba del límite y rompía el
+    # INSERT. cobro.id.hex (32 chars sin guiones) + prefijo corto entra sobrado.
+    return f"bkf-{cobro.id.hex}"
 
 
 class Command(BaseCommand):
@@ -101,21 +105,22 @@ class Command(BaseCommand):
                 )
             producto_suscripcion = producto_suscripcion_cache[tienda_facturacion.id]
 
-            venta = Venta.objects.create(
-                tienda=tienda_facturacion,
-                usuario=usuario_sistema,
-                total=cobro.monto,
-                metodo_pago='Mercado Pago',
-                mp_authorized_payment_id=payment_id,
-                origen_mp_suscripcion=True,
-                tienda_cliente=cobro.tienda,
-                cliente_nombre=cobro.tienda.nombre,
-                cliente_cuit=cobro.tienda.cuit or '',
-            )
-            DetalleVenta.objects.create(
-                venta=venta, producto=producto_suscripcion,
-                cantidad=1, precio_unitario=cobro.monto, subtotal=cobro.monto,
-            )
+            with transaction.atomic():
+                venta = Venta.objects.create(
+                    tienda=tienda_facturacion,
+                    usuario=usuario_sistema,
+                    total=cobro.monto,
+                    metodo_pago='Mercado Pago',
+                    mp_authorized_payment_id=payment_id,
+                    origen_mp_suscripcion=True,
+                    tienda_cliente=cobro.tienda,
+                    cliente_nombre=cobro.tienda.nombre,
+                    cliente_cuit=cobro.tienda.cuit or '',
+                )
+                DetalleVenta.objects.create(
+                    venta=venta, producto=producto_suscripcion,
+                    cantidad=1, precio_unitario=cobro.monto, subtotal=cobro.monto,
+                )
             # fecha_venta es auto_now_add -- se pisa después para que quede la
             # fecha real del cobro (summarized.last_charged_date), no la de
             # hoy que es cuando se corrió este backfill.
