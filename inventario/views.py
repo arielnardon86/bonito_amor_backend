@@ -6451,9 +6451,20 @@ class VentaViewSet(viewsets.ModelViewSet):
             story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
         story.append(Spacer(1, 12))
 
+        # cliente_id (FK a Cliente) es el caso normal del POS -- pero algunas
+        # ventas (ej. el cobro de suscripción de un cliente de Total Stock,
+        # ver _facturar_cobro_suscripcion) solo tienen cliente_nombre/
+        # cliente_cuit como texto plano, sin Cliente vinculado. Sin este
+        # fallback el recibo no mostraba de qué tienda era el cobro.
         if venta.cliente_id:
             story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
             story.append(Paragraph(f"<b>Nombre:</b> {venta.cliente.nombre_razon_social}", normal_style))
+            story.append(Spacer(1, 12))
+        elif venta.cliente_nombre:
+            story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
+            story.append(Paragraph(f"<b>Nombre:</b> {venta.cliente_nombre}", normal_style))
+            if venta.cliente_cuit:
+                story.append(Paragraph(f"<b>CUIT:</b> {venta.cliente_cuit}", normal_style))
             story.append(Spacer(1, 12))
 
         detalles = venta.detalles.filter(anulado_individualmente=False)
