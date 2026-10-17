@@ -10,7 +10,8 @@ en views.py) -- son dueños de SU tienda, no de Total Stock, así que ese flag
 no sirve acá. es_operador_plataforma es un campo editable a mano desde Django
 Admin (fieldset "Total Stock (equipo interno)" en CustomUserAdmin).
 """
-from decimal import Decimal
+from datetime import datetime, time
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db.models import Sum
@@ -22,7 +23,7 @@ from rest_framework.views import APIView
 
 from .models import Tienda, PagoManualSuscripcion, Venta, CobroMPSuscripcion
 from .plan_enforcement import info_suscripcion
-from .services.suscripcion_service import obtener_preaprobacion
+from .services.suscripcion_service import obtener_preaprobacion, registrar_venta_recibo_suscripcion
 
 
 class EsOperadorPlataforma(permissions.BasePermission):
@@ -146,6 +147,32 @@ class PagosManualesTiendaView(APIView):
                 'registrado_por': request.user,
             },
         )
+
+        # Igual que un cobro de Mercado Pago, un pago manual registra su
+        # Venta/recibo (sin facturar) en la tienda interna -- ver
+        # registrar_venta_recibo_suscripcion. Sin monto no hay nada que
+        # registrar (el campo es opcional: a veces solo se marca "pagó" sin
+        # precisar cuánto). mp_authorized_payment_id es el id de ESTE
+        # PagoManualSuscripcion (no hay un id de MP real acá) -- si ya se
+        # había registrado antes la venta de este mismo pago (ej. se vuelve a
+        # guardar el mismo mes/año), no se duplica.
+        if monto:
+            pago.refresh_from_db()
+            try:
+                monto_decimal = Decimal(str(monto))
+            except InvalidOperation:
+                monto_decimal = None
+            if monto_decimal is not None:
+                fecha_venta = timezone.make_aware(datetime.combine(pago.fecha_pago, time.min))
+                registrar_venta_recibo_suscripcion(
+                    tienda_cliente=tienda,
+                    monto=monto_decimal,
+                    metodo_pago='Pago manual',
+                    mp_authorized_payment_id=f"manual-{pago.id.hex}",
+                    origen_mp_suscripcion=False,
+                    fecha_venta=fecha_venta,
+                )
+
         return Response(_serializar_pago(pago), status=201)
 
 

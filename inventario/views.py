@@ -10716,13 +10716,9 @@ def tn_instalar_vincular_cuenta_existente(request):
 
 def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
     """
-    Registra, en la Tienda interna designada (settings.
-    TIENDA_SUSCRIPCIONES_NOMBRE), el cobro de la suscripción de un cliente de
-    Total Stock -- a propósito NO se factura electrónicamente (sin AFIP/CAE):
-    solo se crea la Venta (+ DetalleVenta), que ya alcanza para generar el
-    recibo no fiscal bajo demanda (GET /api/ventas/{id}/pdf-recibo/, igual
-    que cualquier otra venta no facturada del sistema -- ver el mismo patrón
-    en la nota de crédito por saldo a favor de cambios/devoluciones). Decisión
+    Registra, vía registrar_venta_recibo_suscripcion() (suscripcion_service.py),
+    el cobro de la suscripción de un cliente de Total Stock como recibo --
+    a propósito SIN facturar electrónicamente (sin AFIP/CAE). Decisión
     explícita del dueño: "que no se facture, que se haga recibo".
     Se llama desde mp_webhook_suscripcion ante un subscription_authorized_payment.
 
@@ -10731,20 +10727,9 @@ def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
     propagar errores inesperados de DB; el caller decide si los atrapa (hoy
     sí, para no romper el procesamiento del webhook de MP).
     """
+    from .services.suscripcion_service import registrar_venta_recibo_suscripcion
+
     if not payment_id:
-        return
-
-    nombre_tienda_facturacion = getattr(settings, 'TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
-    tienda_facturacion = Tienda.objects.filter(nombre=nombre_tienda_facturacion).first()
-    if not tienda_facturacion:
-        logger.warning(
-            "_facturar_cobro_suscripcion: no existe la tienda '%s' (TIENDA_SUSCRIPCIONES_NOMBRE) -- no se registra el cobro de %s",
-            nombre_tienda_facturacion, suscripcion.tienda.nombre,
-        )
-        return
-
-    # Evitar duplicar la venta si Mercado Pago reintenta el webhook para el mismo pago.
-    if Venta.objects.filter(tienda=tienda_facturacion, mp_authorized_payment_id=payment_id).exists():
         return
 
     if monto is not None:
@@ -10757,43 +10742,18 @@ def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
             payment_id, monto_decimal,
         )
 
-    usuario_sistema, _ = User.objects.get_or_create(
-        username='mercadopago_suscripciones',
-        defaults={
-            'is_staff': False, 'is_active': True, 'tienda': tienda_facturacion,
-            'first_name': 'Mercado Pago', 'last_name': 'Suscripciones',
-        },
+    venta = registrar_venta_recibo_suscripcion(
+        tienda_cliente=suscripcion.tienda,
+        monto=monto_decimal,
+        metodo_pago='Mercado Pago',
+        mp_authorized_payment_id=payment_id,
+        origen_mp_suscripcion=True,
     )
-    producto_suscripcion, _ = Producto.objects.get_or_create(
-        tienda=tienda_facturacion, nombre='Suscripción Total Stock',
-        defaults={'precio': monto_decimal, 'stock': 0},
-    )
-
-    tienda_cliente = suscripcion.tienda
-    with transaction.atomic():
-        venta = Venta.objects.create(
-            tienda=tienda_facturacion,
-            usuario=usuario_sistema,
-            total=monto_decimal,
-            metodo_pago='Mercado Pago',
-            mp_authorized_payment_id=payment_id,
-            origen_mp_suscripcion=True,
-            tienda_cliente=tienda_cliente,
-            cliente_nombre=tienda_cliente.nombre,
-            cliente_cuit=tienda_cliente.cuit or '',
+    if venta is not None:
+        logger.info(
+            "_facturar_cobro_suscripcion: registrado el cobro de suscripción de %s ($%s) como recibo (sin facturar) — venta=%s payment_id=%s",
+            suscripcion.tienda.nombre, monto_decimal, venta.id, payment_id,
         )
-        DetalleVenta.objects.create(
-            venta=venta,
-            producto=producto_suscripcion,
-            cantidad=1,
-            precio_unitario=monto_decimal,
-            subtotal=monto_decimal,
-        )
-
-    logger.info(
-        "_facturar_cobro_suscripcion: registrado el cobro de suscripción de %s ($%s) como recibo (sin facturar) — venta=%s payment_id=%s",
-        tienda_cliente.nombre, monto_decimal, venta.id, payment_id,
-    )
 
 
 @api_view(['POST'])

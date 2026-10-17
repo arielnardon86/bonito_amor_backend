@@ -278,3 +278,81 @@ def cambiar_plan_mp(suscripcion, plan_nuevo):
         logger.info("Plan MP actualizado a %s para suscripción %s", plan_nuevo.nombre, suscripcion.id)
     except Exception as e:
         logger.error("Error actualizando plan en MP (%s): %s", suscripcion.id, e)
+
+
+def registrar_venta_recibo_suscripcion(tienda_cliente, monto, metodo_pago, mp_authorized_payment_id=None,
+                                        origen_mp_suscripcion=False, fecha_venta=None):
+    """
+    Crea la Venta + DetalleVenta del cobro de la suscripción de
+    `tienda_cliente` en la tienda interna de facturación (settings.
+    TIENDA_SUSCRIPCIONES_NOMBRE) -- a propósito SIN facturar electrónicamente
+    (sin AFIP/CAE): queda facturada=False, y el recibo no fiscal queda
+    disponible bajo demanda vía GET /api/ventas/{id}/pdf-recibo/, igual que
+    cualquier otra venta no facturada del sistema. Decisión explícita del
+    dueño: "que no se facture, que se haga recibo" -- vale tanto para los
+    cobros automáticos de Mercado Pago (ver mp_webhook_suscripcion en
+    views.py) como para los pagos que Ariel carga a mano desde el panel de
+    Clientes SaaS (ver PagosManualesTiendaView en admin_saas_views.py).
+
+    mp_authorized_payment_id es la clave de dedup: si ya existe una Venta con
+    ese id para la tienda de facturación, se devuelve esa en vez de crear
+    otra (evita duplicar si MP reintenta el webhook, o si se vuelve a llamar
+    para el mismo pago manual). Sin ese id (None) siempre crea una Venta
+    nueva -- no hay forma de detectar duplicados sin un identificador único.
+
+    Devuelve la Venta (creada o la ya existente), o None si la tienda de
+    facturación interna no existe.
+    """
+    from django.db import transaction
+    from ..models import Tienda, Venta, DetalleVenta, Producto, User
+
+    nombre_tienda_facturacion = getattr(settings, 'TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
+    tienda_facturacion = Tienda.objects.filter(nombre=nombre_tienda_facturacion).first()
+    if not tienda_facturacion:
+        logger.warning(
+            "registrar_venta_recibo_suscripcion: no existe la tienda '%s' (TIENDA_SUSCRIPCIONES_NOMBRE) -- no se registra el cobro de %s",
+            nombre_tienda_facturacion, tienda_cliente.nombre,
+        )
+        return None
+
+    if mp_authorized_payment_id:
+        existente = Venta.objects.filter(tienda=tienda_facturacion, mp_authorized_payment_id=mp_authorized_payment_id).first()
+        if existente:
+            return existente
+
+    usuario_sistema, _ = User.objects.get_or_create(
+        username='mercadopago_suscripciones',
+        defaults={
+            'is_staff': False, 'is_active': True, 'tienda': tienda_facturacion,
+            'first_name': 'Mercado Pago', 'last_name': 'Suscripciones',
+        },
+    )
+    producto_suscripcion, _ = Producto.objects.get_or_create(
+        tienda=tienda_facturacion, nombre='Suscripción Total Stock',
+        defaults={'precio': monto, 'stock': 0},
+    )
+
+    with transaction.atomic():
+        venta = Venta.objects.create(
+            tienda=tienda_facturacion,
+            usuario=usuario_sistema,
+            total=monto,
+            metodo_pago=metodo_pago,
+            mp_authorized_payment_id=mp_authorized_payment_id,
+            origen_mp_suscripcion=origen_mp_suscripcion,
+            tienda_cliente=tienda_cliente,
+            cliente_nombre=tienda_cliente.nombre,
+            cliente_cuit=tienda_cliente.cuit or '',
+        )
+        DetalleVenta.objects.create(
+            venta=venta, producto=producto_suscripcion,
+            cantidad=1, precio_unitario=monto, subtotal=monto,
+        )
+
+    if fecha_venta:
+        # fecha_venta es auto_now_add -- se pisa después del create para que
+        # quede la fecha real del cobro/pago, no la de este momento.
+        Venta.objects.filter(pk=venta.pk).update(fecha_venta=fecha_venta)
+        venta.fecha_venta = fecha_venta
+
+    return venta
