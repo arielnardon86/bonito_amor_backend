@@ -10876,18 +10876,29 @@ def mp_webhook_suscripcion(request):
             elif part.startswith('v1='):
                 v1 = part[3:]
         if ts and v1:
-            data_id = str(request.data.get('data', {}).get('id', ''))
-            manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts}"
+            # Formato exacto documentado por MP ("Cómo validar notificaciones
+            # webhook"): id en minúsculas si es alfanumérico (los payment_id
+            # pueden traer letras) y punto y coma final después de ts -- al
+            # código le faltaban ambos detalles, así que el hash nunca daba
+            # (0 notificaciones reales procesadas en producción, confirmado).
+            data_id_crudo = str(request.data.get('data', {}).get('id', ''))
+            data_id = data_id_crudo.lower() if not data_id_crudo.isdigit() else data_id_crudo
+            manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts};"
             expected = hmac.new(
                 webhook_secret.encode(),
                 manifest.encode(),
                 hashlib.sha256,
             ).hexdigest()
             if not hmac.compare_digest(expected, v1):
-                # Firma inválida: puede ser el test del panel de MP (usa datos ficticios)
-                # o un intento no autorizado. En ambos casos devolvemos 200 para que MP
-                # no reintente, pero no procesamos el payload.
-                logger.warning("Webhook MP: firma inválida, payload ignorado (id=%s)", data_id)
+                # Firma inválida: puede ser el test del panel de MP (usa datos
+                # ficticios sin firmar) o un intento no autorizado. Devolvemos
+                # 200 para que MP no reintente, pero no procesamos el payload.
+                # Log con el manifiesto armado (no el secreto) para poder
+                # diagnosticar si esto vuelve a fallar con tráfico real.
+                logger.warning(
+                    "Webhook MP: firma inválida, payload ignorado (id=%s, manifest=%r, v1_recibido=%s, esperado=%s)",
+                    data_id, manifest, v1, expected,
+                )
                 return Response(status=200)
 
     payload    = request.data
