@@ -8144,9 +8144,16 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         elif venta.recargo_monto and venta.recargo_monto > 0:
             recargo_monto_calc = venta.recargo_monto
         
+        # Último índice de fila de ítem antes de la línea separadora/totales --
+        # para el BACKGROUND beige de abajo, que antes usaba un offset fijo
+        # (-4) que asumía siempre 3 filas de totales exactas; con descuento/
+        # recargo/devolución (filas condicionales) ese offset quedaba mal y
+        # el beige se comía filas de totales o se quedaba corto.
+        cantidad_items = len(data) - 1
+
         # Agregar línea separadora antes de totales
         data.append(['', '', '', ''])  # Línea vacía
-        
+
         # Subtotal inicial con IVA (antes de descuentos/recargos) -- recalculado
         # acá de nuevo a partir de `detalles` (mismo criterio que arriba); en
         # consolidada sigue sin haber detalles, así que se reusa el valor ya
@@ -8155,24 +8162,30 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             Decimal(str(d.precio_unitario)) * Decimal(str(d.cantidad))
             for d in detalles if not d.anulado_individualmente
         )
-        data.append(['', '', '<b>Subtotal:</b>', f"${subtotal_inicial_con_iva:.2f}"])
-        
+        # Primera fila de totales -- de acá en más todo va bold/alineado a la
+        # derecha vía TableStyle (ver más abajo). Nada de tags <b> dentro del
+        # string: una Table de reportlab (a diferencia de un Paragraph) no
+        # interpreta ese marcado, lo muestra tal cual como texto literal --
+        # eso era lo que se veía roto en el PDF.
+        inicio_totales = len(data)
+        data.append(['', '', 'Subtotal:', f"${subtotal_inicial_con_iva:.2f}"])
+
         # Descuentos (mostrar sobre el total con IVA)
         if descuento_monto_calc > 0:
-            descuento_label = f'<b>Descuento'
+            descuento_label = 'Descuento'
             if venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
                 descuento_label += f' ({venta.descuento_porcentaje}%)'
-            descuento_label += ':</b>'
+            descuento_label += ':'
             data.append(['', '', descuento_label, f"-${descuento_monto_calc:.2f}"])
-        
+
         # Recargos (mostrar sobre el total con IVA)
         if recargo_monto_calc > 0:
-            recargo_label = '<b>Recargo'
+            recargo_label = 'Recargo'
             if venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
                 recargo_label += f' ({venta.recargo_porcentaje}%)'
-            recargo_label += ':</b>'
+            recargo_label += ':'
             data.append(['', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
-        
+
         # Si es una venta de diferencia de cambio/devolución, mostrar el monto devuelto
         # (no aplica a consolidada: ahí `venta` es solo la "representativa" del
         # lote -- este ajuste es por-venta y, si corresponde, ya está reflejado
@@ -8185,24 +8198,24 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                     # Mostrar el monto devuelto (productos devueltos)
                     monto_devuelto_mostrar = cambio_diferencia.monto_devolucion
                     if monto_devuelto_mostrar > 0:
-                        data.append(['', '', '<b>Monto devuelto (cambio/devolución):</b>', f"-${monto_devuelto_mostrar:.2f}"])
+                        data.append(['', '', 'Monto devuelto (cambio/devolución):', f"-${monto_devuelto_mostrar:.2f}"])
                         # Ajustar el subtotal y total para reflejar el monto devuelto
                         subtotal_final_sin_iva = subtotal_final_sin_iva - (monto_devuelto_mostrar / Decimal('1.21'))
                         total_final = total_final - monto_devuelto_mostrar
                         iva_final = subtotal_final_sin_iva * Decimal('0.21')
             except Exception as e:
                 logger.warning(f"⚠️ Error al obtener cambio_devolucion para mostrar monto devuelto: {e}")
-        
+
         # Subtotal sin IVA (después de descuentos/recargos y monto devuelto)
-        data.append(['', '', '<b>Subtotal (sin IVA):</b>', f"${subtotal_final_sin_iva:.2f}"])
-        
+        data.append(['', '', 'Subtotal (sin IVA):', f"${subtotal_final_sin_iva:.2f}"])
+
         # IVA
         if iva_final > 0:
-            data.append(['', '', '<b>IVA 21%:</b>', f"${iva_final:.2f}"])
-        
+            data.append(['', '', 'IVA 21%:', f"${iva_final:.2f}"])
+
         # Total
-        data.append(['', '', '<b>TOTAL:</b>', f"<b>${total_final:.2f}</b>"])
-        
+        data.append(['', '', 'TOTAL:', f"${total_final:.2f}"])
+
         table = Table(data, colWidths=[20*mm, 100*mm, 30*mm, 30*mm])
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
@@ -8211,11 +8224,11 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -4), colors.beige),
+            ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ALIGN', (2, -3), (-1, -1), 'RIGHT'),
-            ('FONTNAME', (2, -3), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (2, -3), (-1, -1), 10),
+            ('ALIGN', (2, inicio_totales), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (2, inicio_totales), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (2, inicio_totales), (-1, -1), 10),
         ]))
         story.append(table)
         story.append(Spacer(1, 20))
