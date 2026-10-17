@@ -116,7 +116,10 @@ class TiendaAdmin(admin.ModelAdmin):
                     'cuit',
                     'punto_venta',
                     'condicion_iva_emisor',
+                    'ingresos_brutos',
+                    'fecha_inicio_actividades',
                 ),
+                'description': 'Ingresos Brutos y Fecha de inicio de actividades son opcionales -- si se completan, aparecen en el PDF de factura.',
             }),
             ('Suscripción', {
                 'fields': ('requiere_eleccion_plan', 'hereda_suscripcion_de'),

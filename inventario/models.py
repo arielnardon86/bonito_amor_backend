@@ -82,12 +82,23 @@ class Tienda(models.Model):
         ('NR', 'No Responsable'),
     ]
     condicion_iva_emisor = models.CharField(
-        max_length=2, 
-        choices=CONDICION_IVA_CHOICES, 
+        max_length=2,
+        choices=CONDICION_IVA_CHOICES,
         default='MT',
         help_text="Condición frente al IVA del emisor (tienda). IMPORTANTE: Monotributistas SOLO pueden emitir Factura C. Responsables Inscriptos pueden emitir Factura A, B o C según el cliente."
     )
-    
+    # Ambos opcionales -- se muestran en el PDF de factura (datos del emisor)
+    # solo si están cargados, igual que direccion/cuit. Ninguna tienda los
+    # tiene todavía: se completan desde Django Admin cuando el dueño quiera.
+    ingresos_brutos = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="Número de Ingresos Brutos del emisor, para mostrar en el PDF de factura."
+    )
+    fecha_inicio_actividades = models.DateField(
+        blank=True, null=True,
+        help_text="Fecha de inicio de actividades del emisor, para mostrar en el PDF de factura."
+    )
+
     # Configuración ARCA
     certificado_afip = models.TextField(
         blank=True, null=True, 

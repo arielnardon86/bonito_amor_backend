@@ -1,6 +1,7 @@
 # inventario/views.py - CÓDIGO COMPLETO Y CORREGIDO
 # BONITO_AMOR/backend/inventario/views.py
 import base64
+import json
 import logging
 import os
 import secrets
@@ -238,6 +239,76 @@ try:
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
+
+try:
+    import qrcode
+    QRCODE_AVAILABLE = True
+except ImportError:
+    QRCODE_AVAILABLE = False
+
+
+# Mapeo letra de comprobante -> tipo numérico AFIP/ARCA (ver también
+# _emitir_afip/_determinar_tipo_comprobante en facturacion_service.py, que
+# calcula lo mismo para la emisión -- acá se reusa solo para mostrar/armar el
+# QR, no se persiste en ningún lado).
+TIPO_COMPROBANTE_AFIP_NUM = {'A': 1, 'B': 6, 'C': 11}
+
+# tipo de documento del receptor, para el payload del QR (ver RG 4892/2020) --
+# cliente_tipo_documento en este sistema solo guarda 'CUIT' o '99' (consumidor
+# final / sin identificar) hoy, 'DNI' se deja previsto por si se usa más adelante.
+TIPO_DOC_AFIP_NUM = {'CUIT': 80, 'DNI': 96, '99': 99}
+
+
+def _generar_qr_afip_factura(factura, tipo_comprobante_numerico):
+    """
+    Genera el PNG del código QR que ARCA/AFIP exige mostrar en todo
+    comprobante electrónico (RG 4892/2020) -- codifica en base64 un JSON con
+    los datos del comprobante, apuntando a la URL pública de verificación de
+    ARCA. Devuelve un BytesIO listo para pasarle a Image(), o None si falta
+    algún dato imprescindible (CAE, CUIT del emisor, nº de comprobante) o si
+    la librería qrcode no está instalada.
+
+    Los valores se arman SIEMPRE a partir de los campos ya persistidos en
+    `factura` (el total/CAE que ARCA efectivamente autorizó), nunca
+    recalculados -- el QR tiene que reflejar exactamente lo que ARCA aprobó.
+    """
+    if not QRCODE_AVAILABLE:
+        logger.warning("_generar_qr_afip_factura: la librería qrcode no está instalada -- el PDF queda sin QR.")
+        return None
+    if not (factura.cae and factura.tienda.cuit and factura.numero_comprobante):
+        return None
+
+    try:
+        cuit_emisor = int(re.sub(r'\D', '', factura.tienda.cuit))
+        tipo_doc_receptor = TIPO_DOC_AFIP_NUM.get(factura.cliente_tipo_documento, 99)
+        nro_doc_receptor = int(re.sub(r'\D', '', factura.cliente_cuit)) if factura.cliente_cuit else 0
+
+        payload = {
+            'ver': 1,
+            'fecha': factura.fecha_emision.strftime('%Y-%m-%d'),
+            'cuit': cuit_emisor,
+            'ptoVta': factura.punto_venta,
+            'tipoCmp': tipo_comprobante_numerico,
+            'nroCmp': factura.numero_comprobante,
+            'importe': float(factura.total),
+            'moneda': 'PES',
+            'ctz': 1,
+            'tipoDocRec': tipo_doc_receptor,
+            'nroDocRec': nro_doc_receptor,
+            'tipoCodAut': 'E',
+            'codAut': int(factura.cae),
+        }
+        payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+        url_qr = f"https://www.afip.gob.ar/fe/qr/?p={payload_b64}"
+
+        qr_img = qrcode.make(url_qr, border=1)
+        qr_buffer = BytesIO()
+        qr_img.save(qr_buffer, format='PNG')
+        qr_buffer.seek(0)
+        return qr_buffer
+    except Exception as e:
+        logger.warning(f"_generar_qr_afip_factura: no se pudo generar el QR de la factura {factura.id}: {e}")
+        return None
 
 try:
     import barcode
@@ -7971,55 +8042,31 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Crear buffer para el PDF
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm)
-        
-        # Estilos
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        ancho_util = doc.width
+
+        # Estilos -- layout tipo factura tradicional argentina (caja
+        # "ORIGINAL", letra del comprobante en recuadro, datos del emisor y
+        # del receptor en secciones con borde, QR de ARCA/AFIP + CAE al pie).
         styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=16,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=12,
-            alignment=1  # Centrado
-        )
-        normal_style = styles['Normal']
-        normal_style.fontSize = 10
-        normal_style.textColor = colors.HexColor('#000000')
-        
+        normal_style = ParagraphStyle('FacturaNormal', parent=styles['Normal'], fontSize=9, textColor=colors.black, leading=12)
+        centrado_style = ParagraphStyle('FacturaCentrado', parent=normal_style, alignment=1)
+        nombre_tienda_style = ParagraphStyle('FacturaNombreTienda', parent=normal_style, fontSize=13, fontName='Helvetica-Bold', leading=16)
+        tipo_letra_style = ParagraphStyle('FacturaTipoLetra', parent=normal_style, fontSize=34, fontName='Helvetica-Bold', alignment=1, leading=38)
+        tipo_cod_style = ParagraphStyle('FacturaTipoCod', parent=normal_style, fontSize=8, alignment=1)
+
         # Contenido del PDF
         story = []
-        
-        # Título - Usar nombre de la tienda (ya obtenido arriba)
+
         # Manejar tanto tipo_comprobante como letra (A, B, C) como número (1, 6, 11)
         tipo_comprobante_para_texto = factura.tipo_comprobante
         if isinstance(tipo_comprobante_para_texto, (int, str)) and str(tipo_comprobante_para_texto) in ['1', '6', '11']:
             # Convertir número a letra
             tipo_map = {'1': 'A', '6': 'B', '11': 'C'}
             tipo_comprobante_para_texto = tipo_map.get(str(tipo_comprobante_para_texto), 'B')
-        
         tipo_factura_text = dict(Factura.TIPO_FACTURA_CHOICES).get(tipo_comprobante_para_texto, tipo_comprobante_para_texto)
-        story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
-        story.append(Paragraph(f"FACTURA {tipo_factura_text}", ParagraphStyle(
-            'CustomSubtitle',
-            parent=styles['Heading2'],
-            fontSize=14,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=8,
-            alignment=1  # Centrado
-        )))
-        story.append(Spacer(1, 12))
-        
-        # Datos de la tienda
-        if factura.tienda.cuit:
-            story.append(Paragraph(f"<b>CUIT:</b> {factura.tienda.cuit}", normal_style))
-        if factura.tienda.direccion:
-            story.append(Paragraph(f"<b>Domicilio:</b> {factura.tienda.direccion}", normal_style))
-        story.append(Spacer(1, 12))
-        
-        # Datos de la factura (mover punto de venta y número más abajo, no justo después del nombre)
-        # Primero mostrar fecha
-        story.append(Paragraph(f"<b>Fecha de Emisión:</b> {factura.fecha_emision.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        tipo_num = TIPO_COMPROBANTE_AFIP_NUM.get(tipo_comprobante_para_texto, 6)
+
         # Generar código numérico de 13 dígitos desde el UUID de la venta (mismo que lee el código de barras)
         venta_id_sin_guiones = str(venta.id).replace('-', '')
         hash_num = 0
@@ -8027,45 +8074,96 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             hash_num = (hash_num * 31 + ord(char)) % 1000000000
         hash_9_digitos = str(abs(hash_num)).zfill(9)[:9]
         codigo_base = '779' + hash_9_digitos
-        # Calcular dígito de control para EAN13
         suma = sum(int(codigo_base[i]) * (1 if i % 2 == 0 else 3) for i in range(12))
         checksum = (10 - (suma % 10)) % 10
         codigo_numerico = codigo_base + str(checksum)
-        # Mostrar código numérico de 13 dígitos debajo de la fecha (mismo que lee el código de barras)
-        story.append(Paragraph(f"<b>ID de Venta:</b> {codigo_numerico}", normal_style))
-        # Mostrar punto de venta y número juntos en una línea más abajo
-        story.append(Paragraph(f"<b>Comprobante:</b> {factura.punto_venta:04d}-{factura.numero_comprobante:08d}", normal_style))
-        if factura.cae:
-            story.append(Paragraph(f"<b>CAE:</b> {factura.cae}", normal_style))
-        if factura.fecha_vencimiento_cae:
-            story.append(Paragraph(f"<b>CAE Vto:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
+
+        # Banner "ORIGINAL"
+        banner = Table([[Paragraph('<b>ORIGINAL</b>', centrado_style)]], colWidths=[ancho_util])
+        banner.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(banner)
+        story.append(Spacer(1, 4))
+
+        # Caja de cabecera: emisor | letra del comprobante | datos del comprobante
+        col_emisor = [Paragraph(nombre_tienda, nombre_tienda_style), Spacer(1, 4)]
+        if factura.tienda.cuit:
+            col_emisor.append(Paragraph(f"<b>CUIT:</b> {factura.tienda.cuit}", normal_style))
+        if factura.tienda.direccion:
+            col_emisor.append(Paragraph(f"<b>Domicilio:</b> {factura.tienda.direccion}", normal_style))
+        condicion_iva_emisor_text = dict(factura.tienda.CONDICION_IVA_CHOICES).get(
+            factura.tienda.condicion_iva_emisor, factura.tienda.condicion_iva_emisor
+        )
+        col_emisor.append(Paragraph(f"<b>Condición IVA:</b> {condicion_iva_emisor_text}", normal_style))
+        if factura.tienda.ingresos_brutos:
+            col_emisor.append(Paragraph(f"<b>Ingresos Brutos:</b> {factura.tienda.ingresos_brutos}", normal_style))
+        if factura.tienda.fecha_inicio_actividades:
+            col_emisor.append(Paragraph(
+                f"<b>Inicio de Actividades:</b> {factura.tienda.fecha_inicio_actividades.strftime('%d/%m/%Y')}", normal_style
+            ))
+
+        col_tipo = [Paragraph(tipo_comprobante_para_texto, tipo_letra_style), Paragraph(f"Cód. {tipo_num:03d}", tipo_cod_style)]
+
+        col_comprobante = [Paragraph(f"<b>FACTURA {tipo_factura_text}</b>", normal_style), Spacer(1, 4)]
+        col_comprobante.append(Paragraph(f"<b>Comprobante:</b> {factura.punto_venta:04d}-{factura.numero_comprobante:08d}", normal_style))
+        col_comprobante.append(Paragraph(f"<b>Fecha de Emisión:</b> {factura.fecha_emision.strftime('%d/%m/%Y %H:%M')}", normal_style))
+        col_comprobante.append(Paragraph(f"<b>ID de Venta:</b> {codigo_numerico}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
-            story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
+            col_comprobante.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
         if venta.numero_tarjeta or venta.tipo_tarjeta:
             marca = venta.get_tipo_tarjeta_display() if venta.tipo_tarjeta else ''
             numero = f"**** {venta.numero_tarjeta}" if venta.numero_tarjeta else ''
-            story.append(Paragraph(f"<b>Tarjeta:</b> {(marca + ' ' + numero).strip()}", normal_style))
+            col_comprobante.append(Paragraph(f"<b>Tarjeta:</b> {(marca + ' ' + numero).strip()}", normal_style))
         if venta.observaciones:
-            story.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
-        story.append(Spacer(1, 12))
+            col_comprobante.append(Paragraph(f"<b>Observaciones:</b> {venta.observaciones}", normal_style))
 
-        # Datos del cliente
-        story.append(Paragraph("<b>DATOS DEL CLIENTE</b>", normal_style))
-        story.append(Paragraph(f"<b>Nombre:</b> {factura.cliente_nombre}", normal_style))
+        header_table = Table(
+            [[col_emisor, col_tipo, col_comprobante]],
+            colWidths=[ancho_util * 0.40, ancho_util * 0.18, ancho_util * 0.42],
+        )
+        header_table.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(header_table)
+        story.append(Spacer(1, 6))
+
+        # Caja de datos del cliente
+        col_cliente = [Paragraph('<b>DATOS DEL CLIENTE</b>', normal_style), Spacer(1, 4)]
+        col_cliente.append(Paragraph(f"<b>Nombre:</b> {factura.cliente_nombre}", normal_style))
         if factura.cliente_cuit:
-            story.append(Paragraph(f"<b>CUIT/DNI:</b> {factura.cliente_cuit}", normal_style))
+            col_cliente.append(Paragraph(f"<b>CUIT/DNI:</b> {factura.cliente_cuit}", normal_style))
         if factura.cliente_domicilio:
-            story.append(Paragraph(f"<b>Domicilio:</b> {factura.cliente_domicilio}", normal_style))
+            col_cliente.append(Paragraph(f"<b>Domicilio:</b> {factura.cliente_domicilio}", normal_style))
         condicion_iva_text = dict(Factura.CONDICION_IVA_CHOICES).get(factura.cliente_condicion_iva, factura.cliente_condicion_iva)
-        story.append(Paragraph(f"<b>Condición IVA:</b> {condicion_iva_text}", normal_style))
-        story.append(Spacer(1, 12))
-        
+        col_cliente.append(Paragraph(f"<b>Condición IVA:</b> {condicion_iva_text}", normal_style))
+
+        cliente_table = Table([[col_cliente]], colWidths=[ancho_util])
+        cliente_table.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(cliente_table)
+        story.append(Spacer(1, 10))
+
         # IMPORTANTE: Los precios de los productos ya tienen IVA incluido (21%)
         # Necesitamos calcular el subtotal SIN IVA
         # Si precio_con_iva = precio_sin_iva * 1.21, entonces precio_sin_iva = precio_con_iva / 1.21
         
         # Tabla de productos
-        data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
+        data = [['Código', 'Descripción', 'Cant.', 'Precio Unit.', 'Subtotal']]
         subtotal_sin_iva = Decimal('0.00')
         total_iva_calculado = Decimal('0.00')
 
@@ -8076,8 +8174,9 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             for v in ventas_del_lote:
                 fecha_str = v.fecha_venta.strftime('%d/%m/%Y') if v.fecha_venta else 'N/A'
                 data.append([
-                    '1',
+                    '',
                     f"Consumo Cuenta Corriente del {fecha_str}",
+                    '1',
                     f"${v.total:.2f}",
                     f"${v.total:.2f}",
                 ])
@@ -8085,8 +8184,10 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             for detalle in detalles:
                 if not detalle.anulado_individualmente:
                     producto_nombre = detalle.producto.nombre if detalle.producto else 'Producto eliminado'
+                    codigo_producto = ''
                     if detalle.producto:
                         producto_nombre += _detalle_variante(detalle.producto)
+                        codigo_producto = detalle.producto.codigo_interno or detalle.producto.codigo_barras or ''
                     # El precio_unitario ya tiene IVA incluido
                     precio_con_iva = Decimal(str(detalle.precio_unitario))
                     # Calcular precio sin IVA: precio_con_iva / 1.21
@@ -8101,8 +8202,9 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
                     # Mostrar precio con IVA (el precio original del producto)
                     data.append([
-                        str(detalle.cantidad),
+                        codigo_producto,
                         producto_nombre,
+                        str(detalle.cantidad),
                         f"${precio_con_iva:.2f}",
                         f"${detalle.subtotal:.2f}"
                     ])
@@ -8152,7 +8254,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         cantidad_items = len(data) - 1
 
         # Agregar línea separadora antes de totales
-        data.append(['', '', '', ''])  # Línea vacía
+        data.append(['', '', '', '', ''])  # Línea vacía
 
         # Subtotal inicial con IVA (antes de descuentos/recargos) -- recalculado
         # acá de nuevo a partir de `detalles` (mismo criterio que arriba); en
@@ -8168,7 +8270,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         # interpreta ese marcado, lo muestra tal cual como texto literal --
         # eso era lo que se veía roto en el PDF.
         inicio_totales = len(data)
-        data.append(['', '', 'Subtotal:', f"${subtotal_inicial_con_iva:.2f}"])
+        data.append(['', '', '', 'Subtotal:', f"${subtotal_inicial_con_iva:.2f}"])
 
         # Descuentos (mostrar sobre el total con IVA)
         if descuento_monto_calc > 0:
@@ -8176,7 +8278,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             if venta.descuento_porcentaje and venta.descuento_porcentaje > 0:
                 descuento_label += f' ({venta.descuento_porcentaje}%)'
             descuento_label += ':'
-            data.append(['', '', descuento_label, f"-${descuento_monto_calc:.2f}"])
+            data.append(['', '', '', descuento_label, f"-${descuento_monto_calc:.2f}"])
 
         # Recargos (mostrar sobre el total con IVA)
         if recargo_monto_calc > 0:
@@ -8184,7 +8286,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
             if venta.recargo_porcentaje and venta.recargo_porcentaje > 0:
                 recargo_label += f' ({venta.recargo_porcentaje}%)'
             recargo_label += ':'
-            data.append(['', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
+            data.append(['', '', '', recargo_label, f"+${recargo_monto_calc:.2f}"])
 
         # Si es una venta de diferencia de cambio/devolución, mostrar el monto devuelto
         # (no aplica a consolidada: ahí `venta` es solo la "representativa" del
@@ -8198,7 +8300,7 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                     # Mostrar el monto devuelto (productos devueltos)
                     monto_devuelto_mostrar = cambio_diferencia.monto_devolucion
                     if monto_devuelto_mostrar > 0:
-                        data.append(['', '', 'Monto devuelto (cambio/devolución):', f"-${monto_devuelto_mostrar:.2f}"])
+                        data.append(['', '', '', 'Monto devuelto (cambio/devolución):', f"-${monto_devuelto_mostrar:.2f}"])
                         # Ajustar el subtotal y total para reflejar el monto devuelto
                         subtotal_final_sin_iva = subtotal_final_sin_iva - (monto_devuelto_mostrar / Decimal('1.21'))
                         total_final = total_final - monto_devuelto_mostrar
@@ -8207,35 +8309,65 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
                 logger.warning(f"⚠️ Error al obtener cambio_devolucion para mostrar monto devuelto: {e}")
 
         # Subtotal sin IVA (después de descuentos/recargos y monto devuelto)
-        data.append(['', '', 'Subtotal (sin IVA):', f"${subtotal_final_sin_iva:.2f}"])
+        data.append(['', '', '', 'Subtotal (sin IVA):', f"${subtotal_final_sin_iva:.2f}"])
 
         # IVA
         if iva_final > 0:
-            data.append(['', '', 'IVA 21%:', f"${iva_final:.2f}"])
+            data.append(['', '', '', 'IVA 21%:', f"${iva_final:.2f}"])
 
         # Total
-        data.append(['', '', 'TOTAL:', f"${total_final:.2f}"])
+        data.append(['', '', '', 'TOTAL:', f"${total_final:.2f}"])
 
-        table = Table(data, colWidths=[20*mm, 100*mm, 30*mm, 30*mm])
-        table.setStyle(TableStyle([
+        item_table = Table(data, colWidths=[28*mm, 65*mm, 14*mm, 25*mm, 25*mm])
+        item_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
             ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ALIGN', (2, inicio_totales), (-1, -1), 'RIGHT'),
-            ('FONTNAME', (2, inicio_totales), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (2, inicio_totales), (-1, -1), 10),
+            ('ALIGN', (3, inicio_totales), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (3, inicio_totales), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 1), (0, -1), 7),
+            ('FONTSIZE', (1, 1), (-1, -1), 9),
+            ('FONTSIZE', (3, inicio_totales), (-1, -1), 9),
         ]))
-        story.append(table)
-        story.append(Spacer(1, 20))
-        
+        story.append(item_table)
+        story.append(Spacer(1, 14))
+
+        # Pie: QR de ARCA/AFIP (izquierda) + CAE (derecha) -- RG 4892/2020, ver
+        # _generar_qr_afip_factura. Si falta algún dato (ej. factura sin CAE
+        # porque falló la emisión) simplemente no se muestra el QR, no rompe
+        # el resto del PDF.
+        qr_buffer = _generar_qr_afip_factura(factura, tipo_num)
+        footer_izquierda = []
+        if qr_buffer:
+            qr_imagen = Image(qr_buffer, width=26 * mm, height=26 * mm)
+            footer_izquierda.append(qr_imagen)
+            footer_izquierda.append(Paragraph('<i>Comprobante Autorizado</i>', centrado_style))
+        footer_derecha = []
+        if factura.cae:
+            footer_derecha.append(Paragraph(f"<b>CAE Nº:</b> {factura.cae}", normal_style))
+        if factura.fecha_vencimiento_cae:
+            footer_derecha.append(Paragraph(f"<b>Fecha Vto. CAE:</b> {factura.fecha_vencimiento_cae.strftime('%d/%m/%Y')}", normal_style))
+
+        if footer_izquierda or footer_derecha:
+            footer_table = Table(
+                [[footer_izquierda or [Paragraph('', normal_style)], footer_derecha or [Paragraph('', normal_style)]]],
+                colWidths=[ancho_util * 0.35, ancho_util * 0.65],
+            )
+            footer_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+            ]))
+            story.append(footer_table)
+            story.append(Spacer(1, 10))
+
         # Pie de página
         story.append(Paragraph("<i>Gracias por su compra</i>", normal_style))
-        
+
         # Construir PDF
         doc.build(story)
         buffer.seek(0)
