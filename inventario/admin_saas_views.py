@@ -10,19 +10,17 @@ en views.py) -- son dueños de SU tienda, no de Total Stock, así que ese flag
 no sirve acá. es_operador_plataforma es un campo editable a mano desde Django
 Admin (fieldset "Total Stock (equipo interno)" en CustomUserAdmin).
 """
-from datetime import date
 from decimal import Decimal
 
 from django.conf import settings
 from django.db.models import Sum
-from django.db.models.functions import ExtractMonth, ExtractYear
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Tienda, PagoManualSuscripcion, Venta
+from .models import Tienda, PagoManualSuscripcion, Venta, CobroMPSuscripcion
 from .plan_enforcement import info_suscripcion
 from .services.suscripcion_service import obtener_preaprobacion
 
@@ -70,22 +68,21 @@ class ClientesSaaSListView(APIView):
             .defer('logo', 'hereda_suscripcion_de__logo') \
             .order_by('nombre')
         hoy = timezone.localdate()
-        inicio_mes = hoy.replace(day=1)
 
         pagos_por_tienda = {}
         for pago in PagoManualSuscripcion.objects.filter(tienda__in=tiendas).select_related('registrado_por').order_by('-anio', '-mes'):
             pagos_por_tienda.setdefault(pago.tienda_id, []).append(pago)
 
-        # Una sola consulta agregada para todas las tiendas (no una por fila):
-        # lo que Mercado Pago efectivamente cobró este mes, según el libro de
-        # cobros (Venta con origen_mp_suscripcion=True, ver _facturar_cobro_
-        # suscripcion en views.py), agrupado por tienda_cliente.
+        # Lo que Mercado Pago efectivamente cobró este mes, según el libro de
+        # cobros que alimenta la reconciliación diaria (ver CobroMPSuscripcion
+        # y _reconciliar_con_mp en procesar_gracia_suscripciones.py) -- NO se
+        # usa la Venta con origen_mp_suscripcion=True (pensada para esto, pero
+        # depende de un webhook que nunca creó una sola fila en producción).
         cobrado_mp_por_tienda = {
-            row['tienda_cliente_id']: row['total']
-            for row in Venta.objects.filter(
-                origen_mp_suscripcion=True, anulada=False,
-                tienda_cliente__in=tiendas, fecha_venta__date__gte=inicio_mes,
-            ).values('tienda_cliente_id').annotate(total=Sum('total'))
+            row['tienda_id']: row['monto']
+            for row in CobroMPSuscripcion.objects.filter(
+                tienda__in=tiendas, anio=hoy.year, mes=hoy.month,
+            ).values('tienda_id', 'monto')
         }
 
         resultado = []
@@ -200,11 +197,17 @@ class DiagnosticoMPView(APIView):
 
 class RecaudacionSaaSView(APIView):
     """GET: recaudación mensual de Total Stock -- lo cobrado por Mercado Pago
-    (Venta con origen_mp_suscripcion=True, el "libro de cobros" que ya crea
-    _facturar_cobro_suscripcion en views.py) más lo cargado a mano
-    (PagoManualSuscripcion), mes a mes. Para el panel de resumen y el
-    histórico de meses anteriores -- no hace falta golpear la API de MP en
-    vivo, los montos ya quedaron asentados cuando se cobraron.
+    (CobroMPSuscripcion, alimentado por la reconciliación diaria -- ver su
+    docstring en models.py sobre por qué NO se usa la Venta con
+    origen_mp_suscripcion=True) más lo cargado a mano (PagoManualSuscripcion),
+    mes a mes.
+
+    Importante: CobroMPSuscripcion solo tiene datos desde que existe este
+    campo (recién empieza a completarse corrida a corrida del cron) -- los
+    meses anteriores a eso van a mostrar $0 de Mercado Pago aunque sí hubo
+    cobros reales, porque no hay forma barata de reconstruir ese historial
+    retroactivamente (MP solo informa el ÚLTIMO cobro de cada preapproval,
+    no un historial completo, en el endpoint que ya se consulta a diario).
 
     ?meses=N controla cuántos meses hacia atrás trae (default 12, incluyendo
     el actual, que puede estar parcial si todavía no vencieron todos los
@@ -228,14 +231,11 @@ class RecaudacionSaaSView(APIView):
                 mes, anio = 12, anio - 1
 
         primer_anio, primer_mes = periodos[-1]
-        inicio = date(primer_anio, primer_mes, 1)
 
         mp_por_periodo = {
             (row['anio'], row['mes']): row['total']
-            for row in Venta.objects.filter(
-                origen_mp_suscripcion=True, anulada=False, fecha_venta__date__gte=inicio,
-            ).annotate(anio=ExtractYear('fecha_venta'), mes=ExtractMonth('fecha_venta'))
-            .values('anio', 'mes').annotate(total=Sum('total'))
+            for row in CobroMPSuscripcion.objects.filter(anio__gte=primer_anio)
+            .values('anio', 'mes').annotate(total=Sum('monto'))
         }
         manual_por_periodo = {
             (row['anio'], row['mes']): row['total']

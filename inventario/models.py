@@ -1668,13 +1668,51 @@ class PagoManualSuscripcion(models.Model):
         return f"{self.tienda.nombre} — {self.mes:02d}/{self.anio}"
 
 
+class CobroMPSuscripcion(models.Model):
+    """
+    Último cobro de Mercado Pago detectado por mes para la suscripción de una
+    tienda -- se completa desde la reconciliación diaria con MP
+    (_reconciliar_con_mp en procesar_gracia_suscripciones.py), leyendo
+    summarized.last_charged_date / last_charged_amount de la respuesta que
+    esa reconciliación YA consulta a diario (no dispara ninguna llamada
+    extra a la API de MP).
+
+    Existe porque la Venta con origen_mp_suscripcion=True (pensada como el
+    libro de cobros real para autofacturarse, ver _facturar_cobro_suscripcion
+    en views.py) depende del webhook subscription_authorized_payment -- que
+    en la práctica nunca llegó a crear una sola Venta (confirmado: 0 en
+    producción pese a meses de cobros reales). Mientras eso no se investigue
+    y resuelva del lado del webhook, este modelo es la fuente que sí
+    funciona para mostrar "cobrado por MP" en el panel de Clientes SaaS.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='cobros_mp_mensuales')
+    anio = models.IntegerField()
+    mes = models.IntegerField()
+    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    fecha_cobro = models.DateTimeField(null=True, blank=True, help_text="summarized.last_charged_date informado por Mercado Pago para este cobro.")
+    mp_preapproval_id = models.CharField(max_length=50, blank=True, null=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cobro MP de suscripción (mensual)"
+        verbose_name_plural = "Cobros MP de suscripción (mensuales)"
+        ordering = ['-anio', '-mes']
+        constraints = [
+            models.UniqueConstraint(fields=['tienda', 'anio', 'mes'], name='unique_cobro_mp_tienda_mes_anio'),
+        ]
+
+    def __str__(self):
+        return f"{self.tienda.nombre} — {self.mes:02d}/{self.anio}: ${self.monto}"
+
+
 # Asegurar que los modelos estén disponibles para importación
 __all__ = [
     'User', 'Tienda', 'Categoria', 'Producto', 'MetodoPago',
     'ArancelMetodoTienda', 'ArancelMercadoLibre', 'ArancelMercadoLibreProducto', 'ArancelTiendaNube', 'CategoriaMercadoLibre',
     'Venta', 'DetalleVenta', 'Compra', 'CompraStock',
     'Factura', 'CambioDevolucion', 'DetalleCambioDevolucion', 'FCMToken',
-    'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion', 'PagoManualSuscripcion',
+    'CierreCaja', 'EgresoCaja', 'Plan', 'Suscripcion', 'PagoManualSuscripcion', 'CobroMPSuscripcion',
     'Cliente', 'MovimientoCuentaCorriente', 'Rubro',
     'Presupuesto', 'DetallePresupuesto',
 ]

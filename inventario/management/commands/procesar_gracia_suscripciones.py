@@ -204,7 +204,8 @@ class Command(BaseCommand):
     def _reconciliar_con_mp(self):
         """Consulta en MP el estado real de cada preapproval vinculado y corrige
         la suscripción local si quedó desactualizada por un webhook perdido."""
-        from inventario.models import Suscripcion
+        from django.utils.dateparse import parse_datetime
+        from inventario.models import Suscripcion, CobroMPSuscripcion
         from inventario.services.suscripcion_service import (
             obtener_preaprobacion,
             renovar_suscripcion,
@@ -247,6 +248,27 @@ class Command(BaseCommand):
             # lo popula.
             cobros_pendientes = resumen.get('pending_charge_quantity') or 0
             semaforo = resumen.get('semaphore')
+
+            # Libro de cobros de MP para el panel de Clientes SaaS (recaudación
+            # mensual / "Cobrado MP (mes)") -- ver docstring de
+            # CobroMPSuscripcion sobre por qué esta es la fuente usada en vez
+            # de la Venta con origen_mp_suscripcion=True (nunca se creó una
+            # sola en producción, el webhook del que depende no está
+            # funcionando). Se upsertea por (tienda, año, mes) del propio
+            # last_charged_date -- si el cron corre varios días seguidos
+            # dentro del mismo mes sin que haya un cobro nuevo, pisa el mismo
+            # registro con los mismos datos (no duplica).
+            ultimo_cobro_monto = resumen.get('last_charged_amount')
+            ultimo_cobro_fecha = parse_datetime(resumen.get('last_charged_date') or '')
+            if ultimo_cobro_fecha and ultimo_cobro_monto is not None:
+                CobroMPSuscripcion.objects.update_or_create(
+                    tienda=sus.tienda, anio=ultimo_cobro_fecha.year, mes=ultimo_cobro_fecha.month,
+                    defaults={
+                        'monto': ultimo_cobro_monto,
+                        'fecha_cobro': ultimo_cobro_fecha,
+                        'mp_preapproval_id': sus.mp_preapproval_id,
+                    },
+                )
 
             if estado_mp == 'cancelled' and sus.estado != 'cancelada':
                 # MP la canceló (o nunca llegó a autorizarla) pero acá seguía con acceso.
