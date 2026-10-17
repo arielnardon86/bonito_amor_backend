@@ -10716,16 +10716,20 @@ def tn_instalar_vincular_cuenta_existente(request):
 
 def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
     """
-    Registra y factura, en la Tienda interna designada (settings.
+    Registra, en la Tienda interna designada (settings.
     TIENDA_SUSCRIPCIONES_NOMBRE), el cobro de la suscripción de un cliente de
-    Total Stock -- Total Stock le cobra a sus propios clientes por su plan y
-    necesita su propio comprobante ARCA por eso, igual que cualquier otra venta.
+    Total Stock -- a propósito NO se factura electrónicamente (sin AFIP/CAE):
+    solo se crea la Venta (+ DetalleVenta), que ya alcanza para generar el
+    recibo no fiscal bajo demanda (GET /api/ventas/{id}/pdf-recibo/, igual
+    que cualquier otra venta no facturada del sistema -- ver el mismo patrón
+    en la nota de crédito por saldo a favor de cambios/devoluciones). Decisión
+    explícita del dueño: "que no se facture, que se haga recibo".
     Se llama desde mp_webhook_suscripcion ante un subscription_authorized_payment.
 
-    No lanza excepciones hacia arriba en casos de configuración faltante (tienda
-    no existe, sin facturación) -- son "no aplica todavía", no errores. Sí puede
-    propagar errores inesperados de DB/facturación; el caller decide si los
-    atrapa (hoy sí, para no romper el procesamiento del webhook de MP).
+    No lanza excepciones hacia arriba en casos de configuración faltante (la
+    tienda interna no existe) -- es "no aplica todavía", no un error. Sí puede
+    propagar errores inesperados de DB; el caller decide si los atrapa (hoy
+    sí, para no romper el procesamiento del webhook de MP).
     """
     if not payment_id:
         return
@@ -10734,11 +10738,9 @@ def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
     tienda_facturacion = Tienda.objects.filter(nombre=nombre_tienda_facturacion).first()
     if not tienda_facturacion:
         logger.warning(
-            "_facturar_cobro_suscripcion: no existe la tienda '%s' (TIENDA_SUSCRIPCIONES_NOMBRE) -- no se factura el cobro de %s",
+            "_facturar_cobro_suscripcion: no existe la tienda '%s' (TIENDA_SUSCRIPCIONES_NOMBRE) -- no se registra el cobro de %s",
             nombre_tienda_facturacion, suscripcion.tienda.nombre,
         )
-        return
-    if tienda_facturacion.tipo_facturacion == 'NINGUNA':
         return
 
     # Evitar duplicar la venta si Mercado Pago reintenta el webhook para el mismo pago.
@@ -10788,55 +10790,10 @@ def _facturar_cobro_suscripcion(suscripcion, payment_id, monto):
             subtotal=monto_decimal,
         )
 
-    cliente_data = {
-        'cliente_nombre': tienda_cliente.nombre,
-        'cliente_cuit': tienda_cliente.cuit or '',
-        'cliente_domicilio': '',
-        'cliente_tipo_documento': 'CUIT' if tienda_cliente.cuit else '99',
-        'cliente_condicion_iva': tienda_cliente.condicion_iva_emisor or 'CF',
-    }
-
-    exito, datos_factura, error = FacturacionService(tienda_facturacion).emitir_factura(venta, cliente_data)
-    if exito:
-        Factura.objects.create(
-            venta=venta, tienda=tienda_facturacion,
-            numero_comprobante=datos_factura.get('numero_comprobante'),
-            punto_venta=datos_factura.get('punto_venta', tienda_facturacion.punto_venta),
-            tipo_comprobante=datos_factura.get('tipo_comprobante', 'B'),
-            cliente_nombre=cliente_data['cliente_nombre'],
-            cliente_cuit=cliente_data.get('cliente_cuit', ''),
-            cliente_domicilio=cliente_data.get('cliente_domicilio', ''),
-            cliente_tipo_documento=cliente_data.get('cliente_tipo_documento', '99'),
-            cliente_condicion_iva=cliente_data.get('cliente_condicion_iva', 'CF'),
-            subtotal=datos_factura.get('subtotal', venta.total),
-            impuesto_iva=datos_factura.get('impuesto_iva', Decimal('0.00')),
-            total=datos_factura.get('total', venta.total),
-            estado='EMITIDA',
-            sistema_facturacion=tienda_facturacion.tipo_facturacion,
-            cae=datos_factura.get('cae'),
-            fecha_vencimiento_cae=datos_factura.get('fecha_vencimiento_cae'),
-            numero_comprobante_afip=datos_factura.get('numero_comprobante_afip'),
-            respuesta_bruta=datos_factura.get('respuesta_bruta'),
-        )
-        venta.facturada = True
-        venta.save(update_fields=['facturada'])
-        logger.info(
-            "_facturar_cobro_suscripcion: factura emitida para el cobro de suscripción de %s ($%s) — venta=%s payment_id=%s",
-            tienda_cliente.nombre, monto_decimal, venta.id, payment_id,
-        )
-    else:
-        Factura.objects.create(
-            venta=venta, tienda=tienda_facturacion, punto_venta=tienda_facturacion.punto_venta,
-            tipo_comprobante='B', cliente_nombre=cliente_data['cliente_nombre'],
-            cliente_cuit='', cliente_domicilio='', cliente_tipo_documento='99',
-            cliente_condicion_iva='CF', subtotal=venta.total, impuesto_iva=Decimal('0.00'),
-            total=venta.total, estado='ERROR', sistema_facturacion=tienda_facturacion.tipo_facturacion,
-            error_mensaje=error,
-        )
-        logger.warning(
-            "_facturar_cobro_suscripcion: fallo al facturar el cobro de suscripción de %s ($%s): %s — venta=%s payment_id=%s",
-            tienda_cliente.nombre, monto_decimal, error, venta.id, payment_id,
-        )
+    logger.info(
+        "_facturar_cobro_suscripcion: registrado el cobro de suscripción de %s ($%s) como recibo (sin facturar) — venta=%s payment_id=%s",
+        tienda_cliente.nombre, monto_decimal, venta.id, payment_id,
+    )
 
 
 @api_view(['POST'])
