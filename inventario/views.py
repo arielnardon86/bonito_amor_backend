@@ -8246,13 +8246,6 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
         elif venta.recargo_monto and venta.recargo_monto > 0:
             recargo_monto_calc = venta.recargo_monto
         
-        # Último índice de fila de ítem antes de la línea separadora/totales --
-        # para el BACKGROUND beige de abajo, que antes usaba un offset fijo
-        # (-4) que asumía siempre 3 filas de totales exactas; con descuento/
-        # recargo/devolución (filas condicionales) ese offset quedaba mal y
-        # el beige se comía filas de totales o se quedaba corto.
-        cantidad_items = len(data) - 1
-
         # Agregar línea separadora antes de totales
         data.append(['', '', '', '', ''])  # Línea vacía
 
@@ -8320,14 +8313,16 @@ class FacturaViewSet(viewsets.ReadOnlyModelViewSet):
 
         item_table = Table(data, colWidths=[28*mm, 65*mm, 14*mm, 25*mm, 25*mm])
         item_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            # Sin GRID ni fondos de color -- a pedido del usuario, tabla
+            # "abierta" (solo una línea bajo el encabezado y otra arriba de
+            # los totales), no el look tipo planilla de cálculo que tenía antes.
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.black),
+            ('LINEABOVE', (0, inicio_totales), (-1, inicio_totales), 1, colors.black),
             ('ALIGN', (3, inicio_totales), (-1, -1), 'RIGHT'),
             ('FONTNAME', (3, inicio_totales), (-1, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 1), (0, -1), 7),
