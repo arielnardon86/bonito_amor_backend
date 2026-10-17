@@ -256,3 +256,42 @@ class RecaudacionSaaSView(APIView):
             })
 
         return Response({'historial': historial})
+
+
+class DiagnosticoVentasMPView(APIView):
+    """GET: diagnóstico puntual de por qué "Cobrado MP (mes)" / recaudación
+    puede estar dando $0 -- las Venta con origen_mp_suscripcion=True creadas
+    ANTES de que existiera el campo tienda_cliente (ver migración
+    0103_venta_tienda_cliente) dependen de un backfill por CUIT/nombre; si
+    ese backfill no matcheó (CUIT con formato distinto, tienda renombrada,
+    etc.), esas ventas quedan sin tienda_cliente y no entran en ninguna suma
+    por tienda ni por mes. Esto muestra cuántas quedaron así y una muestra
+    para ver por qué no matchearon."""
+    permission_classes = [EsOperadorPlataforma]
+
+    def get(self, request):
+        ventas_mp = Venta.objects.filter(origen_mp_suscripcion=True, anulada=False)
+        total = ventas_mp.count()
+        sin_tienda = ventas_mp.filter(tienda_cliente__isnull=True).order_by('-fecha_venta')
+
+        muestra = []
+        for v in sin_tienda[:15]:
+            tienda_por_cuit = Tienda.objects.filter(cuit=v.cliente_cuit).first() if v.cliente_cuit else None
+            tienda_por_nombre = Tienda.objects.filter(nombre=v.cliente_nombre).first() if v.cliente_nombre else None
+            muestra.append({
+                'venta_id': str(v.id),
+                'fecha_venta': v.fecha_venta,
+                'total': str(v.total),
+                'cliente_nombre_guardado': v.cliente_nombre,
+                'cliente_cuit_guardado': v.cliente_cuit,
+                'matchea_por_cuit': tienda_por_cuit.nombre if tienda_por_cuit else None,
+                'matchea_por_nombre': tienda_por_nombre.nombre if tienda_por_nombre else None,
+                'mp_authorized_payment_id': v.mp_authorized_payment_id,
+            })
+
+        return Response({
+            'total_ventas_mp': total,
+            'con_tienda_cliente': total - sin_tienda.count(),
+            'sin_tienda_cliente': sin_tienda.count(),
+            'muestra_sin_vincular': muestra,
+        })

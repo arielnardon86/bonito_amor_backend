@@ -45,7 +45,7 @@ from inventario.views import (
 )
 from inventario.admin_saas_views import (
     ClientesSaaSListView, PagosManualesTiendaView, PagoManualDeleteView, DiagnosticoMPView,
-    RecaudacionSaaSView,
+    RecaudacionSaaSView, DiagnosticoVentasMPView,
 )
 # Importación condicional de CambioDevolucionViewSet
 try:
@@ -143,6 +143,7 @@ urlpatterns += [
     path('api/admin-saas/pagos-manuales/<uuid:pago_id>/', PagoManualDeleteView.as_view(), name='admin-saas-pago-manual-delete'),
     path('api/admin-saas/clientes/<uuid:tienda_id>/diagnostico-mp/', DiagnosticoMPView.as_view(), name='admin-saas-diagnostico-mp'),
     path('api/admin-saas/recaudacion/', RecaudacionSaaSView.as_view(), name='admin-saas-recaudacion'),
+    path('api/admin-saas/recaudacion/diagnostico-ventas/', DiagnosticoVentasMPView.as_view(), name='admin-saas-diagnostico-ventas'),
     path('api/auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),
     path('api/auth/update-email/', update_email, name='update-email'),
 ]
