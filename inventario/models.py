@@ -196,6 +196,42 @@ class Tienda(models.Model):
         help_text="Si está activo, los cargos de ML se obtienen de las notificaciones (webhook) y se muestran en 'Descuentos Mercado Libre'. Si está desactivado, se usan los aranceles configurados manualmente y se muestran en 'Aranceles'."
     )
 
+    # ── Mercado Pago (cobro con QR en el Punto de Venta) ─────────────────────────
+    # Distinto de MP_ACCESS_TOKEN_SUSCRIPCIONES (que es la cuenta de Total Stock
+    # para cobrarle la suscripción a ESTA tienda) -- acá es la cuenta PROPIA de
+    # la tienda, conectada por OAuth, para que ELLA cobre a SUS clientes con QR.
+    # El Client ID/Secret de la aplicación son compartidos (una sola app de
+    # Total Stock registrada en MP, ver settings.MP_POS_CLIENT_ID/SECRET) --
+    # no se guardan por tienda, a diferencia del patrón usado para Mercado Libre.
+    mp_pos_access_token = models.TextField(
+        blank=True, null=True,
+        help_text="Access Token de la cuenta de Mercado Pago de la tienda (OAuth, para cobrar con QR). No compartir públicamente."
+    )
+    mp_pos_refresh_token = models.TextField(
+        blank=True, null=True,
+        help_text="Refresh Token para renovar el access token de Mercado Pago de la tienda. No compartir públicamente."
+    )
+    mp_pos_user_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de la cuenta/collector de Mercado Pago de la tienda."
+    )
+    mp_pos_public_key = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Public Key de la cuenta de Mercado Pago de la tienda."
+    )
+    mp_pos_token_expires_at = models.DateTimeField(
+        blank=True, null=True,
+        help_text="Fecha y hora de expiración del access token de Mercado Pago de la tienda."
+    )
+    mp_pos_store_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="ID de la sucursal (store) creada en Mercado Pago al conectar -- se provisiona sola, una vez."
+    )
+    mp_pos_external_id = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text="external_id de la caja (POS) creada en Mercado Pago al conectar -- se usa para generar las órdenes QR."
+    )
+
     # ── Tienda Nube ────────────────────────────────────────────────────────────
     # Credenciales OAuth
     tn_app_id = models.CharField(
@@ -511,8 +547,18 @@ class MetodoPago(models.Model):
     activo = models.BooleanField(default=True) 
     # CAMBIO CLAVE: Indica si este método permite aranceles/planes configurables
     es_financiero = models.BooleanField(default=False, help_text="Marcar si este método implica un arancel (Tarjeta, QR, etc.).")
-    fecha_creacion = models.DateTimeField(auto_now_add=True) 
-    fecha_actualizacion = models.DateTimeField(auto_now=True) 
+    # Método global (no por tienda) -- este flag marca que, para que UNA tienda
+    # pueda configurar un arancel sobre este método, esa tienda primero tiene
+    # que haber conectado su propia cuenta de Mercado Pago (ver Tienda.mp_pos_*
+    # y MercadoPagoPosService). Solo lo tiene tildado el método "QR Mercado
+    # Pago" (sembrado por migración) -- pensado para reusarse si se agrega
+    # otro proveedor de QR/pago que también necesite una cuenta conectada.
+    requiere_integracion_mp = models.BooleanField(
+        default=False,
+        help_text="Si está tildado, una tienda necesita tener conectada su cuenta de Mercado Pago (cobro con QR) antes de poder configurar un arancel sobre este método."
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = "Método de Pago"

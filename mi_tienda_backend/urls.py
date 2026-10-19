@@ -12,6 +12,7 @@ from inventario.views import (
     ProveedorViewSet,
     RubroViewSet,
     PresupuestoViewSet,
+    mp_pos_oauth_callback_public_view,
 )
 # Importación condicional de ArancelMercadoLibreViewSet y ArancelMercadoLibreProductoViewSet
 try:
@@ -99,6 +100,10 @@ if ml_oauth_callback_public_view is not None:
     )
 else:
     print("⚠️ Warning: ml_oauth_callback_public_view no disponible, la ruta /api/tiendas/mercadolibre/callback/ no estará disponible")
+
+urlpatterns.append(
+    path('api/tiendas/mercadopago-pos/callback/', mp_pos_oauth_callback_public_view, name='mp-pos-oauth-callback-public')
+)
 
 # Endpoints internos para Cloudflare Worker (proxy OAuth 403)
 if ml_oauth_worker_credentials is not None and ml_oauth_worker_save_tokens is not None:

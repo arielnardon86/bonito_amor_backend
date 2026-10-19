@@ -2324,6 +2324,69 @@ def ml_oauth_callback_public_view(request):
         )
 
 
+# Vista independiente para el callback OAuth de Mercado Pago POS (cobro con
+# QR) -- URL fija (registrada como redirect_uri en la app de MP), igual
+# patrón que ml_oauth_callback_public_view pero más simple: no necesita el
+# proxy de Cloudflare Worker que tiene ML (acá no se vio el mismo problema de
+# 403 de Render con el resto de las llamadas a la API de MP en este backend).
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def mp_pos_oauth_callback_public_view(request):
+    from .models import Tienda
+    from .services.mercadopago_pos_service import MercadoPagoPosService
+    from django.conf import settings as dj_settings
+
+    state = request.query_params.get('state')
+    code = request.query_params.get('code')
+    error_param = request.query_params.get('error')
+
+    def pagina_error(mensaje):
+        return HttpResponse(
+            f'<html><body><h1>❌ Error en autenticación</h1><p>{mensaje}</p></body></html>',
+            content_type='text/html', status=400,
+        )
+
+    if error_param:
+        return pagina_error(f"Mercado Pago informó un error: {error_param}")
+    if not state or not code:
+        return pagina_error("Faltan parámetros (state/code) en la respuesta de Mercado Pago.")
+
+    tienda_id = cache.get(f"mp_pos_oauth_state_{state}")
+    if not tienda_id:
+        return pagina_error("El enlace de autorización venció o ya se usó. Volvé a hacer clic en 'Conectar con Mercado Pago'.")
+    cache.delete(f"mp_pos_oauth_state_{state}")
+
+    try:
+        tienda = Tienda.objects.get(id=tienda_id)
+    except Tienda.DoesNotExist:
+        return pagina_error("No se encontró la tienda asociada a esta autorización.")
+
+    if not dj_settings.DEBUG:
+        redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadopago-pos/callback/'
+    else:
+        redirect_uri = f"{request.scheme}://{request.get_host()}/api/tiendas/mercadopago-pos/callback/"
+
+    try:
+        MercadoPagoPosService(tienda).exchange_code_for_token(code, redirect_uri)
+    except Exception as e:
+        logger.error("Error procesando callback de Mercado Pago POS: %s", e, exc_info=True)
+        return pagina_error(f"No se pudo completar la conexión: {e}")
+
+    return HttpResponse(
+        f'<html><head><title>Mercado Pago conectado</title></head><body>'
+        f'<h1>✅ Mercado Pago conectado</h1>'
+        f'<p>La tienda "{tienda.nombre}" ya puede cobrar con QR de Mercado Pago.</p>'
+        f'<p>Podés cerrar esta ventana.</p>'
+        f'<script>'
+        f'if (window.opener) {{'
+        f'  window.opener.postMessage({{type: "MP_POS_OAUTH_SUCCESS", tienda_id: "{tienda.id}"}}, "*");'
+        f'  setTimeout(function(){{window.close();}}, 2000);'
+        f'}} else {{ setTimeout(function(){{window.close();}}, 3000); }}'
+        f'</script></body></html>',
+        content_type='text/html',
+    )
+
+
 class TiendaViewSet(viewsets.ModelViewSet):
     queryset = Tienda.objects.all()
     serializer_class = TiendaSerializer
@@ -3486,6 +3549,140 @@ class TiendaViewSet(viewsets.ModelViewSet):
             'success': True,
             'message': 'Integración de Mercado Libre desconectada. Podés volver a conectar desde Configuración > Mercado Libre.'
         })
+
+    # ── Mercado Pago POS (cobro con QR a los clientes de la tienda) ─────────
+
+    @action(detail=True, methods=['get'], url_path='mercadopago-pos/auth-url')
+    def mp_pos_auth_url(self, request, pk=None):
+        """Genera la URL de autorización OAuth para que la tienda conecte su
+        propia cuenta de Mercado Pago (cobro con QR)."""
+        import uuid
+        from django.conf import settings as dj_settings
+        from .services.mercadopago_pos_service import MercadoPagoPosService
+
+        tienda = self.get_object()
+        if not dj_settings.MP_POS_CLIENT_ID:
+            return Response(
+                {'error': 'MP_POS_CLIENT_ID no configurado en el servidor.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not dj_settings.DEBUG:
+            redirect_uri = 'https://bonito-amor-backend.onrender.com/api/tiendas/mercadopago-pos/callback/'
+        else:
+            redirect_uri = f"{request.scheme}://{request.get_host()}/api/tiendas/mercadopago-pos/callback/"
+
+        state = f"{pk}:{uuid.uuid4().hex}"
+        cache.set(f"mp_pos_oauth_state_{state}", str(pk), timeout=600)
+
+        service = MercadoPagoPosService(tienda)
+        try:
+            auth_url = service.get_authorization_url(redirect_uri, state=state)
+            return Response({'auth_url': auth_url})
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='mercadopago-pos/status')
+    def mp_pos_status(self, request, pk=None):
+        """Estado de la conexión de Mercado Pago (cobro con QR) de esta tienda."""
+        tienda = self.get_object()
+        return Response({
+            'connected': bool(tienda.mp_pos_access_token and tienda.mp_pos_external_id),
+            'mp_user_id': tienda.mp_pos_user_id,
+        })
+
+    @action(detail=True, methods=['post'], url_path='mercadopago-pos/disconnect')
+    def mp_pos_disconnect(self, request, pk=None):
+        """Desconecta la integración de Mercado Pago (cobro con QR). El método
+        'QR Mercado Pago' deja de poder usarse en el Punto de Venta de esta
+        tienda hasta que se reconecte."""
+        from .services.mercadopago_pos_service import MercadoPagoPosService
+
+        tienda = self.get_object()
+        MercadoPagoPosService(tienda).desconectar()
+        return Response({
+            'success': True,
+            'message': 'Mercado Pago desconectado. Podés volver a conectar desde Medios de Pago y Aranceles.',
+        })
+
+    @action(detail=True, methods=['post'], url_path='mercadopago-pos/crear-orden')
+    def mp_pos_crear_orden(self, request, pk=None):
+        """Crea una orden QR dinámica por el monto de una venta del Punto de
+        Venta. Body: {monto, external_reference (opcional, ej. id de venta
+        en curso)}. Devuelve {order_id, qr_image (data URI PNG)}."""
+        import uuid
+        import requests
+        from decimal import InvalidOperation
+        from .services.mercadopago_pos_service import MercadoPagoPosService, MercadoPagoPosReconnectRequired
+
+        tienda = self.get_object()
+        service = MercadoPagoPosService(tienda)
+        if not service.esta_conectada():
+            return Response(
+                {'error': 'Esta tienda no tiene conectada su cuenta de Mercado Pago.', 'reconnect_required': True},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        monto = request.data.get('monto')
+        try:
+            monto_decimal = Decimal(str(monto))
+        except (InvalidOperation, TypeError):
+            return Response({'error': 'Monto inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        if monto_decimal <= 0:
+            return Response({'error': 'El monto debe ser mayor a cero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        external_reference = request.data.get('external_reference') or f"pos-{tienda.id}-{uuid.uuid4().hex[:12]}"
+
+        try:
+            order_id, qr_image = service.crear_orden_qr(monto_decimal, external_reference)
+            return Response({'order_id': order_id, 'qr_image': qr_image})
+        except MercadoPagoPosReconnectRequired as e:
+            return Response({'error': str(e), 'reconnect_required': True}, status=status.HTTP_400_BAD_REQUEST)
+        except requests.exceptions.RequestException as e:
+            logger.error("Error creando orden QR de Mercado Pago para %s: %s", tienda.nombre, e, exc_info=True)
+            return Response({'error': 'No se pudo generar el QR. Intentá de nuevo.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    @action(detail=True, methods=['get'], url_path=r'mercadopago-pos/orden/(?P<order_id>[^/]+)')
+    def mp_pos_consultar_orden(self, request, pk=None, order_id=None):
+        """Consulta el estado de una orden QR -- el Punto de Venta hace
+        polling acá mientras el modal del QR está abierto, esperando el pago."""
+        import requests
+        from .services.mercadopago_pos_service import MercadoPagoPosService, MercadoPagoPosReconnectRequired
+
+        tienda = self.get_object()
+        service = MercadoPagoPosService(tienda)
+        if not service.esta_conectada():
+            return Response({'error': 'Esta tienda no tiene conectada su cuenta de Mercado Pago.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            datos = service.consultar_orden(order_id)
+            return Response({
+                'order_id': datos.get('id'),
+                'status': datos.get('status'),
+                'status_detail': datos.get('status_detail'),
+                'total_paid_amount': datos.get('total_paid_amount'),
+                'pagada': datos.get('status') == 'processed' and datos.get('status_detail') == 'accredited',
+            })
+        except MercadoPagoPosReconnectRequired as e:
+            return Response({'error': str(e), 'reconnect_required': True}, status=status.HTTP_400_BAD_REQUEST)
+        except requests.exceptions.RequestException as e:
+            logger.error("Error consultando orden QR %s de Mercado Pago: %s", order_id, e, exc_info=True)
+            return Response({'error': 'No se pudo consultar el estado del pago.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    @action(detail=True, methods=['post'], url_path='mercadopago-pos/cancelar-orden')
+    def mp_pos_cancelar_orden(self, request, pk=None):
+        """Cancela una orden QR sin pagar (ej. el cajero cierra el modal
+        antes de que el cliente pague). Body: {order_id}."""
+        from .services.mercadopago_pos_service import MercadoPagoPosService
+
+        tienda = self.get_object()
+        order_id = request.data.get('order_id')
+        if not order_id:
+            return Response({'error': 'order_id es obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+        service = MercadoPagoPosService(tienda)
+        if service.esta_conectada():
+            service.cancelar_orden(order_id)
+        return Response({'success': True})
 
     @action(detail=True, methods=['post'], url_path='mercadolibre/sync-stock')
     def ml_sync_stock(self, request, pk=None):
@@ -6931,18 +7128,45 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
         logger.warning(f"⚠️ User '{user.username}' - Sin permisos para ver aranceles.")
         return ArancelMetodoTienda.objects.none()
 
+    def _validar_requiere_mp(self, tienda, metodo_pago):
+        """Métodos con requiere_integracion_mp=True (ej. "QR Mercado Pago") no
+        se pueden configurar como arancel si la tienda todavía no conectó su
+        propia cuenta de Mercado Pago -- ver Tienda.mp_pos_* y
+        MercadoPagoPosService."""
+        if metodo_pago and getattr(metodo_pago, 'requiere_integracion_mp', False):
+            if not (tienda.mp_pos_access_token and tienda.mp_pos_external_id):
+                from rest_framework import serializers as drf_serializers
+                raise drf_serializers.ValidationError({
+                    'metodo_pago': (
+                        f'Para usar "{metodo_pago.nombre}" primero tenés que conectar la cuenta de '
+                        f'Mercado Pago de esta tienda.'
+                    ),
+                    'reconnect_required': True,
+                })
+
     def perform_create(self, serializer):
         """Al crear, usar la tienda del slug"""
         tienda_slug = self.request.data.get('tienda')
         if tienda_slug:
             try:
                 tienda = Tienda.objects.get(nombre=tienda_slug)
+                self._validar_requiere_mp(tienda, serializer.validated_data.get('metodo_pago'))
                 serializer.save(tienda=tienda)
             except Tienda.DoesNotExist:
                 from rest_framework import serializers as drf_serializers
                 raise drf_serializers.ValidationError({'tienda': 'Tienda no encontrada'})
         else:
+            tienda = serializer.validated_data.get('tienda')
+            if tienda:
+                self._validar_requiere_mp(tienda, serializer.validated_data.get('metodo_pago'))
             serializer.save()
+
+    def perform_update(self, serializer):
+        """Si se cambia el método de pago al editar, misma validación que al crear."""
+        instancia = serializer.instance
+        nuevo_metodo = serializer.validated_data.get('metodo_pago', instancia.metodo_pago)
+        self._validar_requiere_mp(instancia.tienda, nuevo_metodo)
+        serializer.save()
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):

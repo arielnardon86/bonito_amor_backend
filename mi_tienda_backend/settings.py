@@ -330,6 +330,15 @@ MP_WEBHOOK_SECRET = os.environ.get('MP_WEBHOOK_SECRET', '')
 # suscripción de cada cliente de Total Stock -- ver mp_webhook_suscripcion.
 TIENDA_SUSCRIPCIONES_NOMBRE = os.environ.get('TIENDA_SUSCRIPCIONES_NOMBRE', 'Total Stock')
 
+# ── Mercado Pago POS (cobro con QR de CADA tienda a SUS clientes) ───────────
+# Aplicación única de Total Stock registrada en Mercado Pago Developers (OAuth
+# marketplace) -- distinta de MP_ACCESS_TOKEN_SUSCRIPCIONES, que es la cuenta
+# de Total Stock para cobrarle la suscripción A las tiendas. Client ID/Secret
+# son compartidos por todas las tiendas (no se guardan por tienda); lo que sí
+# se guarda por tienda es el resultado de la conexión OAuth (Tienda.mp_pos_*).
+MP_POS_CLIENT_ID = os.environ.get('MP_POS_CLIENT_ID', '')
+MP_POS_CLIENT_SECRET = os.environ.get('MP_POS_CLIENT_SECRET', '')
+
 # Emails con acceso al panel de administración de clientes SaaS (/clientes-saas
 # en el frontend, inventario/admin_saas_views.py). is_superuser NO alcanza acá:
 # registro_publico le da is_superuser=True a TODOS los dueños de tienda que se
