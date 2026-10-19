@@ -2461,7 +2461,11 @@ class TiendaViewSet(viewsets.ModelViewSet):
             return True
         if tienda.pk not in _get_tiendas_ids_usuario(user):
             return False
-        return user.is_staff if requiere_admin else True
+        # is_superuser (no is_staff): conectar/desconectar MP es una decisión
+        # del dueño, mismo criterio que IsTiendaOwner en
+        # ArancelMetodoTiendaViewSet -- un empleado con is_staff no debería
+        # poder hacerlo aunque pertenezca a esta tienda.
+        return user.is_superuser if requiere_admin else True
 
     # ========== FACTURACIÓN ELECTRÓNICA ==========
 
