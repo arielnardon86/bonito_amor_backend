@@ -981,13 +981,20 @@ class ProductoViewSet(viewsets.ModelViewSet):
                 return Response({"error": "El IVA debe estar entre 0 y 100%."}, status=status.HTTP_400_BAD_REQUEST)
             actualizados = productos.update(iva_porcentaje=valor_decimal)
         elif modo == 'margen':
+            # Margen = ganancia / precio de venta, no markup (ganancia / costo)
+            # -- despejando precio: precio = costo_con_iva / (1 - margen/100).
+            # Un margen >= 100% no tiene sentido (implicaría precio infinito o
+            # negativo: la ganancia nunca puede ser el 100% o más del precio
+            # de venta si el costo es positivo).
+            if valor_decimal >= 100:
+                return Response({"error": "El margen debe ser menor a 100%."}, status=status.HTTP_400_BAD_REQUEST)
             for producto in productos:
                 if producto.costo is None:
                     omitidos += 1
                     continue
                 iva_actual = producto.iva_porcentaje or Decimal('0.00')
                 costo_con_iva = producto.costo * (Decimal('1') + iva_actual / Decimal('100'))
-                nuevo_precio = costo_con_iva * (Decimal('1') + valor_decimal / Decimal('100'))
+                nuevo_precio = costo_con_iva / (Decimal('1') - valor_decimal / Decimal('100'))
                 producto.precio = max(Decimal('0.00'), nuevo_precio).quantize(Decimal('0.01'))
                 producto.save(update_fields=['precio'])
                 actualizados += 1
@@ -1060,14 +1067,15 @@ class ProductoViewSet(viewsets.ModelViewSet):
 
             codigo_interno = producto.codigo_interno or _generar_codigo_interno_unico(producto)
 
-            # % sobre costo con IVA (markup) -- mismo criterio que editar_masivo/carga_masiva
-            # y que la columna "Margen" de Gestión de Productos: precio = costo_con_iva * (1+%).
+            # Margen = ganancia / precio de venta (utilidad sobre la venta) --
+            # no markup (ganancia / costo). Mismo criterio que editar_masivo/
+            # carga_masiva y la columna "Margen" de Gestión de Productos.
             margen_porcentaje = ''
             if producto.costo is not None and producto.precio is not None:
                 iva_pct = producto.iva_porcentaje or Decimal('0')
                 costo_con_iva = producto.costo * (Decimal('1') + iva_pct / Decimal('100'))
-                if costo_con_iva > 0:
-                    margen = (producto.precio - costo_con_iva) / costo_con_iva * Decimal('100')
+                if producto.precio > 0:
+                    margen = (producto.precio - costo_con_iva) / producto.precio * Decimal('100')
                     margen_porcentaje = str(margen.quantize(Decimal('0.1')))
 
             filas.append({
@@ -1290,9 +1298,13 @@ class ProductoViewSet(viewsets.ModelViewSet):
                     precio_venta = Decimal(str(precio_venta_raw))
                 elif margen_presente:
                     margen = Decimal(str(margen_raw))
-                    # El margen se aplica sobre el costo CON IVA, no sobre el costo puro.
+                    if margen >= 100:
+                        raise ValueError("El margen debe ser menor a 100%.")
+                    # Margen = ganancia / precio de venta (no markup = ganancia /
+                    # costo) -- se aplica sobre el costo CON IVA, no sobre el
+                    # costo puro: precio = costo_con_iva / (1 - margen/100).
                     costo_con_iva = costo * (Decimal('1') + iva_porcentaje / Decimal('100'))
-                    precio_venta = costo_con_iva * (Decimal('1') + margen / Decimal('100'))
+                    precio_venta = costo_con_iva / (Decimal('1') - margen / Decimal('100'))
                 else:
                     raise ValueError("Debe indicar 'Precio de Venta' o 'Margen %'.")
                 precio_venta = precio_venta.quantize(Decimal('0.01'))
