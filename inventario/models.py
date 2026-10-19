@@ -296,8 +296,18 @@ class Tienda(models.Model):
 
     class Meta:
         verbose_name = "Tienda"
-        verbose_name_plural = "Tiendas" 
+        verbose_name_plural = "Tiendas"
         ordering = ['nombre']
+
+    def save(self, *args, **kwargs):
+        es_nueva = self._state.adding
+        super().save(*args, **kwargs)
+        if es_nueva:
+            # Precarga los aranceles de los métodos de pago financieros (ej.
+            # Tarjeta de Crédito) en 0.00% para todos los planes predefinidos
+            # -- así el cliente solo edita el % retenido en vez de tener que
+            # crear cada combinación a mano. Ver asegurar_aranceles_default.
+            asegurar_aranceles_default(self)
 
     def __str__(self):
         return self.nombre
@@ -565,6 +575,17 @@ class MetodoPago(models.Model):
         verbose_name_plural = "Métodos de Pago"
         ordering = ['nombre']
 
+    def save(self, *args, **kwargs):
+        es_nuevo = self._state.adding
+        super().save(*args, **kwargs)
+        if es_nuevo and self.es_financiero and not self.requiere_integracion_mp and self.nombre != 'Mercado Libre':
+            # Un método financiero nuevo (ej. agregado a mano desde "Nuevo
+            # Arancel" o el admin) se precarga en 0.00% para TODAS las
+            # tiendas y todos los planes predefinidos -- ver
+            # asegurar_aranceles_default.
+            for tienda in Tienda.objects.all():
+                asegurar_aranceles_default(tienda, metodos=[self])
+
     def __str__(self):
         return self.nombre
 
@@ -600,6 +621,31 @@ class ArancelMetodoTienda(models.Model):
         plan_display = dict(self.PLAN_CHOICES).get(self.nombre_plan, self.nombre_plan)
         return f"{self.tienda.nombre} - {self.metodo_pago.nombre} - {plan_display} ({self.arancel_porcentaje}%)"
 # ------------------------------------------------
+
+
+def asegurar_aranceles_default(tienda, metodos=None):
+    """Crea (si no existen) los ArancelMetodoTienda de `tienda` para cada
+    combinación de método de pago financiero x plan predefinido, con 0.00%
+    por defecto -- así el cliente no tiene que "crear" el arancel, solo
+    editar el % retenido de cada combinación que ya existe.
+
+    Se excluye 'Mercado Libre' (tiene su propio modelo de arancel por
+    categoría, ArancelMercadoLibre) y cualquier método con
+    requiere_integracion_mp=True (ej. 'QR Mercado Pago'): esos solo se
+    habilitan al conectar la cuenta, ver
+    MercadoPagoPosService.provisionar_store_y_pos -- que llama a esta misma
+    función pasándole explícitamente ese método una vez conectado.
+    """
+    if metodos is None:
+        metodos = MetodoPago.objects.filter(
+            es_financiero=True, requiere_integracion_mp=False
+        ).exclude(nombre='Mercado Libre')
+    for metodo in metodos:
+        for plan_value, _ in ArancelMetodoTienda.PLAN_CHOICES:
+            ArancelMetodoTienda.objects.get_or_create(
+                tienda=tienda, metodo_pago=metodo, nombre_plan=plan_value,
+                defaults={'arancel_porcentaje': Decimal('0.00')},
+            )
 
 # --- NUEVO MODELO: ARANCEL MERCADO LIBRE POR CATEGORÍA ---
 class ArancelMercadoLibre(models.Model):

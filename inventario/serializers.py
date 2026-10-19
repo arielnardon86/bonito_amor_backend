@@ -383,7 +383,14 @@ class ArancelMetodoTiendaCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ArancelMetodoTienda
         fields = ['id', 'tienda', 'metodo_pago', 'nombre_plan', 'arancel_porcentaje']
-        
+        # Sin esto, DRF agrega automáticamente un UniqueTogetherValidator por
+        # el unique_together del modelo, que rechaza con 400 antes de llegar
+        # a perform_create -- y ahora "crear" una combinación que ya existe
+        # (precargada en 0.00%, ver asegurar_aranceles_default) es un caso
+        # válido: ArancelMetodoTiendaViewSet._crear_o_actualizar_arancel lo
+        # resuelve como una edición.
+        validators = []
+
     def validate_arancel_porcentaje(self, value):
         """Validar que el arancel esté entre 0 y 100"""
         if value < 0 or value > 100:

@@ -237,6 +237,14 @@ class MercadoPagoPosService:
             self.tienda.nombre, store_id, pos_external_id,
         )
 
+        # Recién conectada: precarga el arancel de "QR Mercado Pago" en 0.00%
+        # para todos los planes predefinidos, igual que los demás métodos
+        # financieros -- así al cliente solo le queda editar el % retenido.
+        from ..models import MetodoPago, asegurar_aranceles_default
+        metodo_mp = MetodoPago.objects.filter(nombre='QR Mercado Pago').first()
+        if metodo_mp:
+            asegurar_aranceles_default(self.tienda, metodos=[metodo_mp])
+
     # ── Cobro con QR ─────────────────────────────────────────────────────
 
     def crear_orden_qr(self, monto, external_reference, descripcion="Venta Total Stock"):

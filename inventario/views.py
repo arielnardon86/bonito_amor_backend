@@ -7172,6 +7172,21 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
                     'reconnect_required': True,
                 })
 
+    def _crear_o_actualizar_arancel(self, tienda, serializer):
+        """Como ahora las combinaciones estándar (método financiero x plan
+        predefinido) ya vienen precargadas en 0.00% para toda tienda (ver
+        asegurar_aranceles_default), "crear" un arancel que ya existe
+        significa en realidad editarle el %, no un alta duplicada."""
+        metodo = serializer.validated_data.get('metodo_pago')
+        plan = serializer.validated_data.get('nombre_plan') or ArancelMetodoTienda._meta.get_field('nombre_plan').default
+        existente = ArancelMetodoTienda.objects.filter(tienda=tienda, metodo_pago=metodo, nombre_plan=plan).first()
+        if existente:
+            existente.arancel_porcentaje = serializer.validated_data.get('arancel_porcentaje', existente.arancel_porcentaje)
+            existente.save(update_fields=['arancel_porcentaje', 'fecha_actualizacion'])
+            serializer.instance = existente
+        else:
+            serializer.save(tienda=tienda)
+
     def perform_create(self, serializer):
         """Al crear, usar la tienda del slug"""
         tienda_slug = self.request.data.get('tienda')
@@ -7179,7 +7194,7 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
             try:
                 tienda = Tienda.objects.get(nombre=tienda_slug)
                 self._validar_requiere_mp(tienda, serializer.validated_data.get('metodo_pago'))
-                serializer.save(tienda=tienda)
+                self._crear_o_actualizar_arancel(tienda, serializer)
             except Tienda.DoesNotExist:
                 from rest_framework import serializers as drf_serializers
                 raise drf_serializers.ValidationError({'tienda': 'Tienda no encontrada'})
@@ -7187,7 +7202,9 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
             tienda = serializer.validated_data.get('tienda')
             if tienda:
                 self._validar_requiere_mp(tienda, serializer.validated_data.get('metodo_pago'))
-            serializer.save()
+                self._crear_o_actualizar_arancel(tienda, serializer)
+            else:
+                serializer.save()
 
     def perform_update(self, serializer):
         """Si se cambia el método de pago al editar, misma validación que al crear."""
