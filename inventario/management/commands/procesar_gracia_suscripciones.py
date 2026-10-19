@@ -40,6 +40,19 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Procesa período de gracia de suscripciones con cobros pendientes."
 
+    # Toda transición automática de este comando (pending→pausada,
+    # trial/activa→gracia, gracia→pausada, pausada→cancelada,
+    # cancelada→borrado) EXCLUYE Suscripcion con plan.nombre == 'legacy'.
+    # Ese plan existe justamente para eximir a una tienda de la gestión
+    # automática (ver _es_legacy en plan_enforcement.py) cuando Ariel la
+    # cobra a mano por fuera de MP -- deja la Suscripcion en 'activa' o
+    # 'pausada' sin que este cron la toque. El 19/10/2026 esto no se
+    # respetaba todavía: "Tuki Autoservicios" (plan legacy, estado
+    # 'cancelada' desde el 19/09) se borró entera por el paso 0.1 apenas
+    # cumplió 30 días -- recuperada desde un backup, pero el agujero real
+    # era este: nada impedía que CUALQUIER plan legacy en 'cancelada' o
+    # 'pausada' terminara igual. "Oxford" (plan legacy, pausada desde el
+    # 16/10) estaba en el mismo camino.
     DIAS_RETENCION = 30  # Días de retención de datos tras cancelación
     DIAS_LIMITE_PENDING = 7   # 'pending' sin completar el pago en MP → pausar
     DIAS_LIMITE_PAUSADA = 30  # 'pausada' sin reactivar → cancelar
@@ -80,12 +93,16 @@ class Command(BaseCommand):
         self._reconciliar_con_mp()
 
         # 0.1. Canceladas hace más de 30 días → eliminar todos los datos
+        #      (exclude plan='legacy': ver nota en ESTADOS_A_RECONCILIAR más
+        #      abajo sobre por qué el plan legacy queda afuera de TODA esta
+        #      automatización -- Tuki Autoservicios se borró por esto mismo
+        #      el 19/10, con plan_id=4 (legacy) pero estado='cancelada').
         limite_borrado = ahora - timedelta(days=self.DIAS_RETENCION)
         a_borrar = Suscripcion.objects.filter(
             estado='cancelada',
             fecha_cancelacion__isnull=False,
             fecha_cancelacion__lt=limite_borrado,
-        ).select_related('tienda')
+        ).exclude(plan__nombre='legacy').select_related('tienda', 'plan')
 
         for sus in a_borrar:
             tienda = sus.tienda
@@ -108,7 +125,7 @@ class Command(BaseCommand):
         pendientes_vencidas = Suscripcion.objects.filter(
             estado='pending',
             fecha_inicio__lt=limite_pending,
-        ).select_related('plan', 'tienda')
+        ).exclude(plan__nombre='legacy').select_related('plan', 'tienda')
 
         for sus in pendientes_vencidas:
             self.stdout.write(
@@ -127,7 +144,7 @@ class Command(BaseCommand):
             estado__in=('trial', 'activa'),
             fecha_proximo_cobro__isnull=False,
             fecha_proximo_cobro__lt=ahora - self.MARGEN_VERIFICACION_COBRO,
-        ).select_related('plan', 'tienda')
+        ).exclude(plan__nombre='legacy').select_related('plan', 'tienda')
 
         for sus in sin_cobro:
             self.stdout.write(
@@ -141,7 +158,7 @@ class Command(BaseCommand):
         en_gracia = Suscripcion.objects.filter(
             estado='gracia',
             fecha_inicio_gracia__isnull=False,
-        ).select_related('plan', 'tienda')
+        ).exclude(plan__nombre='legacy').select_related('plan', 'tienda')
 
         for sus in en_gracia:
             dias_en_gracia = (ahora - sus.fecha_inicio_gracia).days
@@ -167,12 +184,16 @@ class Command(BaseCommand):
         #    reactive → cancelar. Deja que el paso 0.1 de la corrida siguiente
         #    (30 días post-cancelación) termine de borrar sus datos -- así una
         #    tienda suspendida y abandonada ya no queda viva para siempre.
+        #    plan='legacy' queda afuera (ver nota en ESTADOS_A_RECONCILIAR):
+        #    "Oxford" quedó pausada con plan legacy el 16/10 y, sin este
+        #    exclude, se habría cancelado y borrado solo en ~30 días más,
+        #    igual que le pasó a Tuki Autoservicios.
         limite_pausada = ahora - timedelta(days=self.DIAS_LIMITE_PAUSADA)
         pausadas_vencidas = Suscripcion.objects.filter(
             estado='pausada',
             fecha_pausada__isnull=False,
             fecha_pausada__lt=limite_pausada,
-        ).select_related('plan', 'tienda')
+        ).exclude(plan__nombre='legacy').select_related('plan', 'tienda')
 
         for sus in pausadas_vencidas:
             dias_pausada = (ahora - sus.fecha_pausada).days
