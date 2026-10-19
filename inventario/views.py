@@ -2434,6 +2434,22 @@ class TiendaViewSet(viewsets.ModelViewSet):
             return False
         return getattr(tienda, 'plataforma_ecommerce', 'NINGUNA') == 'MERCADO_LIBRE'
 
+    def _mp_pos_autorizado(self, request, tienda, requiere_admin=False):
+        """Control de acceso para las acciones mercadopago-pos/* -- self.get_object()
+        de este ViewSet NO filtra por tienda del usuario (permission_classes acá
+        es solo IsAuthenticated), así que sin este chequeo CUALQUIER usuario
+        logueado del sistema podría operar el cobro con QR de CUALQUIER otra
+        tienda conociendo su id. requiere_admin=True para conectar/desconectar
+        (decisión de dueño, mismo criterio que IsAdminUser en
+        ArancelMetodoTiendaViewSet); False alcanza con pertenecer a la tienda
+        (un cajero necesita poder generar/consultar órdenes QR en el día a día)."""
+        user = request.user
+        if user.is_superuser:
+            return True
+        if tienda.pk not in _get_tiendas_ids_usuario(user):
+            return False
+        return user.is_staff if requiere_admin else True
+
     # ========== FACTURACIÓN ELECTRÓNICA ==========
 
     @action(detail=True, methods=['post'], url_path='facturacion/generar-csr')
@@ -3561,6 +3577,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadopago_pos_service import MercadoPagoPosService
 
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda, requiere_admin=True):
+            return Response({'error': 'No tenés permiso para conectar Mercado Pago en esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         if not dj_settings.MP_POS_CLIENT_ID:
             return Response(
                 {'error': 'MP_POS_CLIENT_ID no configurado en el servidor.'},
@@ -3586,6 +3604,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
     def mp_pos_status(self, request, pk=None):
         """Estado de la conexión de Mercado Pago (cobro con QR) de esta tienda."""
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda):
+            return Response({'error': 'No tenés permiso para ver esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         return Response({
             'connected': bool(tienda.mp_pos_access_token and tienda.mp_pos_external_id),
             'mp_user_id': tienda.mp_pos_user_id,
@@ -3599,6 +3619,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadopago_pos_service import MercadoPagoPosService
 
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda, requiere_admin=True):
+            return Response({'error': 'No tenés permiso para desconectar Mercado Pago en esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         MercadoPagoPosService(tienda).desconectar()
         return Response({
             'success': True,
@@ -3616,6 +3638,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadopago_pos_service import MercadoPagoPosService, MercadoPagoPosReconnectRequired
 
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda):
+            return Response({'error': 'No tenés permiso para cobrar en esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         service = MercadoPagoPosService(tienda)
         if not service.esta_conectada():
             return Response(
@@ -3650,6 +3674,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadopago_pos_service import MercadoPagoPosService, MercadoPagoPosReconnectRequired
 
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda):
+            return Response({'error': 'No tenés permiso para consultar pagos de esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         service = MercadoPagoPosService(tienda)
         if not service.esta_conectada():
             return Response({'error': 'Esta tienda no tiene conectada su cuenta de Mercado Pago.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -3676,6 +3702,8 @@ class TiendaViewSet(viewsets.ModelViewSet):
         from .services.mercadopago_pos_service import MercadoPagoPosService
 
         tienda = self.get_object()
+        if not self._mp_pos_autorizado(request, tienda):
+            return Response({'error': 'No tenés permiso para esta acción sobre esta tienda.'}, status=status.HTTP_403_FORBIDDEN)
         order_id = request.data.get('order_id')
         if not order_id:
             return Response({'error': 'order_id es obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
