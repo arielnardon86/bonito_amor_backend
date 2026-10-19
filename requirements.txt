@@ -14,9 +14,15 @@ python-dotenv==1.1.1
 sqlparse==0.5.3
 typing_extensions==4.14.1
 whitenoise==6.6.0
-# pyafipws instalado desde GitHub (versión más reciente)
-# Instalar con: pip install git+https://github.com/reingart/pyafipws.git
-pyafipws @ git+https://github.com/reingart/pyafipws.git
+# pyafipws instalado desde GitHub, fijado a un commit exacto -- sin esto,
+# cada reinstalación de dependencias (ej. un redeploy que reconstruye el
+# entorno) trae lo último que haya en la rama default de ese momento, sin
+# aviso, pudiendo cambiar el comportamiento de la facturación electrónica
+# de un día para el otro. Commit confirmado como el que corre en
+# producción al 19/10/2026 (pip show pyafipws / direct_url.json).
+# Para actualizar a propósito: correr pip install --upgrade, confirmar que
+# todo sigue funcionando, y pegar acá el commit_id nuevo.
+pyafipws @ git+https://github.com/reingart/pyafipws.git@d595b072110accec9dae1ddb58165ab847b8520a
 requests==2.31.0
 cryptography==41.0.7
 setuptools>=80.0.0  # Necesario para pyafipws en Python 3.12+
