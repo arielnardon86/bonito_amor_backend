@@ -451,8 +451,21 @@ class IsAdminOrSuperUser(BasePermission):
     Permiso personalizado que permite acceso a usuarios que sean superusuarios O staff.
     """
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and 
+        return bool(request.user and request.user.is_authenticated and
                    (request.user.is_superuser or request.user.is_staff))
+
+
+class IsTiendaOwner(BasePermission):
+    """
+    Exige específicamente is_superuser (el dueño de la tienda, no un empleado
+    con is_staff) -- a diferencia de IsAdminOrSuperUser y de
+    permissions.IsAdminUser (que solo mira is_staff). Usado donde la acción
+    equivalente en el frontend está gateada a is_superuser (ej. el Panel de
+    Administración completo), para que un empleado con is_staff no pueda
+    hacer por API lo que la UI nunca le ofrece.
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
 
 
 def _get_tiendas_ids_usuario(user):
@@ -7102,7 +7115,12 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
         if self.action in ['list', 'retrieve']:
             permission_classes = [permissions.IsAuthenticated]
         else:
-            permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+            # IsTiendaOwner (no permissions.IsAdminUser) -- este ViewSet solo se usa
+            # desde el Panel de Administración, que en el frontend ya está gateado a
+            # is_superuser (ver App.js). Un empleado con is_staff pero sin
+            # is_superuser no debería poder editar aranceles por API aunque nunca
+            # vea el botón.
+            permission_classes = [permissions.IsAuthenticated, IsTiendaOwner]
         return [permission() for permission in permission_classes]
     
     def get_serializer_class(self):
