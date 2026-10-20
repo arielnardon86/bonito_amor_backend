@@ -43,6 +43,12 @@ def noop(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # Sin transacción envolvente: el backfill es idempotente (get_or_create),
+    # así que si se corta a mitad de camino (ej. un deploy que se cancela
+    # porque llegó uno más nuevo) no hace falta revertir nada -- el próximo
+    # intento retoma donde quedó en vez de necesitar sostener una sola
+    # transacción larga sobre inventario_tienda/metodopago/arancelmetodotienda.
+    atomic = False
 
     dependencies = [
         ('inventario', '0106_tienda_mercadopago_pos'),
