@@ -16,7 +16,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.views import APIView
 from rest_framework.permissions import BasePermission
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Exists, Case, When
+from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Exists, Case, When, Prefetch
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime, date
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -6064,6 +6064,12 @@ class VentaViewSet(viewsets.ModelViewSet):
             'detalles__producto',
             'nota_credito_origen__detalles__detalle_venta_original__producto',
             'cambio_devolucion_diferencia',
+            # Sin esto, VentaSerializer.get_tiene_factura() pegaba una query a
+            # inventario_factura POR VENTA (medido: 20 filas, 20 queries de
+            # más) -- .filter(estado='EMITIDA') en el related manager nunca usa
+            # la cache de prefetch_related, por eso va con to_attr en vez de
+            # solo listar el nombre de la relación.
+            Prefetch('facturas_consolidadas', queryset=Factura.objects.filter(estado='EMITIDA'), to_attr='facturas_consolidadas_emitidas'),
         ).order_by('-fecha_venta')
         tienda_slug = self.request.query_params.get('tienda_slug', None)
         
@@ -6282,6 +6288,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 'detalles__producto',
                 'nota_credito_origen__detalles__detalle_venta_original__producto',
                 'cambio_devolucion_diferencia',
+                Prefetch('facturas_consolidadas', queryset=Factura.objects.filter(estado='EMITIDA'), to_attr='facturas_consolidadas_emitidas'),
             ).get(pk=pk)
         except Venta.DoesNotExist:
             return Response(
@@ -10292,7 +10299,12 @@ class ClienteViewSet(viewsets.ModelViewSet):
         cliente = self.get_object()
         ventas = Venta.objects.filter(cliente=cliente, anulada=False).select_related(
             'tienda', 'usuario', 'arancel_aplicado', 'factura'
-        ).prefetch_related('detalles__producto').order_by('-fecha_venta')
+        ).prefetch_related(
+            'detalles__producto',
+            'nota_credito_origen',
+            'cambio_devolucion_diferencia',
+            Prefetch('facturas_consolidadas', queryset=Factura.objects.filter(estado='EMITIDA'), to_attr='facturas_consolidadas_emitidas'),
+        ).order_by('-fecha_venta')
         movimientos = cliente.movimientos_cuenta_corriente.all().order_by('-fecha')
         tiene_deuda_vencida, fecha_vencimiento_mas_antigua = obtener_deuda_vencida_info(cliente)
         return Response({

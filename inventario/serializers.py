@@ -623,6 +623,16 @@ class VentaSerializer(serializers.ModelSerializer):
         # por una factura de "consumos del mes" consolidada igual (ver
         # ClienteViewSet.facturar_consumos_mes) -- sin este fallback, el resto de
         # las ventas de un lote consolidado se verían "sin factura" para siempre.
+        #
+        # .filter() sobre un related manager SIEMPRE pega contra la base, nunca
+        # usa la cache de prefetch_related -- en un listado esto era una query
+        # de más por cada venta (N+1 medido: 20 filas, 20 queries extra a
+        # inventario_factura). Si el queryset vino con el Prefetch(to_attr=
+        # 'facturas_consolidadas_emitidas') de VentaViewSet, se usa esa lista ya
+        # resuelta; si no (otro call site que arma VentaSerializer sin ese
+        # prefetch), cae a la query de siempre.
+        if hasattr(obj, 'facturas_consolidadas_emitidas'):
+            return len(obj.facturas_consolidadas_emitidas) > 0
         return obj.facturas_consolidadas.filter(estado='EMITIDA').exists()
 
     def get_cambio_devolucion_nota_credito(self, obj):
