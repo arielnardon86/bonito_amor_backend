@@ -27,6 +27,7 @@ from django.db.models import DecimalField
 from django.db import close_old_connections, models, transaction
 from django.http import HttpResponse, Http404
 from django.core.cache import cache
+from django.views.decorators.cache import cache_page
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -7120,12 +7121,28 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     # desaparecía del selector del Punto de Venta para todas las tiendas.
     pagination_class = None
 
+    CACHE_KEY = 'metodos_pago_activos_list'
+
     def get_queryset(self):
         """
         Retorna todos los métodos de pago activos.
         Mercado Libre siempre se muestra para permitir ventas manuales con aranceles por producto.
+
+        Es el MISMO catálogo global para TODAS las tiendas (no hay nada por
+        usuario/tienda acá) y lo pide cada componente de cada tienda en cada
+        carga de página (Punto de Venta, Panel de Administración, Cambios y
+        Devoluciones, Cliente, Presupuesto) -- se cachea la lista ya resuelta
+        en vez de pegarle a la base en cada uno. MetodoPago.save() borra este
+        cache apenas se crea/edita un método, así que nunca queda más de
+        unos segundos desactualizado aunque alguien olvide invalidarlo a mano
+        (el timeout de acá es solo una red de seguridad).
         """
-        return MetodoPago.objects.filter(activo=True).order_by('nombre')
+        cached = cache.get(self.CACHE_KEY)
+        if cached is not None:
+            return cached
+        queryset = list(MetodoPago.objects.filter(activo=True).order_by('nombre'))
+        cache.set(self.CACHE_KEY, queryset, timeout=120)
+        return queryset
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
@@ -10879,6 +10896,9 @@ class PresupuestoViewSet(viewsets.ModelViewSet):
 
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
+@cache_page(60 * 5)  # Público, igual para todos, cambia poquísimo (precios/límites de
+# los 3 planes) -- 5 min de cache le ahorra una query de DB a cada visita de la
+# landing/registro sin arriesgar que un cambio de precio tarde en verse.
 def planes_publicos(request):
     """Devuelve los 3 planes con sus límites y features (endpoint público)."""
     from .models import Plan

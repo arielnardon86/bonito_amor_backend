@@ -5,6 +5,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 from django.utils import timezone
 from django.conf import settings
+from django.core.cache import cache
 from decimal import Decimal
        
 # Modelo de Usuario Personalizado
@@ -581,6 +582,12 @@ class MetodoPago(models.Model):
     def save(self, *args, **kwargs):
         es_nuevo = self._state.adding
         super().save(*args, **kwargs)
+        # MetodoPagoViewSet cachea la lista de métodos activos (es el mismo
+        # catálogo global para todas las tiendas, pedido en cada carga de
+        # página) -- se invalida apenas se crea/edita uno para que un cambio
+        # de 'activo', nombre, etc. se vea al toque, no recién cuando venza
+        # el timeout de la cache.
+        cache.delete('metodos_pago_activos_list')
         if es_nuevo and self.es_financiero and not self.requiere_integracion_mp and self.nombre != 'Mercado Libre':
             # Un método financiero nuevo (ej. agregado a mano desde "Nuevo
             # Arancel" o el admin) se precarga en 0.00% para TODAS las
