@@ -194,11 +194,21 @@ class MercadoPagoPosService:
     # ── Provisioning (una sola vez, al conectar) ────────────────────────────
 
     def _buscar_store_por_external_id(self, user_id, external_id, headers):
+        # GET /users/{user_id}/stores/external_id/{external_id} (lo usado
+        # antes) no es el endpoint real de la API de Stores de QR Code -- esa
+        # ruta pertenece a otro producto de MP (proximity-integration/MP
+        # Delivery) y devolvía 404 siempre, así que la búsqueda nunca
+        # encontraba la sucursal ya creada y el POST de creación fallaba con
+        # "external id ya asignado a este usuario". El endpoint correcto es
+        # /stores/search con external_id como query param (mismo patrón que
+        # la búsqueda de POS).
         resp = requests.get(
-            f"{MP_API_BASE}/users/{user_id}/stores/external_id/{external_id}", headers=headers, timeout=15
+            f"{MP_API_BASE}/users/{user_id}/stores/search", params={'external_id': external_id}, headers=headers, timeout=15
         )
         if resp.status_code == 200:
-            return resp.json()
+            resultados = resp.json().get('results') or []
+            if resultados:
+                return resultados[0]
         return None
 
     def _buscar_pos_por_external_id(self, external_id, headers):
@@ -257,8 +267,22 @@ class MercadoPagoPosService:
             resp_store = requests.post(
                 f"{MP_API_BASE}/users/{user_id}/stores", json=store_body, headers=headers, timeout=15
             )
-            _raise_con_detalle(resp_store)
-            store_id = resp_store.json().get('id')
+            if resp_store.status_code == 400 and 'already assigned' in resp_store.text:
+                # Red de seguridad: si la búsqueda previa no la encontró por
+                # algún motivo (ej. demora en indexar del lado de MP) pero la
+                # sucursal en realidad ya existe, se reintenta la búsqueda en
+                # vez de fallar -- MP ya nos dijo explícitamente que existe.
+                store_existente = self._buscar_store_por_external_id(user_id, external_store_id, headers)
+                if not store_existente:
+                    _raise_con_detalle(resp_store)
+                store_id = store_existente.get('id')
+                logger.warning(
+                    "Sucursal de Mercado Pago para %s ya existía (external_id=%s) pero la búsqueda previa no la encontró -- se reusa igual.",
+                    self.tienda.nombre, external_store_id,
+                )
+            else:
+                _raise_con_detalle(resp_store)
+                store_id = resp_store.json().get('id')
 
         pos_external_id = f"POS{str(self.tienda.id).replace('-', '')[:17].upper()}"
         pos_existente = self._buscar_pos_por_external_id(pos_external_id, headers)
@@ -272,7 +296,18 @@ class MercadoPagoPosService:
                 'external_id': pos_external_id,
             }
             resp_pos = requests.post(f"{MP_API_BASE}/pos", json=pos_body, headers=headers, timeout=15)
-            _raise_con_detalle(resp_pos)
+            if resp_pos.status_code == 409:
+                # Misma red de seguridad que la sucursal: la API de POS
+                # devuelve 409 (no 400) cuando el external_id ya existe.
+                pos_existente = self._buscar_pos_por_external_id(pos_external_id, headers)
+                if not pos_existente:
+                    _raise_con_detalle(resp_pos)
+                logger.warning(
+                    "Caja de Mercado Pago para %s ya existía (external_id=%s) pero la búsqueda previa no la encontró -- se reusa igual.",
+                    self.tienda.nombre, pos_external_id,
+                )
+            else:
+                _raise_con_detalle(resp_pos)
 
         self.tienda.mp_pos_store_id = str(store_id)
         self.tienda.mp_pos_external_id = pos_external_id
