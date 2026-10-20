@@ -181,10 +181,34 @@ class MercadoPagoPosService:
 
     # ── Provisioning (una sola vez, al conectar) ────────────────────────────
 
+    def _buscar_store_por_external_id(self, user_id, external_id, headers):
+        resp = requests.get(
+            f"{MP_API_BASE}/users/{user_id}/stores/external_id/{external_id}", headers=headers, timeout=15
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+
+    def _buscar_pos_por_external_id(self, external_id, headers):
+        resp = requests.get(f"{MP_API_BASE}/pos", params={'external_id': external_id}, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            resultados = resp.json().get('results') or []
+            if resultados:
+                return resultados[0]
+        return None
+
     def provisionar_store_y_pos(self):
         """Crea una sucursal (store) y una caja (POS) en la cuenta recién
         conectada -- requisito de la API de MP para poder emitir órdenes QR.
-        Idempotente: si la tienda ya tiene mp_pos_external_id, no hace nada."""
+        Idempotente a nivel LOCAL (si la tienda ya tiene mp_pos_external_id,
+        no hace nada) y también a nivel de MP: external_store_id/
+        pos_external_id son deterministas (derivados del id de la tienda,
+        no cambian), así que al desconectar y volver a conectar la misma
+        tienda, MP ya tiene una sucursal/caja con ese external_id -- antes
+        este método intentaba crearlas de nuevo y MP devolvía 400/409 por
+        external_id duplicado (desconectar() solo limpia los campos locales,
+        nunca borra nada del lado de MP). Ahora busca por external_id antes
+        de crear, y reusa lo que ya exista."""
         if self.tienda.mp_pos_external_id:
             return
 
@@ -201,33 +225,42 @@ class MercadoPagoPosService:
         # "sucursal" del lado de MP. Si en el futuro se agrega ciudad/provincia
         # estructurada a Tienda, reemplazar acá.
         external_store_id = f"TS{str(self.tienda.id).replace('-', '')[:18].upper()}"
-        store_body = {
-            'name': f"{self.tienda.nombre} (Total Stock)",
-            'external_id': external_store_id,
-            'location': {
-                'street_number': '1',
-                'street_name': self.tienda.direccion or 'Sin domicilio',
-                'city_name': 'La Plata',
-                'state_name': 'Buenos Aires',
-                'latitude': -34.6037,
-                'longitude': -58.3816,
-            },
-        }
-        resp_store = requests.post(
-            f"{MP_API_BASE}/users/{user_id}/stores", json=store_body, headers=headers, timeout=15
-        )
-        resp_store.raise_for_status()
-        store_id = resp_store.json().get('id')
+        store_existente = self._buscar_store_por_external_id(user_id, external_store_id, headers)
+        if store_existente:
+            store_id = store_existente.get('id')
+            logger.info("Sucursal de Mercado Pago ya existía para %s (external_id=%s), se reusa.", self.tienda.nombre, external_store_id)
+        else:
+            store_body = {
+                'name': f"{self.tienda.nombre} (Total Stock)",
+                'external_id': external_store_id,
+                'location': {
+                    'street_number': '1',
+                    'street_name': self.tienda.direccion or 'Sin domicilio',
+                    'city_name': 'La Plata',
+                    'state_name': 'Buenos Aires',
+                    'latitude': -34.6037,
+                    'longitude': -58.3816,
+                },
+            }
+            resp_store = requests.post(
+                f"{MP_API_BASE}/users/{user_id}/stores", json=store_body, headers=headers, timeout=15
+            )
+            resp_store.raise_for_status()
+            store_id = resp_store.json().get('id')
 
         pos_external_id = f"POS{str(self.tienda.id).replace('-', '')[:17].upper()}"
-        pos_body = {
-            'name': f"Caja {self.tienda.nombre}",
-            'fixed_amount': False,
-            'store_id': str(store_id),
-            'external_id': pos_external_id,
-        }
-        resp_pos = requests.post(f"{MP_API_BASE}/pos", json=pos_body, headers=headers, timeout=15)
-        resp_pos.raise_for_status()
+        pos_existente = self._buscar_pos_por_external_id(pos_external_id, headers)
+        if pos_existente:
+            logger.info("Caja de Mercado Pago ya existía para %s (external_id=%s), se reusa.", self.tienda.nombre, pos_external_id)
+        else:
+            pos_body = {
+                'name': f"Caja {self.tienda.nombre}",
+                'fixed_amount': False,
+                'store_id': str(store_id),
+                'external_id': pos_external_id,
+            }
+            resp_pos = requests.post(f"{MP_API_BASE}/pos", json=pos_body, headers=headers, timeout=15)
+            resp_pos.raise_for_status()
 
         self.tienda.mp_pos_store_id = str(store_id)
         self.tienda.mp_pos_external_id = pos_external_id
