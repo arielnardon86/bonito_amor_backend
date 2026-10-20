@@ -2453,11 +2453,16 @@ class TiendaViewSet(viewsets.ModelViewSet):
         es solo IsAuthenticated), así que sin este chequeo CUALQUIER usuario
         logueado del sistema podría operar el cobro con QR de CUALQUIER otra
         tienda conociendo su id. requiere_admin=True para conectar/desconectar
-        (decisión de dueño, mismo criterio que IsAdminUser en
+        (decisión de dueño, mismo criterio que IsTiendaOwner en
         ArancelMetodoTiendaViewSet); False alcanza con pertenecer a la tienda
         (un cajero necesita poder generar/consultar órdenes QR en el día a día)."""
         user = request.user
-        if user.is_superuser:
+        # es_operador_plataforma (NO is_superuser): en este sistema TODO dueño de
+        # tienda tiene is_superuser=True (lo asigna registro_publico), no es
+        # exclusivo del equipo de Total Stock -- usar is_superuser acá dejaba que
+        # el dueño de CUALQUIER tienda operara el Mercado Pago de OTRA tienda con
+        # solo conocer su id, sin pertenecer a ella.
+        if getattr(user, 'es_operador_plataforma', False):
             return True
         if tienda.pk not in _get_tiendas_ids_usuario(user):
             return False
