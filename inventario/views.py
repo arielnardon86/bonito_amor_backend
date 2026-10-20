@@ -318,7 +318,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelTiendaNube, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelTiendaNube, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto, orden_plan
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -7119,6 +7119,14 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
 
 # CAMBIO CRUCIAL: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
+    # Sin paginar: la lista de aranceles de una tienda es chica y acotada (un
+    # puñado de métodos x unos pocos planes cada uno), pero con el
+    # PAGE_SIZE=10 default del proyecto una tienda con varios métodos
+    # configurados (ej. Tarjeta de Crédito con 6 planes + Go Cuotas con 4 ya
+    # son 10) se quedaba sin ver el resto -- tanto en "Aranceles
+    # Configurados" como en los selects de método/plan del Punto de Venta.
+    pagination_class = None
+
     def get_permissions(self):
         """Permitir lectura a usuarios staff, pero solo superusuarios pueden crear/editar/eliminar"""
         if self.action in ['list', 'retrieve']:
@@ -7146,21 +7154,21 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
         # Superusuarios pueden ver todos los aranceles
         if user.is_superuser:
             if tienda_slug:
-                result = queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+                result = queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre')
                 logger.info(f"✅ Superuser - Aranceles para tienda '{tienda_slug}': {result.count()} aranceles")
                 return result
-            result = queryset.order_by('tienda__nombre', 'metodo_pago__nombre', 'nombre_plan')
+            result = queryset.order_by('tienda__nombre', 'metodo_pago__nombre')
             logger.info(f"✅ Superuser - Todos los aranceles: {result.count()} aranceles")
             return result
-        
+
         # Supervisores: ven aranceles de su tienda principal + tiendas autorizadas
         elif user.is_supervisor:
             tiendas_ids = _get_tiendas_ids_usuario(user)
             if tienda_slug:
                 if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
-                    return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+                    return queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre')
                 return ArancelMetodoTienda.objects.none()
-            return queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre', 'nombre_plan')
+            return queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre')
 
         # Usuarios staff: pueden ver aranceles de su tienda principal + tiendas autorizadas
         elif user.is_staff:
@@ -7170,14 +7178,14 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
                 return ArancelMetodoTienda.objects.none()
             if tienda_slug:
                 if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
-                    result = queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre', 'nombre_plan')
+                    result = queryset.filter(tienda__nombre=tienda_slug).order_by('metodo_pago__nombre')
                     logger.info(f"✅ Staff '{user.username}' - Aranceles para tienda '{tienda_slug}': {result.count()}")
                     return result
                 logger.warning(f"⚠️ Staff '{user.username}' - Tienda '{tienda_slug}' no autorizada.")
                 return ArancelMetodoTienda.objects.none()
-            result = queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre', 'nombre_plan')
+            result = queryset.filter(tienda__pk__in=tiendas_ids).order_by('metodo_pago__nombre')
             logger.info(f"✅ Staff '{user.username}' - Aranceles de todas sus tiendas: {result.count()}")
-            return result
+            return self._ordenar_aranceles(result)
 
         # Si no es superuser ni staff, no puede ver aranceles
         logger.warning(f"⚠️ User '{user.username}' - Sin permisos para ver aranceles.")
@@ -7243,7 +7251,15 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):
         close_old_connections()
-        return super().list(request, *args, **kwargs)
+        # nombre_plan es un CharField -- ordenarlo a nivel de base de datos
+        # deja "12" antes que "2" (orden alfabético, no numérico). Acá se
+        # ordena en Python con orden_plan() recién al armar la respuesta de
+        # list(): get_queryset() sigue devolviendo un QuerySet de verdad
+        # (lo necesitan retrieve/update/destroy vía get_object()).
+        queryset = self.filter_queryset(self.get_queryset())
+        ordenado = sorted(queryset, key=lambda a: (a.tienda.nombre, a.metodo_pago.nombre, orden_plan(a.nombre_plan)))
+        serializer = self.get_serializer(ordenado, many=True)
+        return Response(serializer.data)
 
 
 class CompraViewSet(viewsets.ModelViewSet):

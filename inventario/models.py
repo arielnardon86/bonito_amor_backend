@@ -594,7 +594,9 @@ class ArancelMetodoTienda(models.Model):
     PLAN_CHOICES = [
         ('CONTADO', 'Contado / Pago Único'),
         ('1', '1 Cuota'),
+        ('2', '2 Cuotas'),
         ('3', '3 Cuotas'),
+        ('4', '4 Cuotas'),
         ('6', '6 Cuotas'),
         ('12', '12 Cuotas'),
         ('Z', 'Z (Plan Z)'),
@@ -623,11 +625,45 @@ class ArancelMetodoTienda(models.Model):
 # ------------------------------------------------
 
 
+# Planes default por método -- cada método financiero tiene su propio set de
+# cuotas habituales (ej. una tarjeta de débito no tiene cuotas, Go Cuotas
+# ofrece 1 a 4) en vez de precargar las 8 opciones de PLAN_CHOICES para
+# todos por igual. El método que no esté acá (uno nuevo, agregado a mano)
+# cae en PLANES_DEFAULT_FALLBACK -- un solo pago, la opción más conservadora.
+PLANES_DEFAULT_POR_METODO = {
+    'Go Cuotas': ['1', '2', '3', '4'],
+    'Tarjeta de Débito': ['1'],
+    'Tarjeta de Crédito': ['CONTADO', '1', '3', '6', '12', 'Z'],
+    'QR': ['1'],
+    'QR Mercado Pago': ['1'],
+}
+PLANES_DEFAULT_FALLBACK = ['1']
+
+# Orden canónico de los planes predefinidos -- nombre_plan es un CharField,
+# así que un .order_by('nombre_plan') a nivel de base de datos ordena
+# alfabéticamente como texto ('12' antes que '2'). orden_plan() da una clave
+# de orden numérica real para usar del lado de Python después de traer los
+# resultados (ver ArancelMetodoTiendaViewSet._ordenar_aranceles).
+PLAN_ORDEN_CANONICO = [value for value, _ in ArancelMetodoTienda.PLAN_CHOICES]
+
+
+def orden_plan(nombre_plan):
+    if nombre_plan in PLAN_ORDEN_CANONICO:
+        return (0, PLAN_ORDEN_CANONICO.index(nombre_plan))
+    try:
+        return (1, int(nombre_plan))
+    except (TypeError, ValueError):
+        return (2, nombre_plan or '')
+
+
 def asegurar_aranceles_default(tienda, metodos=None):
     """Crea (si no existen) los ArancelMetodoTienda de `tienda` para cada
-    combinación de método de pago financiero x plan predefinido, con 0.00%
-    por defecto -- así el cliente no tiene que "crear" el arancel, solo
-    editar el % retenido de cada combinación que ya existe.
+    combinación de método de pago financiero x plan default de ESE método
+    (ver PLANES_DEFAULT_POR_METODO), con 0.00% -- así el cliente no tiene
+    que "crear" el arancel, solo editar el % retenido de cada combinación
+    que ya existe. Si una tienda quiere un plan que no está en el default,
+    lo agrega a mano desde "Nuevo Arancel" -- eso solo le crea la fila a
+    ESA tienda, no afecta a las demás.
 
     Se excluye 'Mercado Libre' (tiene su propio modelo de arancel por
     categoría, ArancelMercadoLibre) y cualquier método con
@@ -641,7 +677,8 @@ def asegurar_aranceles_default(tienda, metodos=None):
             es_financiero=True, requiere_integracion_mp=False
         ).exclude(nombre='Mercado Libre')
     for metodo in metodos:
-        for plan_value, _ in ArancelMetodoTienda.PLAN_CHOICES:
+        planes = PLANES_DEFAULT_POR_METODO.get(metodo.nombre, PLANES_DEFAULT_FALLBACK)
+        for plan_value in planes:
             ArancelMetodoTienda.objects.get_or_create(
                 tienda=tienda, metodo_pago=metodo, nombre_plan=plan_value,
                 defaults={'arancel_porcentaje': Decimal('0.00')},
