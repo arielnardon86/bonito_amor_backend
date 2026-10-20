@@ -49,6 +49,18 @@ class MercadoPagoPosReconnectRequired(Exception):
     pass
 
 
+def _raise_con_detalle(resp):
+    """resp.raise_for_status() por sí solo da un mensaje genérico ("400
+    Client Error: Bad Request for url: ...") sin decir el motivo -- las APIs
+    de MP siempre devuelven un cuerpo JSON explicando qué campo o condición
+    falló. Esto lo agrega al mensaje de la excepción para no tener que
+    adivinar la causa a partir del código HTTP solo."""
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        raise requests.exceptions.HTTPError(f"{e} | Respuesta de Mercado Pago: {resp.text[:500]}", response=resp) from e
+
+
 class MercadoPagoPosService:
     def __init__(self, tienda):
         self.tienda = tienda
@@ -245,7 +257,7 @@ class MercadoPagoPosService:
             resp_store = requests.post(
                 f"{MP_API_BASE}/users/{user_id}/stores", json=store_body, headers=headers, timeout=15
             )
-            resp_store.raise_for_status()
+            _raise_con_detalle(resp_store)
             store_id = resp_store.json().get('id')
 
         pos_external_id = f"POS{str(self.tienda.id).replace('-', '')[:17].upper()}"
@@ -260,7 +272,7 @@ class MercadoPagoPosService:
                 'external_id': pos_external_id,
             }
             resp_pos = requests.post(f"{MP_API_BASE}/pos", json=pos_body, headers=headers, timeout=15)
-            resp_pos.raise_for_status()
+            _raise_con_detalle(resp_pos)
 
         self.tienda.mp_pos_store_id = str(store_id)
         self.tienda.mp_pos_external_id = pos_external_id
