@@ -191,6 +191,13 @@ class MercadoPagoPosService:
         self.access_token = None
         self.refresh_token = None
 
+        # Destilda "QR Mercado Pago" en "Medios de Pago Disponibles" -- su
+        # checkbox refleja el estado real de la conexión.
+        from ..models import MetodoPago, MetodoPagoTienda
+        metodo_mp = MetodoPago.objects.filter(nombre='QR Mercado Pago').first()
+        if metodo_mp:
+            MetodoPagoTienda.objects.filter(tienda=self.tienda, metodo_pago=metodo_mp).update(activo=False)
+
     # ── Provisioning (una sola vez, al conectar) ────────────────────────────
 
     def _buscar_store_por_external_id(self, user_id, external_id, headers):
@@ -320,10 +327,16 @@ class MercadoPagoPosService:
         # Recién conectada: precarga el arancel de "QR Mercado Pago" en 0.00%
         # para todos los planes predefinidos, igual que los demás métodos
         # financieros -- así al cliente solo le queda editar el % retenido.
-        from ..models import MetodoPago, asegurar_aranceles_default
+        # También lo marca habilitado en "Medios de Pago Disponibles" -- ahí
+        # su checkbox está atado al estado de conexión, no es un toggle
+        # independiente.
+        from ..models import MetodoPago, MetodoPagoTienda, asegurar_aranceles_default
         metodo_mp = MetodoPago.objects.filter(nombre='QR Mercado Pago').first()
         if metodo_mp:
             asegurar_aranceles_default(self.tienda, metodos=[metodo_mp])
+            MetodoPagoTienda.objects.update_or_create(
+                tienda=self.tienda, metodo_pago=metodo_mp, defaults={'activo': True}
+            )
 
     # ── Cobro con QR ─────────────────────────────────────────────────────
 

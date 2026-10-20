@@ -308,6 +308,9 @@ class Tienda(models.Model):
             # -- así el cliente solo edita el % retenido en vez de tener que
             # crear cada combinación a mano. Ver asegurar_aranceles_default.
             asegurar_aranceles_default(self)
+            # Habilita los métodos de pago default (Efectivo, Transferencia,
+            # etc.) -- ver METODOS_HABILITADOS_DEFAULT.
+            asegurar_metodos_habilitados_default(self)
 
     def __str__(self):
         return self.nombre
@@ -625,6 +628,50 @@ class ArancelMetodoTienda(models.Model):
 # ------------------------------------------------
 
 
+# --- HABILITACIÓN DE MÉTODO DE PAGO POR TIENDA ---
+class MetodoPagoTienda(models.Model):
+    """MetodoPago es un catálogo GLOBAL (compartido por todas las tiendas),
+    así que no alcanza con su campo `activo` para que una tienda decida
+    ofrecer o no un método -- eso apagaría el método para TODAS. Esta tabla
+    es el "sí/no" de CADA tienda para cada método, independiente de
+    ArancelMetodoTienda (que es el % de cada plan, y solo existe para
+    métodos financieros). Un método sin fila acá para una tienda se
+    considera no habilitado."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name='metodos_pago_habilitados')
+    metodo_pago = models.ForeignKey(MetodoPago, on_delete=models.CASCADE, related_name='tiendas_habilitadas')
+    activo = models.BooleanField(default=True)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Método de Pago habilitado por Tienda"
+        verbose_name_plural = "Métodos de Pago habilitados por Tienda"
+        unique_together = ('tienda', 'metodo_pago')
+        ordering = ['tienda', 'metodo_pago']
+
+    def __str__(self):
+        return f"{self.tienda.nombre} - {self.metodo_pago.nombre} ({'activo' if self.activo else 'inactivo'})"
+# ------------------------------------------------
+
+
+# Métodos habilitados por defecto en una tienda nueva -- el resto (QR
+# Mercado Pago, Go Cuotas, o cualquier método custom que un dueño agregue)
+# arranca deshabilitado, el dueño lo prende a mano desde "Medios de Pago
+# Disponibles". 'Mercado Libre' y 'Tienda Nube' nunca entran acá -- son de
+# uso interno (ventas de esos canales), no algo que un cajero elija a mano.
+METODOS_HABILITADOS_DEFAULT = [
+    'Efectivo', 'Transferencia', 'Tarjeta de Débito', 'Tarjeta de Crédito', 'QR', 'Cuenta Corriente',
+]
+METODOS_EXCLUIDOS_SIEMPRE = ['Mercado Libre', 'Tienda Nube']
+
+
+def asegurar_metodos_habilitados_default(tienda):
+    for metodo in MetodoPago.objects.filter(nombre__in=METODOS_HABILITADOS_DEFAULT):
+        MetodoPagoTienda.objects.get_or_create(tienda=tienda, metodo_pago=metodo, defaults={'activo': True})
+
+
 # Planes default por método -- cada método financiero tiene su propio set de
 # cuotas habituales (ej. una tarjeta de débito no tiene cuotas, Go Cuotas
 # ofrece 1 a 4) en vez de precargar las 8 opciones de PLAN_CHOICES para
@@ -671,10 +718,17 @@ def asegurar_aranceles_default(tienda, metodos=None):
     habilitan al conectar la cuenta, ver
     MercadoPagoPosService.provisionar_store_y_pos -- que llama a esta misma
     función pasándole explícitamente ese método una vez conectado.
+
+    Con `metodos=None` (tienda nueva, ver Tienda.save()) solo se precargan
+    los métodos de METODOS_HABILITADOS_DEFAULT -- los demás (ej. "Go
+    Cuotas") no vienen habilitados por default, así que tampoco tiene
+    sentido precargarles filas de arancel: quedarían invisibles en el
+    Punto de Venta pero visibles en "Aranceles Configurados", que es
+    confuso. Se precargan recién cuando la tienda los habilita a mano.
     """
     if metodos is None:
         metodos = MetodoPago.objects.filter(
-            es_financiero=True, requiere_integracion_mp=False
+            es_financiero=True, requiere_integracion_mp=False, nombre__in=METODOS_HABILITADOS_DEFAULT
         ).exclude(nombre='Mercado Libre')
     for metodo in metodos:
         planes = PLANES_DEFAULT_POR_METODO.get(metodo.nombre, PLANES_DEFAULT_FALLBACK)

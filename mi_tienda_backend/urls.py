@@ -6,7 +6,7 @@ from inventario.views import (
     ProductoViewSet, CategoriaViewSet, TiendaViewSet, UserViewSet,
     VentaViewSet, DetalleVentaViewSet, MetodoPagoViewSet, CompraViewSet, CompraStockViewSet,
     CustomTokenObtainPairView, MetricasAPIView, InventarioMetricsAPIView, WidgetVentasHoyAPIView,
-    ArancelMetodoTiendaViewSet, ArancelTiendaNubeViewSet, FacturaViewSet, NotaCreditoViewSet,
+    ArancelMetodoTiendaViewSet, MetodoPagoTiendaViewSet, ArancelTiendaNubeViewSet, FacturaViewSet, NotaCreditoViewSet,
     CierreCajaViewSet, EgresoCajaViewSet, HistorialAccionViewSet,
     ClienteViewSet,
     ProveedorViewSet,
@@ -67,6 +67,7 @@ router.register(r'metodos-pago', MetodoPagoViewSet, basename='metodos-pago')
 router.register(r'compras', CompraViewSet, basename='compras')
 router.register(r'compras-stock', CompraStockViewSet, basename='compras-stock')
 router.register(r'aranceles-tienda', ArancelMetodoTiendaViewSet, basename='aranceles-tienda') # NUEVA RUTA
+router.register(r'metodos-pago-tienda', MetodoPagoTiendaViewSet, basename='metodos-pago-tienda')
 # Aranceles ML por PRODUCTO (arancel % + costo envío) - nueva API principal
 if ArancelMercadoLibreProductoViewSet is not None:
     router.register(r'aranceles-ml', ArancelMercadoLibreProductoViewSet, basename='aranceles-ml')

@@ -19,7 +19,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Count, F, Q, Value, Subquery, OuterRef, Exists, Case, When
 from django.db.models.functions import Coalesce, ExtractYear, ExtractMonth, ExtractDay, ExtractHour
 from datetime import timedelta, datetime, date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from django.utils import timezone 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
@@ -318,7 +318,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
 
 # CAMBIO 1: Importar ArancelMetodoTienda y ArancelMercadoLibre (con importación condicional)
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelTiendaNube, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto, orden_plan
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, MetodoPagoTienda, Compra, CompraStock, ArancelMetodoTienda, ArancelTiendaNube, CategoriaMercadoLibre, Factura, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto, orden_plan, METODOS_EXCLUIDOS_SIEMPRE
 
 # Importación condicional de ArancelMercadoLibre (puede no existir si la migración no se ha aplicado)
 try:
@@ -392,6 +392,7 @@ from .serializers import (
     NotaCreditoSerializer, EmitirNotaCreditoSerializer,
     UserCreateSerializer, UserUpdateSerializer, ChangePasswordSerializer,
     ArancelMetodoTiendaCreateSerializer,
+    MetodoPagoTiendaSerializer, MetodoPagoTiendaCreateSerializer,
     CierreCajaSerializer, EgresoCajaSerializer,
     ClienteSerializer, ProveedorSerializer, MovimientoCuentaCorrienteSerializer,
     calcular_saldo_pendiente, obtener_deuda_vencida_info,
@@ -7125,6 +7126,79 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
         return super().list(request, *args, **kwargs)
 
 
+# NUEVO VIEWSET: habilitación de método de pago por tienda ("Medios de Pago
+# Disponibles") -- MetodoPago es un catálogo global, esto es el sí/no de
+# CADA tienda.
+class MetodoPagoTiendaViewSet(viewsets.ModelViewSet):
+    pagination_class = None
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [permissions.IsAuthenticated]
+        else:
+            # Mismo criterio que ArancelMetodoTiendaViewSet: solo el dueño
+            # (is_superuser) habilita/deshabilita métodos, no un empleado
+            # con is_staff.
+            permission_classes = [permissions.IsAuthenticated, IsTiendaOwner]
+        return [permission() for permission in permission_classes]
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return MetodoPagoTiendaCreateSerializer
+        return MetodoPagoTiendaSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = MetodoPagoTienda.objects.all().select_related('tienda', 'metodo_pago').exclude(
+            metodo_pago__nombre__in=METODOS_EXCLUIDOS_SIEMPRE
+        )
+        tienda_slug = self.request.query_params.get('tienda_slug', None)
+
+        if user.is_superuser:
+            if tienda_slug:
+                return queryset.filter(tienda__nombre=tienda_slug)
+            return queryset
+        tiendas_ids = _get_tiendas_ids_usuario(user)
+        if not tiendas_ids:
+            return MetodoPagoTienda.objects.none()
+        if tienda_slug:
+            if Tienda.objects.filter(nombre=tienda_slug, pk__in=tiendas_ids).exists():
+                return queryset.filter(tienda__nombre=tienda_slug)
+            return MetodoPagoTienda.objects.none()
+        return queryset.filter(tienda__pk__in=tiendas_ids)
+
+    def perform_create(self, serializer):
+        """"Crear" acá es upsert: tildar/destildar un método ya habilitado
+        antes no debería duplicar la fila (unique_together tienda+método)."""
+        tienda_slug = self.request.data.get('tienda')
+        try:
+            tienda = Tienda.objects.get(nombre=tienda_slug) if tienda_slug else serializer.validated_data.get('tienda')
+        except Tienda.DoesNotExist:
+            from rest_framework import serializers as drf_serializers
+            raise drf_serializers.ValidationError({'tienda': 'Tienda no encontrada'})
+        if not tienda:
+            serializer.save()
+            return
+
+        metodo = serializer.validated_data.get('metodo_pago')
+        activo = serializer.validated_data.get('activo', True)
+        if metodo and activo and metodo.requiere_integracion_mp:
+            if not (tienda.mp_pos_access_token and tienda.mp_pos_external_id):
+                from rest_framework import serializers as drf_serializers
+                raise drf_serializers.ValidationError({
+                    'metodo_pago': f'Para habilitar "{metodo.nombre}" primero tenés que conectar la cuenta de Mercado Pago de esta tienda.',
+                    'reconnect_required': True,
+                })
+
+        existente = MetodoPagoTienda.objects.filter(tienda=tienda, metodo_pago=metodo).first()
+        if existente:
+            existente.activo = activo
+            existente.save(update_fields=['activo', 'fecha_actualizacion'])
+            serializer.instance = existente
+        else:
+            serializer.save(tienda=tienda)
+
+
 # CAMBIO CRUCIAL: NUEVO VIEWSET para aranceles
 class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
     # Sin paginar: la lista de aranceles de una tienda es chica y acotada (un
@@ -7255,6 +7329,53 @@ class ArancelMetodoTiendaViewSet(viewsets.ModelViewSet):
         nuevo_metodo = serializer.validated_data.get('metodo_pago', instancia.metodo_pago)
         self._validar_requiere_mp(instancia.tienda, nuevo_metodo)
         serializer.save()
+
+    @action(detail=False, methods=['post'], url_path='bulk-crear')
+    def bulk_crear(self, request):
+        """Crea/actualiza varios planes de un método en un solo paso, cada
+        uno con su propio %. Body: {tienda, metodo_pago,
+        planes: [{nombre_plan, arancel_porcentaje}, ...]}."""
+        tienda_slug = request.data.get('tienda')
+        metodo_id = request.data.get('metodo_pago')
+        planes = request.data.get('planes') or []
+
+        if not tienda_slug or not metodo_id or not planes:
+            return Response(
+                {'error': 'Faltan datos: tienda, metodo_pago y planes (lista) son obligatorios.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            tienda = Tienda.objects.get(nombre=tienda_slug)
+        except Tienda.DoesNotExist:
+            return Response({'error': 'Tienda no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            metodo = MetodoPago.objects.get(pk=metodo_id)
+        except (MetodoPago.DoesNotExist, ValueError, TypeError):
+            return Response({'error': 'Método de pago no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        self._validar_requiere_mp(tienda, metodo)
+
+        resultado = []
+        for item in planes:
+            nombre_plan = str(item.get('nombre_plan') or '').strip()
+            if not nombre_plan:
+                continue
+            try:
+                porcentaje = Decimal(str(item.get('arancel_porcentaje')))
+            except (InvalidOperation, ValueError, TypeError):
+                return Response({'error': f'"{nombre_plan}": arancel inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+            if porcentaje < 0 or porcentaje > 100:
+                return Response({'error': f'"{nombre_plan}": el arancel debe estar entre 0 y 100%.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            arancel, _creado = ArancelMetodoTienda.objects.update_or_create(
+                tienda=tienda, metodo_pago=metodo, nombre_plan=nombre_plan,
+                defaults={'arancel_porcentaje': porcentaje},
+            )
+            resultado.append(ArancelMetodoTiendaSerializer(arancel).data)
+
+        if not resultado:
+            return Response({'error': 'No se guardó ningún plan.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(resultado, status=status.HTTP_200_OK)
 
     # FIX DE CONEXIÓN
     def list(self, request, *args, **kwargs):

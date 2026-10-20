@@ -2,7 +2,7 @@
 import logging
 import re
 from rest_framework import serializers
-from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, ArancelTiendaNube, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
+from .models import Producto, Categoria, Tienda, User, Venta, DetalleVenta, MetodoPago, Compra, CompraStock, ArancelMetodoTienda, MetodoPagoTienda, ArancelMercadoLibre, ArancelMercadoLibreProducto, ArancelTiendaNube, Factura, CategoriaMercadoLibre, NotaCredito, CierreCaja, EgresoCaja, HistorialAccion, Cliente, Proveedor, MovimientoCuentaCorriente, Rubro, Presupuesto, DetallePresupuesto
 
 logger = logging.getLogger(__name__)
 # Importación condicional para CambioDevolucion (puede no existir si la migración no está aplicada)
@@ -396,6 +396,30 @@ class ArancelMetodoTiendaCreateSerializer(serializers.ModelSerializer):
         if value < 0 or value > 100:
             raise serializers.ValidationError("El arancel debe estar entre 0 y 100%")
         return value
+# ------------------------------------------------
+
+# NUEVO SERIALIZER: Habilitación de Método de Pago por Tienda
+class MetodoPagoTiendaSerializer(serializers.ModelSerializer):
+    metodo_pago_nombre = serializers.CharField(source='metodo_pago.nombre', read_only=True)
+    metodo_pago_es_financiero = serializers.BooleanField(source='metodo_pago.es_financiero', read_only=True)
+    metodo_pago_requiere_mp = serializers.BooleanField(source='metodo_pago.requiere_integracion_mp', read_only=True)
+
+    class Meta:
+        model = MetodoPagoTienda
+        fields = ['id', 'metodo_pago', 'metodo_pago_nombre', 'metodo_pago_es_financiero', 'metodo_pago_requiere_mp', 'activo']
+
+
+class MetodoPagoTiendaCreateSerializer(serializers.ModelSerializer):
+    """Crear/actualizar (upsert, ver MetodoPagoTiendaViewSet.perform_create)."""
+    tienda = serializers.SlugRelatedField(slug_field='nombre', queryset=Tienda.objects.all(), write_only=True)
+
+    class Meta:
+        model = MetodoPagoTienda
+        fields = ['id', 'tienda', 'metodo_pago', 'activo']
+        # Mismo motivo que ArancelMetodoTiendaCreateSerializer: "crear" una
+        # combinación tienda+método que ya existe es una edición del activo,
+        # no un error de unicidad.
+        validators = []
 # ------------------------------------------------
 
 # SERIALIZER: Arancel Mercado Libre por Categoría
