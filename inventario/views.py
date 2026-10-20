@@ -7103,6 +7103,14 @@ class MetodoPagoViewSet(viewsets.ModelViewSet):
     queryset = MetodoPago.objects.all()
     serializer_class = MetodoPagoSerializer
     permission_classes = [permissions.IsAuthenticated]
+    # Sin paginar: MetodoPago es un catálogo global compartido por TODAS las
+    # tiendas (cualquiera puede agregarle un método custom desde "Nuevo
+    # Arancel"), así que crece con el tiempo -- con el PAGE_SIZE=10 default
+    # del proyecto y orden alfabético, en cuanto el catálogo pasó de 10
+    # métodos "Transferencia"/"Tienda Nube" (van al final por la T) quedaron
+    # en la página 2, que el frontend nunca pide -- el método directamente
+    # desaparecía del selector del Punto de Venta para todas las tiendas.
+    pagination_class = None
 
     def get_queryset(self):
         """
