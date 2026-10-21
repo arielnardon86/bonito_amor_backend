@@ -1604,6 +1604,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
         """
         from .services.tiendanube_service import TiendaNubeService, sincronizar_stock_producto
 
+        if not (request.user.is_superuser or request.user.is_supervisor):
+            return Response({'error': 'No tenés permiso para vincular productos con Tienda Nube.'}, status=403)
+
         producto = self.get_object()
         tienda = producto.tienda
 
@@ -1845,6 +1848,9 @@ class ProductoViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='desvincular-tienda-nube')
     def desvincular_tienda_nube(self, request, pk=None):
         """Quita la vinculación de este producto con Tienda Nube (no borra nada en TN)."""
+        if not (request.user.is_superuser or request.user.is_supervisor):
+            return Response({'error': 'No tenés permiso para desvincular productos de Tienda Nube.'}, status=403)
+
         producto = self.get_object()
         producto.tn_product_id = None
         producto.tn_variant_id = None
