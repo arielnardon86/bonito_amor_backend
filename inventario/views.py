@@ -11604,9 +11604,11 @@ MAX_LOGO_BASE64_CHARS = 700_000  # ~500KB decodificado, de sobra para un logo ya
 def actualizar_datos_tienda(request):
     """
     Permite a un usuario de la tienda (o superuser/staff operando sobre una
-    tienda autorizada) modificar el nombre visible y el logo de su tienda
-    desde el Panel de Administración.
-    Body: { tienda_slug, nombre?: str, logo?: str|null }  (logo: data URI base64, o null/'' para quitarlo)
+    tienda autorizada) modificar el nombre visible, el logo y los datos de
+    contacto/fiscales de su tienda desde el Panel de Administración.
+    Body: { tienda_slug, nombre?, logo?: str|null, direccion?, telefono?,
+            email?, cuit?, ingresos_brutos? }  (logo: data URI base64, o
+    null/'' para quitarlo; el resto son strings, '' o null los vacía)
     """
     tienda = _resolver_tienda_por_slug(request)
     if not tienda:
@@ -11653,6 +11655,39 @@ def actualizar_datos_tienda(request):
         tienda.descuento_efectivo_redondeo = redondeo
         campos_actualizados.append('descuento_efectivo_redondeo')
 
+    if 'direccion' in request.data:
+        tienda.direccion = (request.data.get('direccion') or '').strip() or None
+        campos_actualizados.append('direccion')
+
+    if 'telefono' in request.data:
+        tienda.telefono = (request.data.get('telefono') or '').strip() or None
+        campos_actualizados.append('telefono')
+
+    if 'email' in request.data:
+        email = (request.data.get('email') or '').strip()
+        if email:
+            from django.core.validators import validate_email
+            from django.core.exceptions import ValidationError as DjangoValidationError
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                return Response({'error': 'El email no es válido.'}, status=400)
+        tienda.email = email or None
+        campos_actualizados.append('email')
+
+    if 'cuit' in request.data:
+        cuit = (request.data.get('cuit') or '').strip()
+        if cuit:
+            cuit_digits = re.sub(r'\D', '', cuit)
+            if len(cuit_digits) != 11:
+                return Response({'error': 'El CUIT/CUIL debe tener exactamente 11 dígitos.'}, status=400)
+        tienda.cuit = cuit or None
+        campos_actualizados.append('cuit')
+
+    if 'ingresos_brutos' in request.data:
+        tienda.ingresos_brutos = (request.data.get('ingresos_brutos') or '').strip() or None
+        campos_actualizados.append('ingresos_brutos')
+
     if campos_actualizados:
         tienda.save(update_fields=campos_actualizados)
 
@@ -11661,6 +11696,11 @@ def actualizar_datos_tienda(request):
         'logo': tienda.logo,
         'descuento_efectivo_porcentaje': tienda.descuento_efectivo_porcentaje,
         'descuento_efectivo_redondeo': tienda.descuento_efectivo_redondeo,
+        'direccion': tienda.direccion,
+        'telefono': tienda.telefono,
+        'email': tienda.email,
+        'cuit': tienda.cuit,
+        'ingresos_brutos': tienda.ingresos_brutos,
     })
 
 
