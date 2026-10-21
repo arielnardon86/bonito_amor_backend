@@ -334,6 +334,7 @@ class Command(BaseCommand):
                         "Reconciliación MP: %s con cobro pendiente, se marca pago_atrasado — datos=%s",
                         sus.tienda.nombre, datos,
                     )
+                    self._enviar_aviso_pago_atrasado(sus)
                 else:
                     self.stdout.write(self.style.SUCCESS(
                         f"MP: {sus.tienda.nombre} regularizó su cobro pendiente — se apaga el aviso"
@@ -346,6 +347,41 @@ class Command(BaseCommand):
             f"Reconciliación MP: {len(candidatas)} suscripción(es) revisada(s), "
             f"{corregidas} corregida(s)."
         )
+
+    def _enviar_aviso_pago_atrasado(self, sus):
+        """Email cuando MP detecta un cobro reintentando (pago_atrasado pasa a
+        True) sin que la suscripción todavía haya perdido acceso (no entró en
+        'gracia'/'pausada' -- el preapproval en MP sigue 'authorized', MP lo
+        reintenta solo varias veces antes de eso). Es el aviso más temprano:
+        no hay plazo todavía, solo pedirle al dueño que regularice antes de
+        que, si MP agota los reintentos, recién ahí arranque el período de
+        gracia real (ver _enviar_aviso)."""
+        email_destino = sus.tienda.email
+        if not email_destino:
+            return
+        try:
+            send_mail(
+                subject="⚠️ Total Stock: hay un problema con el cobro de tu suscripción",
+                message=(
+                    f"Hola,\n\n"
+                    f"Mercado Pago no pudo procesar el último cobro de tu suscripción "
+                    f"({sus.plan.get_nombre_display()}) para la tienda {sus.tienda.nombre} "
+                    f"y lo está reintentando.\n\n"
+                    f"Para que no se interrumpa tu acceso al sistema, te pedimos que "
+                    f"regularices el pago: revisá que tu tarjeta o medio de pago en "
+                    f"Mercado Pago esté vigente y con saldo/límite disponible.\n\n"
+                    f"Si Mercado Pago agota los reintentos sin poder cobrarte, tu cuenta "
+                    f"pasará a un período de gracia de 5 días antes de suspenderse "
+                    f"(sin pérdida de datos).\n\n"
+                    f"— El equipo de Total Stock"
+                ),
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@totalstock.com.ar'),
+                recipient_list=[email_destino],
+                fail_silently=True,
+            )
+            logger.info("Aviso de pago atrasado (reintento MP) enviado a %s", email_destino)
+        except Exception as e:
+            logger.warning("No se pudo enviar aviso de pago atrasado a %s: %s", email_destino, e)
 
     def _enviar_aviso(self, sus, dia: int):
         """Envía email de aviso al admin de la tienda."""
