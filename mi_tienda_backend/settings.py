@@ -91,12 +91,20 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', 
+    # CorsMiddleware corta temprano las peticiones OPTIONS de preflight (antes
+    # de llegar a cualquier vista) -- pero antes de este cambio estaba después
+    # de WhiteNoiseMiddleware y SessionMiddleware, así que cada preflight (uno
+    # por cada pedido "no simple", ej. con el header Authorization) igual
+    # atravesaba esos dos primero. La documentación oficial de
+    # django-cors-headers pide ponerlo lo más arriba posible, inmediatamente
+    # después de SecurityMiddleware (que sí necesita correr para TODA
+    # respuesta, incluida la del preflight).
+    'corsheaders.middleware.CorsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',      # ¡Mover esta línea más arriba!
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',  
-    'django.contrib.auth.middleware.AuthenticationMiddleware', 
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
