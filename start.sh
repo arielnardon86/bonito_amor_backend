@@ -14,16 +14,22 @@ python manage.py collectstatic --no-input --verbosity=0
 
 # Iniciar el servidor Gunicorn
 echo "🚀 Iniciando servidor Gunicorn..."
-# Un solo worker (proceso) para no repetir el costo de memoria de cargar toda
-# la app Django por duplicado -- eso es lo que hacía que la instancia de 512MB
-# de Render se quedara sin memoria al bootear con 2 workers. Pero un solo
-# worker 'sync' (el default de gunicorn) atiende UN request a la vez: con más
-# de un cajero en simultáneo, o incluso un solo cajero cuyo navegador dispara
-# varios requests en paralelo por pantalla, todo se encolaba atrás del primero
-# -- de ahí la lentitud reportada. --worker-class gthread + --threads da
-# concurrencia real DENTRO del mismo proceso (los threads comparten la memoria
-# ya cargada, a diferencia de un segundo worker) -- tiene sentido para esta
-# app porque la mayoría del tiempo de cada request es I/O esperando a Postgres,
-# no CPU, así que un thread libera el GIL mientras espera y otro puede avanzar.
+# GUNICORN_WORKERS controla cuántos procesos levanta -- default 1 porque en el
+# plan actual de Render (512MB) un 2do worker duplica el costo de memoria de
+# cargar toda la app Django y eso fue justo lo que hizo que la instancia se
+# quedara sin memoria al bootear. Queda como variable de entorno (no
+# hardcodeado) para poder subir a 2 con un solo cambio en el dashboard de
+# Render el día que se suba de plan (2GB+), sin tocar código ni volver a
+# deployar -- con 1 solo worker, si se recicla por --max-requests no queda
+# NADA escuchando mientras levanta el reemplazo, y un request que llega justo
+# en ese hueco se cae con Network Error (pasó el 21/10 con un cambio/devolución
+# real). Con 2+ workers ese hueco lo cubre el otro proceso.
+#
+# Con 1 worker, --worker-class gthread + --threads da concurrencia real DENTRO
+# del mismo proceso (los threads comparten la memoria ya cargada, a diferencia
+# de un segundo worker) -- tiene sentido para esta app porque la mayoría del
+# tiempo de cada request es I/O esperando a Postgres, no CPU, así que un
+# thread libera el GIL mientras espera y otro puede avanzar.
 # --max-requests sigue como salvaguarda ante un crecimiento gradual de memoria.
-gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:"$PORT" --timeout 300 --workers 1 --worker-class gthread --threads 4 --max-requests 300 --max-requests-jitter 50 --log-file -
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+gunicorn mi_tienda_backend.wsgi:application --bind 0.0.0.0:"$PORT" --timeout 300 --workers "$GUNICORN_WORKERS" --worker-class gthread --threads 4 --max-requests 300 --max-requests-jitter 50 --log-file -
