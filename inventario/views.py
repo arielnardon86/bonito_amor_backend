@@ -11613,8 +11613,9 @@ def actualizar_datos_tienda(request):
     tienda autorizada) modificar el nombre visible, el logo y los datos de
     contacto/fiscales de su tienda desde el Panel de Administración.
     Body: { tienda_slug, nombre?, logo?: str|null, direccion?, telefono?,
-            email?, cuit?, ingresos_brutos? }  (logo: data URI base64, o
-    null/'' para quitarlo; el resto son strings, '' o null los vacía)
+            email?, cuit?, ingresos_brutos?, formato_recibo?, formato_factura?,
+            formato_etiqueta? }  (logo: data URI base64, o null/'' para
+    quitarlo; el resto son strings, '' o null los vacía)
     """
     tienda = _resolver_tienda_por_slug(request)
     if not tienda:
@@ -11694,6 +11695,18 @@ def actualizar_datos_tienda(request):
         tienda.ingresos_brutos = (request.data.get('ingresos_brutos') or '').strip() or None
         campos_actualizados.append('ingresos_brutos')
 
+    for campo, choices in (
+        ('formato_recibo', Tienda.FORMATO_DOCUMENTO_CHOICES),
+        ('formato_factura', Tienda.FORMATO_DOCUMENTO_CHOICES),
+        ('formato_etiqueta', Tienda.FORMATO_ETIQUETA_CHOICES),
+    ):
+        if campo in request.data:
+            valor = request.data.get(campo)
+            if valor not in dict(choices):
+                return Response({'error': f'Valor inválido para {campo}.'}, status=400)
+            setattr(tienda, campo, valor)
+            campos_actualizados.append(campo)
+
     if campos_actualizados:
         tienda.save(update_fields=campos_actualizados)
 
@@ -11707,6 +11720,9 @@ def actualizar_datos_tienda(request):
         'email': tienda.email,
         'cuit': tienda.cuit,
         'ingresos_brutos': tienda.ingresos_brutos,
+        'formato_recibo': tienda.formato_recibo,
+        'formato_factura': tienda.formato_factura,
+        'formato_etiqueta': tienda.formato_etiqueta,
     })
 
 

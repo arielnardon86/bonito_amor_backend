@@ -64,6 +64,34 @@ class Tienda(models.Model):
         max_length=10, choices=DESCUENTO_EFECTIVO_REDONDEO_CHOICES, blank=True, default='',
         help_text="Cómo redondear el precio con descuento en efectivo calculado para las etiquetas (igual que el redondeo de Punto de Venta)."
     )
+
+    # Formato de IMPRESIÓN FÍSICA (botón "Imprimir" / lector térmico) según la
+    # impresora que tenga cada tienda. No afecta el PDF que se manda por mail
+    # o WhatsApp -- ese siempre sale en A4 (ver _construir_pdf_recibo /
+    # _construir_pdf_factura en views.py).
+    FORMATO_DOCUMENTO_CHOICES = [
+        ('termico', 'Térmico (80mm)'),
+        ('A4', 'A4'),
+    ]
+    formato_recibo = models.CharField(
+        max_length=10, choices=FORMATO_DOCUMENTO_CHOICES, default='termico',
+        help_text="Formato de impresión física del recibo (no afecta el PDF enviado por mail/WhatsApp, que siempre es A4)."
+    )
+    formato_factura = models.CharField(
+        max_length=10, choices=FORMATO_DOCUMENTO_CHOICES, default='termico',
+        help_text="Formato de impresión física de la factura (no afecta el PDF enviado por mail/WhatsApp, que siempre es A4)."
+    )
+    FORMATO_ETIQUETA_CHOICES = [
+        ('estandar', 'Rollo térmico 37×37mm'),
+        ('a4_grilla', 'Hoja A4 — grilla 37×37mm'),
+        ('hoja_4x9_36', 'Hoja A4 — 36 etiquetas (52,5×33mm)'),
+        ('xprinter_39x20', 'Rollo térmico 39×20mm'),
+    ]
+    formato_etiqueta = models.CharField(
+        max_length=20, choices=FORMATO_ETIQUETA_CHOICES, default='estandar',
+        help_text="Medida/formato por defecto al imprimir etiquetas de precio."
+    )
+
     widget_token = models.CharField(
         max_length=64, blank=True, null=True, unique=True,
         help_text="Token de solo lectura para el widget de iPhone (ventas del día). Separado del login: se puede regenerar sin afectar la cuenta."

@@ -596,6 +596,10 @@ class VentaSerializer(serializers.ModelSerializer):
     metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
     tienda_logo = serializers.CharField(source='tienda.logo', read_only=True, allow_null=True)
+    # Formato de impresión física del recibo (térmico/A4) configurado en el
+    # Panel de Administración -- no confundir con el PDF de mail/WhatsApp,
+    # que siempre es A4 (ver _construir_pdf_recibo).
+    tienda_formato_recibo = serializers.CharField(source='tienda.formato_recibo', read_only=True)
     # Campos de arancel para lectura
     arancel_aplicado_nombre = serializers.CharField(source='arancel_aplicado.nombre_plan', read_only=True)
     arancel_aplicado_porcentaje = serializers.DecimalField(source='arancel_aplicado.arancel_porcentaje', max_digits=5, decimal_places=2, read_only=True)
@@ -713,7 +717,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
             'metodo_pago', 'metodo_pago_nombre', 'monto_efectivo', 'vuelto', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
-            'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'detalles',
+            'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'tienda_formato_recibo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
             'ml_sale_fee', 'ml_shipping_cost', 'ml_tax_fee', 'ml_fecha_entrega',
@@ -1383,13 +1387,16 @@ class FacturaSerializer(serializers.ModelSerializer):
     tienda_cuit = serializers.CharField(source='tienda.cuit', read_only=True)
     tienda_direccion = serializers.CharField(source='tienda.direccion', read_only=True)
     tienda_logo = serializers.CharField(source='tienda.logo', read_only=True, allow_null=True)
+    # Formato de impresión física de la factura (térmico/A4) -- no afecta el
+    # PDF de mail/WhatsApp, que siempre es A4 (ver _construir_pdf_factura).
+    tienda_formato_factura = serializers.CharField(source='tienda.formato_factura', read_only=True)
     numero_factura_completo = serializers.CharField(read_only=True)
 
     class Meta:
         model = Factura
         fields = [
             'id', 'venta', 'venta_id', 'tienda', 'tienda_nombre',
-            'tienda_cuit', 'tienda_direccion', 'tienda_logo',
+            'tienda_cuit', 'tienda_direccion', 'tienda_logo', 'tienda_formato_factura',
             'numero_comprobante', 'punto_venta', 'tipo_comprobante',
             'numero_factura_completo',
             'cliente_nombre', 'cliente_cuit', 'cliente_domicilio',
