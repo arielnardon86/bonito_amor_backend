@@ -68,6 +68,25 @@ def _detalle_variante(producto):
     return f' ({", ".join(partes)})' if partes else ''
 
 
+def _codigo_numerico_13_digitos(venta_id):
+    """
+    Código numérico EAN13 determinístico a partir del UUID de una venta --
+    réplica exacta (mismo hash, mismo checksum) de generarCodigoNumerico13Digitos
+    en ReciboImpresion.js, para que el "ID de Venta" sea el mismo número tanto
+    en el ticket térmico (generado en el navegador) como en el PDF A4 (generado
+    acá). No cambiar un lado sin cambiar el otro.
+    """
+    sin_guiones = str(venta_id).replace('-', '')
+    hash_val = 0
+    for ch in sin_guiones:
+        hash_val = (hash_val * 31 + ord(ch)) % 1_000_000_000
+    hash_9_digitos = str(abs(hash_val)).zfill(9)[:9]
+    code = '779' + hash_9_digitos
+    total = sum(int(code[i]) * (1 if i % 2 == 0 else 3) for i in range(12))
+    checksum = (10 - (total % 10)) % 10
+    return code + str(checksum)
+
+
 def _buscar_arancel_ml_producto(tienda, producto):
     """
     Busca el ArancelMercadoLibreProducto (costo de envío + impuestos) configurado
@@ -6754,7 +6773,6 @@ class VentaViewSet(viewsets.ModelViewSet):
         story = []
         tienda = venta.tienda
 
-        tiene_logo = False
         if tienda and tienda.logo:
             try:
                 match_logo = re.match(r'^data:image/\w+;base64,(.+)$', tienda.logo)
@@ -6763,29 +6781,24 @@ class VentaViewSet(viewsets.ModelViewSet):
                 logo_image.hAlign = 'CENTER'
                 story.append(logo_image)
                 story.append(Spacer(1, 8))
-                tiene_logo = True
             except Exception:
                 pass
 
-        nombre_tienda = tienda.nombre if tienda else 'N/A'
-        if tiene_logo:
-            nombre_tienda_style = ParagraphStyle(
-                'ReciboNombreTiendaChico', parent=styles['Normal'], fontSize=10,
-                textColor=colors.HexColor('#555555'), spaceAfter=12, alignment=1
-            )
-            story.append(Paragraph(nombre_tienda, nombre_tienda_style))
-        else:
-            story.append(Paragraph(f"<b>{nombre_tienda}</b>", title_style))
-
         es_nota_credito = venta.metodo_pago == 'Nota de Crédito'
-        story.append(Paragraph('NOTA DE CRÉDITO' if es_nota_credito else 'COMPROBANTE DE COMPRA', subtitle_style))
+        story.append(Paragraph('NOTA DE CRÉDITO' if es_nota_credito else 'COMPROBANTE DE COMPRA', title_style))
         story.append(Paragraph("<i>Documento no válido como comprobante fiscal</i>", normal_style))
         story.append(Spacer(1, 12))
 
+        # Mismos datos y mismo orden que el ticket térmico (ReciboImpresion.js)
+        # -- incluido el ID de Venta, que NO es el UUID crudo sino el mismo
+        # código numérico de 13 dígitos (hash determinístico del UUID, formato
+        # EAN13) que muestra el térmico, para que sea el mismo número de
+        # referencia en los dos formatos de un mismo comprobante.
+        story.append(Paragraph(f"<b>Tienda:</b> {tienda.nombre if tienda else 'N/A'}", normal_style))
         if tienda and tienda.direccion:
-            story.append(Paragraph(f"<b>Domicilio:</b> {tienda.direccion}", normal_style))
+            story.append(Paragraph(f"<b>Dirección:</b> {tienda.direccion}", normal_style))
         story.append(Paragraph(f"<b>Fecha:</b> {venta.fecha_venta.strftime('%d/%m/%Y %H:%M')}", normal_style))
-        story.append(Paragraph(f"<b>Nº de Venta:</b> {venta.id}", normal_style))
+        story.append(Paragraph(f"<b>ID de Venta:</b> {_codigo_numerico_13_digitos(venta.id)}", normal_style))
         if venta.metodo_pago == 'Cuenta Corriente' and venta.fecha_limite_pago:
             story.append(Paragraph(f"<b>Fecha límite de pago:</b> {venta.fecha_limite_pago.strftime('%d/%m/%Y')}", normal_style))
         if venta.numero_tarjeta or venta.tipo_tarjeta:
