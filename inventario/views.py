@@ -6870,18 +6870,21 @@ class VentaViewSet(viewsets.ModelViewSet):
         data.append(['', '', 'TOTAL:', f"${Decimal(str(venta.total)):.2f}"])
 
         table = Table(data, colWidths=[20 * mm, 100 * mm, 30 * mm, 30 * mm])
+        # Sin grilla ni fondos de color -- mismo criterio visual simple que el
+        # ticket térmico (líneas finas en vez de tabla con bordes/celdas pintadas).
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, cantidad_items), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.black),
+            ('LINEABOVE', (0, inicio_totales), (-1, inicio_totales), 1, colors.black),
+            ('TOPPADDING', (0, inicio_totales), (-1, inicio_totales), 8),
             ('ALIGN', (2, inicio_totales), (-1, -1), 'RIGHT'),
             ('FONTNAME', (2, inicio_totales), (-1, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (2, inicio_totales), (-1, -1), 10),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
         ]))
         story.append(table)
         story.append(Spacer(1, 20))
