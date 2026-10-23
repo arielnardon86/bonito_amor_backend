@@ -71,6 +71,7 @@ class Tienda(models.Model):
     # _construir_pdf_factura en views.py).
     FORMATO_DOCUMENTO_CHOICES = [
         ('termico', 'Térmico (80mm)'),
+        ('termico_58', 'Térmico (58mm)'),
         ('A4', 'A4'),
     ]
     formato_recibo = models.CharField(
