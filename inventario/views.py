@@ -6769,6 +6769,14 @@ class VentaViewSet(viewsets.ModelViewSet):
         normal_style = styles['Normal']
         normal_style.fontSize = 10
         normal_style.textColor = colors.HexColor('#000000')
+        # Celda de "Descripción" de la tabla de productos: un string plano en una
+        # Table de reportlab NO ajusta de renglón solo -- si el nombre+variante es
+        # largo, sigue de largo y pisa las columnas de Precio/Subtotal en vez de
+        # bajar de línea. Envuelto en Paragraph sí ajusta dentro del ancho de la
+        # columna, sin límite de caracteres fijo (la fila crece verticalmente).
+        descripcion_style = ParagraphStyle(
+            'ReciboDescripcionCelda', parent=normal_style, fontSize=9, leading=11,
+        )
 
         story = []
         tienda = venta.tienda
@@ -6825,6 +6833,7 @@ class VentaViewSet(viewsets.ModelViewSet):
                 story.append(Paragraph(f"<b>CUIT:</b> {venta.cliente_cuit}", normal_style))
             story.append(Spacer(1, 12))
 
+        import html as _html
         detalles = venta.detalles.filter(anulado_individualmente=False)
         data = [['Cant.', 'Descripción', 'Precio Unit.', 'Subtotal']]
         subtotal_bruto = Decimal('0.00')
@@ -6838,7 +6847,10 @@ class VentaViewSet(viewsets.ModelViewSet):
             subtotal_bruto += precio_unitario * Decimal(str(detalle.cantidad))
             data.append([
                 str(detalle.cantidad),
-                producto_nombre,
+                # Paragraph (no string plano) para que ajuste de renglón solo --
+                # escapado porque Paragraph interpreta el texto como markup y un
+                # nombre con "&"/"<" rompería el render si no se escapa antes.
+                Paragraph(_html.escape(producto_nombre), descripcion_style),
                 f"${precio_unitario:.2f}",
                 f"${detalle.subtotal:.2f}",
             ])
@@ -6869,7 +6881,11 @@ class VentaViewSet(viewsets.ModelViewSet):
 
         data.append(['', '', 'TOTAL:', f"${Decimal(str(venta.total)):.2f}"])
 
-        table = Table(data, colWidths=[20 * mm, 100 * mm, 30 * mm, 30 * mm])
+        # Área imprimible real de A4 con los márgenes left/right por defecto de
+        # SimpleDocTemplate (1 pulgada = 25.4mm cada uno, no se pisan acá arriba):
+        # 210mm - 2*25.4mm = 159.2mm. Antes sumaban 180mm -- ya desbordaba un poco
+        # siempre, pero recién se notaba feo con nombres largos sin Paragraph.
+        table = Table(data, colWidths=[15 * mm, 82 * mm, 31 * mm, 31 * mm])
         # Sin grilla ni fondos de color -- mismo criterio visual simple que el
         # ticket térmico (líneas finas en vez de tabla con bordes/celdas pintadas).
         table.setStyle(TableStyle([
