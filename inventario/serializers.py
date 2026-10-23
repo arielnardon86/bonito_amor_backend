@@ -596,6 +596,7 @@ class VentaSerializer(serializers.ModelSerializer):
     metodo_pago_nombre = serializers.CharField(source='metodo_pago', read_only=True)
     tienda_nombre = serializers.CharField(source='tienda.nombre', read_only=True)
     tienda_logo = serializers.CharField(source='tienda.logo', read_only=True, allow_null=True)
+    tienda_direccion = serializers.CharField(source='tienda.direccion', read_only=True, allow_null=True)
     # Formato de impresión física del recibo (térmico/A4) configurado en el
     # Panel de Administración -- no confundir con el PDF de mail/WhatsApp,
     # que siempre es A4 (ver _construir_pdf_recibo).
@@ -717,7 +718,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'descuento_porcentaje', 'descuento_monto',
             'recargo_porcentaje', 'recargo_monto',
             'metodo_pago', 'metodo_pago_nombre', 'monto_efectivo', 'vuelto', 'fecha_limite_pago', 'observaciones', 'numero_tarjeta', 'tipo_tarjeta',
-            'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'tienda_formato_recibo', 'detalles',
+            'usuario', 'tienda', 'tienda_nombre', 'tienda_logo', 'tienda_direccion', 'tienda_formato_recibo', 'detalles',
             'arancel_aplicado', 'arancel_aplicado_nombre', 'arancel_aplicado_porcentaje', 'arancel_total',
             'costo_envio_ml', 'origen_mercadolibre', 'ml_order_id',
             'ml_sale_fee', 'ml_shipping_cost', 'ml_tax_fee', 'ml_fecha_entrega',
